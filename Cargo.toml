@@ -1,0 +1,20 @@
+[package]
+name = "wasm2jar"
+version = "0.1.0"
+authors = ["Alec Theriault <alec.theriault@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+wasmparser = "0.78.0"
+bitflags = "1.2.1"
+byteorder = "1.3.4"
+
+[lib]
+name = "wasm2jar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wasm2jar"
+path = "src/main.rs"

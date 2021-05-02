@@ -1,0 +1,693 @@
+use super::{BaseType, ConstantIndex, Serialize, Width};
+use byteorder::WriteBytesExt;
+use std::convert::TryFrom;
+use std::io::Result;
+use std::ops::Not;
+
+/// JVM bytecode instruction
+///
+/// This is a very slightly abstracted to be more convenient when constructing. For instance:
+///
+///   - the "wide" instruction doesn't show up at all
+///   - some instructions (like the branches) get abstracted into one instruction with a field
+///   - some instructions (like `jsr`) are just omitted
+///
+pub enum Instruction<Lbl, LblExt> {
+    Nop,
+    AConstNull,
+    IConstM1,
+    IConst0,
+    IConst1,
+    IConst2,
+    IConst3,
+    IConst4,
+    IConst5,
+    LConst0,
+    LConst1,
+    FConst0,
+    FConst1,
+    FConst2,
+    DConst0,
+    DConst1,
+    BiPush(i8),
+    SiPush(i16),
+    Ldc(ConstantIndex), // covers both `ldc` and `ldc_w`
+    Ldc2(ConstantIndex),
+    ILoad(u16), // covers `iload`, `iload{0,3}`, and `wide iload`
+    LLoad(u16),
+    FLoad(u16),
+    DLoad(u16),
+    ALoad(u16),
+    IALoad,
+    LALoad,
+    FALoad,
+    DALoad,
+    AALoad,
+    BALoad,
+    CALoad,
+    SALoad,
+    IStore(u16), // covers `istore`, `istore{0,3}`, and `wide istore`
+    LStore(u16),
+    FStore(u16),
+    DStore(u16),
+    AStore(u16),
+    IAStore,
+    LAStore,
+    FAStore,
+    DAStore,
+    AAStore,
+    BAStore,
+    CAStore,
+    SAStore,
+    Pop,
+    Pop2,
+    Dup,
+    DupX1,
+    DupX2,
+    Dup2,
+    Dup2X1,
+    Dup2X2,
+    Swap,
+    IAdd,
+    LAdd,
+    FAdd,
+    DAdd,
+    ISub,
+    LSub,
+    FSub,
+    DSub,
+    IMul,
+    LMul,
+    FMul,
+    DMul,
+    IDiv,
+    LDiv,
+    FDiv,
+    DDiv,
+    IRem,
+    LRem,
+    FRem,
+    DRem,
+    INeg,
+    LNeg,
+    FNeg,
+    DNeg,
+    ISh(ShiftType), // covers `ishr`, `ishl`, and `iushr`
+    LSh(ShiftType), // covers `lshr`, `lshl`, and `lushr`
+    IAnd,
+    LAnd,
+    IOr,
+    LOr,
+    IXor,
+    LXor,
+    IInc(u16, i16), // covers `iinc` and `wide iinc`
+    I2L,
+    I2F,
+    I2D,
+    L2I,
+    L2F,
+    L2D,
+    F2I,
+    F2L,
+    F2D,
+    D2I,
+    D2L,
+    D2F,
+    I2B,
+    I2C,
+    I2S,
+    LCmp,
+    FCmp(CompareMode),          // covers `fmpl` and `fcmpg`
+    DCmp(CompareMode),          // covers `dmpl` and `dcmpg`
+    If(OrdComparison, Lbl),     // covers `ifeq`, `ifne`, `iflt`, `ifge`, `ifgt`, `ifle`
+    IfICmp(OrdComparison, Lbl), // covers `if_icmpeq`, `if_icmpne`, `if_icmplt`, ... `if_icmple`
+    IfACmp(EqComparison, Lbl),  // covers `if_acmpeq`, `if_acmpne`
+    Goto(Lbl),
+    GotoW(LblExt),
+    IReturn,
+    LReturn,
+    FReturn,
+    DReturn,
+    AReturn,
+    Return,
+    GetStatic(ConstantIndex),
+    PutStatic(ConstantIndex),
+    GetField(ConstantIndex),
+    PutField(ConstantIndex),
+    Invoke(InvokeType, ConstantIndex),
+    New(ConstantIndex),
+    NewArray(BaseType),
+    ANewArray(ConstantIndex),
+    ArrayLength,
+    AThrow,
+    CheckCast(ConstantIndex),
+    InstanceOf(ConstantIndex),
+    IfNull(EqComparison, Lbl), // covers `ifnull`, `ifnonnull`
+}
+
+impl<Lbl, LblExt> Width for Instruction<Lbl, LblExt> {
+    fn width(&self) -> usize {
+        match self {
+          Instruction::Nop
+          | Instruction::AConstNull
+          | Instruction::IConstM1
+          | Instruction::IConst0
+          | Instruction::IConst1
+          | Instruction::IConst2
+          | Instruction::IConst3
+          | Instruction::IConst4
+          | Instruction::IConst5
+          | Instruction::LConst0
+          | Instruction::LConst1
+          | Instruction::FConst0
+          | Instruction::FConst1
+          | Instruction::FConst2
+          | Instruction::DConst0
+          | Instruction::DConst1
+          | Instruction::ILoad(0..=3)
+          | Instruction::LLoad(0..=3)
+          | Instruction::FLoad(0..=3)
+          | Instruction::DLoad(0..=3)
+          | Instruction::ALoad(0..=3)
+          | Instruction::IALoad
+          | Instruction::LALoad
+          | Instruction::FALoad
+          | Instruction::DALoad
+          | Instruction::AALoad
+          | Instruction::BALoad
+          | Instruction::CALoad
+          | Instruction::SALoad
+          | Instruction::IStore(0..=3)
+          | Instruction::LStore(0..=3)
+          | Instruction::FStore(0..=3)
+          | Instruction::DStore(0..=3)
+          | Instruction::AStore(0..=3)
+          | Instruction::IAStore
+          | Instruction::LAStore
+          | Instruction::FAStore
+          | Instruction::DAStore
+          | Instruction::AAStore
+          | Instruction::BAStore
+          | Instruction::CAStore
+          | Instruction::SAStore
+          | Instruction::Pop
+          | Instruction::Pop2
+          | Instruction::Dup
+          | Instruction::DupX1
+          | Instruction::DupX2
+          | Instruction::Dup2
+          | Instruction::Dup2X1
+          | Instruction::Dup2X2
+          | Instruction::Swap
+          | Instruction::IAdd
+          | Instruction::LAdd
+          | Instruction::FAdd
+          | Instruction::DAdd
+          | Instruction::ISub
+          | Instruction::LSub
+          | Instruction::FSub
+          | Instruction::DSub
+          | Instruction::IMul
+          | Instruction::LMul
+          | Instruction::FMul
+          | Instruction::DMul
+          | Instruction::IDiv
+          | Instruction::LDiv
+          | Instruction::FDiv
+          | Instruction::DDiv
+          | Instruction::IRem
+          | Instruction::LRem
+          | Instruction::FRem
+          | Instruction::DRem
+          | Instruction::INeg
+          | Instruction::LNeg
+          | Instruction::FNeg
+          | Instruction::DNeg
+          | Instruction::ISh(_)
+          | Instruction::LSh(_)
+          | Instruction::IAnd
+          | Instruction::LAnd
+          | Instruction::IOr
+          | Instruction::LOr
+          | Instruction::IXor
+          | Instruction::LXor
+          | Instruction::I2L
+          | Instruction::I2F
+          | Instruction::I2D
+          | Instruction::L2I
+          | Instruction::L2F
+          | Instruction::L2D
+          | Instruction::F2I
+          | Instruction::F2L
+          | Instruction::F2D
+          | Instruction::D2I
+          | Instruction::D2L
+          | Instruction::D2F
+          | Instruction::I2B
+          | Instruction::I2C
+          | Instruction::I2S
+          | Instruction::LCmp
+          | Instruction::FCmp(_)
+          | Instruction::DCmp(_)
+          | Instruction::IReturn
+          | Instruction::LReturn
+          | Instruction::FReturn
+          | Instruction::DReturn
+          | Instruction::AReturn
+          | Instruction::Return
+          | Instruction::ArrayLength
+          | Instruction::AThrow
+          => 1,
+
+          Instruction::BiPush(_)
+          | Instruction::ILoad(5..=255)
+          | Instruction::LLoad(5..=255)
+          | Instruction::FLoad(5..=255)
+          | Instruction::DLoad(5..=255)
+          | Instruction::ALoad(5..=255)
+          | Instruction::IStore(5..=255)
+          | Instruction::LStore(5..=255)
+          | Instruction::FStore(5..=255)
+          | Instruction::DStore(5..=255)
+          | Instruction::AStore(5..=255)
+          | Instruction::Ldc(ConstantIndex(0..=256))
+          | Instruction::IInc(0..=255,  -128..=127)
+          | Instruction::NewArray(_)
+          => 2,
+
+          Instruction::SiPush(_)
+          | Instruction::Ldc(_)
+          | Instruction::Ldc2(_) // always wide, unlike `ldc` vs. `ldc_w`
+          | Instruction::Goto(_)
+          | Instruction::If(_, _)
+          | Instruction::IfICmp(_, _)
+          | Instruction::IfACmp(_, _)
+          | Instruction::GetStatic(_)
+          | Instruction::PutStatic(_)
+          | Instruction::GetField(_)
+          | Instruction::PutField(_)
+          | Instruction::Invoke(InvokeType::Special, _)
+          | Instruction::Invoke(InvokeType::Static, _)
+          | Instruction::Invoke(InvokeType::Virtual, _)
+          | Instruction::New(_)
+          | Instruction::ANewArray(_)
+          | Instruction::CheckCast(_)
+          | Instruction::InstanceOf(_)
+          | Instruction::IfNull(_, _)
+          => 3,
+
+          Instruction::ILoad(_)
+          | Instruction::LLoad(_)
+          | Instruction::FLoad(_)
+          | Instruction::DLoad(_)
+          | Instruction::ALoad(_)
+          | Instruction::IStore(_)
+          | Instruction::LStore(_)
+          | Instruction::FStore(_)
+          | Instruction::DStore(_)
+          | Instruction::AStore(_)
+          => 4,
+
+          Instruction::IInc(_, _)
+          | Instruction::GotoW(_)
+          | Instruction::Invoke(InvokeType::Interface(_), _)
+          | Instruction::Invoke(InvokeType::Dynamic, _)
+          => 5,
+        }
+    }
+}
+
+impl Serialize for Instruction<i16, i32> {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
+        /* The load/store instructions follow the same pattern:
+         *
+         *   - short form (0-3) have special bytes
+         *   - normal form (0-255) use `iload` plus a byte operand
+         *   - wide form (255-65535) use `wide iload` plus two byte operands
+         */
+        fn serialize_load_or_store<W: WriteBytesExt>(
+            idx: u16,
+            short_form_start: u8,
+            normal_form: u8,
+            writer: &mut W,
+        ) -> Result<()> {
+            match u8::try_from(idx) {
+                Ok(n @ 0..=3) => (short_form_start + n).serialize(writer),
+                Ok(n) => {
+                    normal_form.serialize(writer)?;
+                    n.serialize(writer)
+                }
+                Err(_) => {
+                    0xC4u8.serialize(writer)?;
+                    normal_form.serialize(writer)?;
+                    idx.serialize(writer)
+                }
+            }
+        }
+
+        match self {
+            Instruction::Nop => 0x00u8.serialize(writer)?,
+            Instruction::AConstNull => 0x01u8.serialize(writer)?,
+            Instruction::IConstM1 => 0x02u8.serialize(writer)?,
+            Instruction::IConst0 => 0x03u8.serialize(writer)?,
+            Instruction::IConst1 => 0x04u8.serialize(writer)?,
+            Instruction::IConst2 => 0x05u8.serialize(writer)?,
+            Instruction::IConst3 => 0x06u8.serialize(writer)?,
+            Instruction::IConst4 => 0x07u8.serialize(writer)?,
+            Instruction::IConst5 => 0x08u8.serialize(writer)?,
+            Instruction::LConst0 => 0x09u8.serialize(writer)?,
+            Instruction::LConst1 => 0x0au8.serialize(writer)?,
+            Instruction::FConst0 => 0x0bu8.serialize(writer)?,
+            Instruction::FConst1 => 0x0cu8.serialize(writer)?,
+            Instruction::FConst2 => 0x0du8.serialize(writer)?,
+            Instruction::DConst0 => 0x0eu8.serialize(writer)?,
+            Instruction::DConst1 => 0x0fu8.serialize(writer)?,
+            Instruction::BiPush(b) => {
+                u8::serialize(&0x10, writer)?;
+                b.serialize(writer)?;
+            }
+            Instruction::SiPush(s) => {
+                0x11u8.serialize(writer)?;
+                s.serialize(writer)?;
+            }
+            Instruction::Ldc(ConstantIndex(idx)) => match u8::try_from(*idx) {
+                Ok(b) => {
+                    0x12u8.serialize(writer)?;
+                    b.serialize(writer)?;
+                }
+                Err(_) => {
+                    0x13u8.serialize(writer)?;
+                    idx.serialize(writer)?;
+                }
+            },
+            Instruction::Ldc2(ConstantIndex(idx)) => {
+                0x14u8.serialize(writer)?;
+                idx.serialize(writer)?;
+            }
+            Instruction::ILoad(idx) => serialize_load_or_store(*idx, 0x1A, 0x15, writer)?,
+            Instruction::LLoad(idx) => serialize_load_or_store(*idx, 0x1E, 0x16, writer)?,
+            Instruction::FLoad(idx) => serialize_load_or_store(*idx, 0x22, 0x17, writer)?,
+            Instruction::DLoad(idx) => serialize_load_or_store(*idx, 0x26, 0x18, writer)?,
+            Instruction::ALoad(idx) => serialize_load_or_store(*idx, 0x2A, 0x19, writer)?,
+            Instruction::IALoad => 0x2eu8.serialize(writer)?,
+            Instruction::LALoad => 0x2fu8.serialize(writer)?,
+            Instruction::FALoad => 0x30u8.serialize(writer)?,
+            Instruction::DALoad => 0x31u8.serialize(writer)?,
+            Instruction::AALoad => 0x32u8.serialize(writer)?,
+            Instruction::BALoad => 0x33u8.serialize(writer)?,
+            Instruction::CALoad => 0x34u8.serialize(writer)?,
+            Instruction::SALoad => 0x35u8.serialize(writer)?,
+            Instruction::IStore(idx) => serialize_load_or_store(*idx, 0x3B, 0x36, writer)?,
+            Instruction::LStore(idx) => serialize_load_or_store(*idx, 0x3F, 0x37, writer)?,
+            Instruction::FStore(idx) => serialize_load_or_store(*idx, 0x43, 0x38, writer)?,
+            Instruction::DStore(idx) => serialize_load_or_store(*idx, 0x47, 0x39, writer)?,
+            Instruction::AStore(idx) => serialize_load_or_store(*idx, 0x4B, 0x3A, writer)?,
+            Instruction::IAStore => 0x4fu8.serialize(writer)?,
+            Instruction::LAStore => 0x50u8.serialize(writer)?,
+            Instruction::FAStore => 0x51u8.serialize(writer)?,
+            Instruction::DAStore => 0x52u8.serialize(writer)?,
+            Instruction::AAStore => 0x53u8.serialize(writer)?,
+            Instruction::BAStore => 0x54u8.serialize(writer)?,
+            Instruction::CAStore => 0x55u8.serialize(writer)?,
+            Instruction::SAStore => 0x56u8.serialize(writer)?,
+            Instruction::Pop => 0x57u8.serialize(writer)?,
+            Instruction::Pop2 => 0x58u8.serialize(writer)?,
+            Instruction::Dup => 0x59u8.serialize(writer)?,
+            Instruction::DupX1 => 0x5au8.serialize(writer)?,
+            Instruction::DupX2 => 0x5bu8.serialize(writer)?,
+            Instruction::Dup2 => 0x5cu8.serialize(writer)?,
+            Instruction::Dup2X1 => 0x5du8.serialize(writer)?,
+            Instruction::Dup2X2 => 0x5eu8.serialize(writer)?,
+            Instruction::Swap => 0x5fu8.serialize(writer)?,
+            Instruction::IAdd => 0x60u8.serialize(writer)?,
+            Instruction::LAdd => 0x61u8.serialize(writer)?,
+            Instruction::FAdd => 0x62u8.serialize(writer)?,
+            Instruction::DAdd => 0x63u8.serialize(writer)?,
+            Instruction::ISub => 0x64u8.serialize(writer)?,
+            Instruction::LSub => 0x65u8.serialize(writer)?,
+            Instruction::FSub => 0x66u8.serialize(writer)?,
+            Instruction::DSub => 0x67u8.serialize(writer)?,
+            Instruction::IMul => 0x68u8.serialize(writer)?,
+            Instruction::LMul => 0x69u8.serialize(writer)?,
+            Instruction::FMul => 0x6au8.serialize(writer)?,
+            Instruction::DMul => 0x6bu8.serialize(writer)?,
+            Instruction::IDiv => 0x6cu8.serialize(writer)?,
+            Instruction::LDiv => 0x6du8.serialize(writer)?,
+            Instruction::FDiv => 0x6eu8.serialize(writer)?,
+            Instruction::DDiv => 0x6fu8.serialize(writer)?,
+            Instruction::IRem => 0x70u8.serialize(writer)?,
+            Instruction::LRem => 0x71u8.serialize(writer)?,
+            Instruction::FRem => 0x72u8.serialize(writer)?,
+            Instruction::DRem => 0x73u8.serialize(writer)?,
+            Instruction::INeg => 0x74u8.serialize(writer)?,
+            Instruction::LNeg => 0x75u8.serialize(writer)?,
+            Instruction::FNeg => 0x76u8.serialize(writer)?,
+            Instruction::DNeg => 0x77u8.serialize(writer)?,
+            Instruction::ISh(ShiftType::Left) => 0x78u8.serialize(writer)?,
+            Instruction::LSh(ShiftType::Left) => 0x79u8.serialize(writer)?,
+            Instruction::ISh(ShiftType::ArithmeticRight) => 0x7au8.serialize(writer)?,
+            Instruction::LSh(ShiftType::ArithmeticRight) => 0x7bu8.serialize(writer)?,
+            Instruction::ISh(ShiftType::LogicalRight) => 0x7cu8.serialize(writer)?,
+            Instruction::LSh(ShiftType::LogicalRight) => 0x7du8.serialize(writer)?,
+            Instruction::IAnd => 0x7eu8.serialize(writer)?,
+            Instruction::LAnd => 0x7fu8.serialize(writer)?,
+            Instruction::IOr => 0x80u8.serialize(writer)?,
+            Instruction::LOr => 0x81u8.serialize(writer)?,
+            Instruction::IXor => 0x82u8.serialize(writer)?,
+            Instruction::LXor => 0x83u8.serialize(writer)?,
+            Instruction::IInc(idx, diff) => match (u8::try_from(*idx), i8::try_from(*diff)) {
+                (Ok(b), Ok(d)) => {
+                    0x84u8.serialize(writer)?;
+                    b.serialize(writer)?;
+                    d.serialize(writer)?;
+                }
+                _ => {
+                    0xc4u8.serialize(writer)?;
+                    0x84u8.serialize(writer)?;
+                    idx.serialize(writer)?;
+                    diff.serialize(writer)?;
+                }
+            },
+            Instruction::I2L => 0x85u8.serialize(writer)?,
+            Instruction::I2F => 0x86u8.serialize(writer)?,
+            Instruction::I2D => 0x87u8.serialize(writer)?,
+            Instruction::L2I => 0x88u8.serialize(writer)?,
+            Instruction::L2F => 0x89u8.serialize(writer)?,
+            Instruction::L2D => 0x8au8.serialize(writer)?,
+            Instruction::F2I => 0x8bu8.serialize(writer)?,
+            Instruction::F2L => 0x8cu8.serialize(writer)?,
+            Instruction::F2D => 0x8du8.serialize(writer)?,
+            Instruction::D2I => 0x8eu8.serialize(writer)?,
+            Instruction::D2L => 0x8fu8.serialize(writer)?,
+            Instruction::D2F => 0x90u8.serialize(writer)?,
+            Instruction::I2B => 0x91u8.serialize(writer)?,
+            Instruction::I2C => 0x92u8.serialize(writer)?,
+            Instruction::I2S => 0x93u8.serialize(writer)?,
+            Instruction::LCmp => 0x94u8.serialize(writer)?,
+            Instruction::FCmp(CompareMode::L) => 0x95u8.serialize(writer)?,
+            Instruction::FCmp(CompareMode::G) => 0x96u8.serialize(writer)?,
+            Instruction::DCmp(CompareMode::L) => 0x97u8.serialize(writer)?,
+            Instruction::DCmp(CompareMode::G) => 0x98u8.serialize(writer)?,
+            Instruction::If(comp, lbl) => {
+                let opcode: u8 = match comp {
+                    OrdComparison::EQ => 0x99,
+                    OrdComparison::NE => 0x9a,
+                    OrdComparison::LT => 0x9b,
+                    OrdComparison::GE => 0x9c,
+                    OrdComparison::GT => 0x9d,
+                    OrdComparison::LE => 0x9e,
+                };
+                opcode.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+            Instruction::IfICmp(comp, lbl) => {
+                let opcode: u8 = match comp {
+                    OrdComparison::EQ => 0x9f,
+                    OrdComparison::NE => 0xa0,
+                    OrdComparison::LT => 0xa1,
+                    OrdComparison::GE => 0xa2,
+                    OrdComparison::GT => 0xa3,
+                    OrdComparison::LE => 0xa4,
+                };
+                opcode.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+            Instruction::IfACmp(comp, lbl) => {
+                let opcode: u8 = match comp {
+                    EqComparison::EQ => 0xa5,
+                    EqComparison::NE => 0xa6,
+                };
+                opcode.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+
+            Instruction::Goto(lbl) => {
+                0xa7u8.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+
+            Instruction::GotoW(lbl_ext) => {
+                0xa8u8.serialize(writer)?;
+                lbl_ext.serialize(writer)?;
+            }
+            Instruction::IReturn => 0xacu8.serialize(writer)?,
+            Instruction::LReturn => 0xadu8.serialize(writer)?,
+            Instruction::FReturn => 0xaeu8.serialize(writer)?,
+            Instruction::DReturn => 0xafu8.serialize(writer)?,
+            Instruction::AReturn => 0xb0u8.serialize(writer)?,
+            Instruction::Return => 0xb1u8.serialize(writer)?,
+            Instruction::GetStatic(idx) => {
+                0xb2u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::PutStatic(idx) => {
+                0xb3u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::GetField(idx) => {
+                0xb4u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::PutField(idx) => {
+                0xb5u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::Invoke(InvokeType::Virtual, idx) => {
+                0xb6u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::Invoke(InvokeType::Special, idx) => {
+                0xb7u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::Invoke(InvokeType::Static, idx) => {
+                0xb8u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::Invoke(InvokeType::Interface(cnt), idx) => {
+                0xb9u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+                cnt.serialize(writer)?;
+                0u8.serialize(writer)?;
+            }
+            Instruction::Invoke(InvokeType::Dynamic, idx) => {
+                0xb9u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+                0u16.serialize(writer)?;
+            }
+            Instruction::New(idx) => {
+                0xbbu8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::NewArray(basetype) => {
+                let atype: u8 = match basetype {
+                    BaseType::Boolean => 4,
+                    BaseType::Char => 5,
+                    BaseType::Float => 6,
+                    BaseType::Double => 7,
+                    BaseType::Byte => 8,
+                    BaseType::Short => 9,
+                    BaseType::Int => 10,
+                    BaseType::Long => 11,
+                };
+                0xbcu8.serialize(writer)?;
+                atype.serialize(writer)?;
+            }
+            Instruction::ANewArray(idx) => {
+                0xbdu8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::ArrayLength => 0xbeu8.serialize(writer)?,
+            Instruction::AThrow => 0xbfu8.serialize(writer)?,
+            Instruction::CheckCast(idx) => {
+                0xc0u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::InstanceOf(idx) => {
+                0xc1u8.serialize(writer)?;
+                idx.0.serialize(writer)?;
+            }
+            Instruction::IfNull(comp, lbl) => {
+                let opcode: u8 = match comp {
+                    EqComparison::EQ => 0xc6,
+                    EqComparison::NE => 0xc7,
+                };
+                opcode.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Possible bit shifts
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+pub enum ShiftType {
+    Left,
+    LogicalRight,
+    ArithmeticRight,
+}
+
+/// Comparison modes for floating point
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+pub enum CompareMode {
+    /// -1 on NaN
+    L,
+
+    /// 1 on NaN
+    G,
+}
+
+/// Binary comparison operators available for `int` branches
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+pub enum OrdComparison {
+    EQ,
+    GE,
+    GT,
+    LE,
+    LT,
+    NE,
+}
+
+impl Not for OrdComparison {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        match self {
+            OrdComparison::EQ => OrdComparison::NE,
+            OrdComparison::GE => OrdComparison::LT,
+            OrdComparison::GT => OrdComparison::LE,
+            OrdComparison::LE => OrdComparison::GT,
+            OrdComparison::LT => OrdComparison::GE,
+            OrdComparison::NE => OrdComparison::EQ,
+        }
+    }
+}
+
+/// Equality/inequality comparison operators
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+pub enum EqComparison {
+    EQ,
+    NE,
+}
+
+impl Not for EqComparison {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        match self {
+            EqComparison::EQ => EqComparison::NE,
+            EqComparison::NE => EqComparison::EQ,
+        }
+    }
+}
+
+/// Type of method to invoke
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+pub enum InvokeType {
+    Virtual,
+    Special,
+    Static,
+    Interface(u8), // `count` is of total arguments, where `long`/`double` count for 2
+    Dynamic,
+}

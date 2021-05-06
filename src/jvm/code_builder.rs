@@ -1,7 +1,10 @@
 use super::*;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
+use std::rc::Rc;
 
 /*
 
@@ -77,10 +80,10 @@ pub struct CodeBuilder {
     next_label: SynLabel,
 
     /// Class graph
-    class_graph: ClassGraph,
+    class_graph: Rc<RefCell<ClassGraph>>,
 
     /// Constants pool
-    constants_pool: ConstantsPool,
+    constants_pool: Rc<RefCell<ConstantsPool>>,
 
     /// Enclosing type
     this_type: RefType,
@@ -92,8 +95,8 @@ impl CodeBuilder {
         descriptor: MethodDescriptor,
         is_instance_method: bool,
         is_constructor: bool,
-        class_graph: ClassGraph,
-        constants_pool: ConstantsPool,
+        class_graph: Rc<RefCell<ClassGraph>>,
+        constants_pool: Rc<RefCell<ConstantsPool>>,
         this_type: RefType,
     ) -> CodeBuilder {
         // The initial local variables are just the parameters (including maybe "this")
@@ -129,6 +132,131 @@ impl CodeBuilder {
         }
     }
 
+    /// Turn the builder into the final code attribute (with a stack map table attribute on it)
+    pub fn result(mut self) -> Result<Code, Error> {
+        // Weed out some error cases early
+        if self.current_block.is_some() || !self.unplaced_labels.is_empty() {
+            return Err(Error::MethodCodeNotFinished {
+                pending_block: self
+                    .current_block
+                    .as_ref()
+                    .map(|current_block| current_block.label),
+                unplaced_labels: self.unplaced_labels.keys().cloned().collect(),
+            });
+        }
+        if let Err(_) = u16::try_from(self.blocks_end_offset.0) {
+            return Err(Error::MethodCodeOverflow(self.blocks_end_offset));
+        }
+
+        // Convert max locals and stack
+        let max_locals: u16 = match u16::try_from(self.max_locals.0) {
+            Ok(max_locals) => max_locals,
+            Err(_) => return Err(Error::MethodCodeMaxStackOverflow(self.max_locals)),
+        };
+        let max_stack: u16 = match u16::try_from(self.max_stack.0) {
+            Ok(max_stack) => max_stack,
+            Err(_) => return Err(Error::MethodCodeMaxStackOverflow(self.max_stack)),
+        };
+
+        // Take a copy of the mapping from label to offset (our next iteration is destructive)
+        let mut first_block_is_jumped_to: bool = false;
+        let label_offsets: HashMap<SynLabel, Offset> = self
+            .blocks
+            .iter()
+            .map(|(block_label, basic_block)| {
+                first_block_is_jumped_to |= basic_block
+                    .branch_end
+                    .jump_target()
+                    .filter(|j| j.merge() == SynLabel::START)
+                    .is_some();
+
+                (*block_label, basic_block.offset_from_start)
+            })
+            .collect();
+
+        // Loop through the blocks in placement order
+        let mut attributes = vec![];
+        let mut code_array: BytecodeArray = BytecodeArray(vec![]);
+        let mut frames: Vec<(Offset, Frame<ClassConstantIndex, u16>)> = vec![];
+        let mut fallthrough_label: Option<SynLabel> = None;
+        for block_label in &self.block_order {
+            if let Some(fallthrough_label) = fallthrough_label.take() {
+                assert_eq!(
+                    fallthrough_label, *block_label,
+                    "fallthrough does not match next block"
+                );
+            }
+            let basic_block = self.blocks.remove(block_label).expect("missing block");
+
+            frames.push((
+                basic_block.offset_from_start,
+                basic_block.frame.into_serializable(
+                    &mut self.constants_pool.borrow_mut(),
+                    basic_block.offset_from_start,
+                )?,
+            ));
+            for (_, _, insn) in basic_block.instructions.iter() {
+                insn.serialize(&mut code_array.0).map_err(Error::IoError)?;
+            }
+
+            let branch_end_offset: i64 =
+                (basic_block.offset_from_start.0 + basic_block.instructions.offset_len().0) as i64;
+            let end_insn = basic_block.branch_end.map_labels(
+                |lbl: &SynLabel| {
+                    i16::try_from(label_offsets[lbl].0 as i64 - branch_end_offset)
+                        .expect("regular jump overflow")
+                },
+                |lbl: &SynLabel| {
+                    i32::try_from(label_offsets[lbl].0 as i64 - branch_end_offset)
+                        .expect("wide jump overflow")
+                },
+                |_| (),
+            );
+            end_insn
+                .serialize(&mut code_array.0)
+                .map_err(Error::IoError)?;
+
+            fallthrough_label = basic_block.branch_end.fallthrough_target();
+        }
+        assert_eq!(
+            fallthrough_label, None,
+            "method cannot end with fallthrough label"
+        );
+
+        /* Add StackMapTable attributes if there are frames to emit. The first block's frame counts
+         * only if we jump to it.
+         */
+        if frames.len() > 1 || first_block_is_jumped_to {
+            let first_implicit_frame = frames[0].clone();
+            let mut stack_map_frames = vec![];
+            for ((off, frame), (prev_off, prev_frame)) in frames
+                .iter()
+                .zip(vec![first_implicit_frame].iter().chain(frames.iter()))
+            {
+                let offset_delta = if stack_map_frames.is_empty() {
+                    off.0 - prev_off.0
+                } else {
+                    off.0 - prev_off.0 - 1
+                };
+                stack_map_frames.push(frame.stack_map_frame(offset_delta as u16, prev_frame));
+            }
+            let stack_map_table = StackMapTable(stack_map_frames);
+            attributes.push(
+                self.constants_pool
+                    .borrow_mut()
+                    .get_attribute(stack_map_table)?,
+            );
+        }
+
+        Ok(Code {
+            max_stack,
+            max_locals,
+            code_array,
+            exception_table: vec![],
+            attributes,
+        })
+    }
+
     /// Generate a fresh label
     pub fn fresh_label(&mut self) -> SynLabel {
         let to_return = self.next_label;
@@ -144,8 +272,8 @@ impl CodeBuilder {
                 .interpret_instruction(
                     &insn,
                     current_block.instructions.offset_len(),
-                    &self.class_graph,
-                    &self.constants_pool,
+                    &self.class_graph.borrow(),
+                    &self.constants_pool.borrow(),
                     &self.this_type,
                 )
                 .map_err(|kind| Error::VerifierError {
@@ -171,7 +299,7 @@ impl CodeBuilder {
                 .latest_frame
                 .interpret_branch_instruction(
                     &insn,
-                    &self.class_graph,
+                    &self.class_graph.borrow(),
                     &self.descriptor.return_type,
                 )
                 .map_err(|kind| Error::VerifierBranchingError {
@@ -245,7 +373,7 @@ impl CodeBuilder {
                 .latest_frame
                 .interpret_branch_instruction(
                     &fall_through_insn,
-                    &self.class_graph,
+                    &self.class_graph.borrow(),
                     &self.descriptor.return_type,
                 )
                 .map_err(|kind| Error::VerifierBranchingError {

@@ -8,12 +8,14 @@ pub enum Error {
         constant: Constant,
         offset: usize,
     },
-    MethodCodeOverflow {
-        instruction: String, // TODO: want `Instruction`
-        offset: usize,
-    },
-    IoError {
-        original: std::io::Error,
+    IoError(std::io::Error),
+    MethodCodeMaxStackOverflow(Offset),
+    MethodCodeMaxLocalsOverflow(Offset),
+    MethodCodeOverflow(Offset),
+
+    MethodCodeNotFinished {
+        pending_block: Option<SynLabel>,
+        unplaced_labels: Vec<SynLabel>,
     },
 
     /// Two blocks claim to have the same label (indicates a bug)

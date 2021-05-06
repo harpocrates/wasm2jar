@@ -755,6 +755,7 @@ impl Serialize for BranchInstruction<i16, i32, ()> {
 }
 
 /// Non-fallthrough jump target of a `BranchInstruction`
+#[derive(Copy, Clone)]
 pub enum JumpTarget<Lbl, LblWide> {
     Regular(Lbl),
     Wide(LblWide),

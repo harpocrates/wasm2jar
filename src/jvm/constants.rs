@@ -1,6 +1,6 @@
 use super::{
-    ConstantsReader, Descriptor, Error, FieldType, MethodDescriptor, Offset, OffsetResult,
-    OffsetVec, RefType, Serialize, VerifierErrorKind, Width,
+    Attribute, AttributeLike, ConstantsReader, Descriptor, Error, FieldType, MethodDescriptor,
+    Offset, OffsetResult, OffsetVec, RefType, Serialize, VerifierErrorKind, Width,
 };
 use byteorder::WriteBytesExt;
 use std::borrow::{Borrow, Cow};
@@ -289,6 +289,16 @@ impl ConstantsPool {
                 Ok(idx)
             }
         }
+    }
+
+    /// Add an attribute to the constant pool
+    pub fn get_attribute<A: AttributeLike>(&mut self, attribute: A) -> Result<Attribute, Error> {
+        let name_index = self.get_utf8(A::NAME)?;
+        let mut info = vec![];
+
+        attribute.serialize(&mut info).map_err(Error::IoError)?;
+
+        Ok(Attribute { name_index, info })
     }
 
     fn lookup_utf8(&self, utf8_index: Utf8ConstantIndex) -> Result<&str, VerifierErrorKind> {

@@ -27,7 +27,7 @@ impl Frame<RefType, (RefType, Offset)> {
         insn: &Instruction,
         insn_offset_in_block: Offset,
         class_graph: &ClassGraph,
-        constants_reader: &impl ConstantsReader,
+        constants_reader: &ConstantsPool,
         this_class: &RefType,
     ) -> Result<(), VerifierErrorKind> {
         interpret_instruction(
@@ -58,6 +58,26 @@ impl Frame<RefType, (RefType, Offset)> {
     pub fn update_maximums(&self, max_locals: &mut Offset, max_stack: &mut Offset) {
         max_locals.0 = max_locals.0.max(self.locals.offset_len().0);
         max_stack.0 = max_stack.0.max(self.stack.offset_len().0);
+    }
+
+    /// Resolve the frame into its serializable form
+    pub fn into_serializable(
+        &self,
+        constants_pool: &mut ConstantsPool,
+        block_offset: Offset,
+    ) -> Result<Frame<ClassConstantIndex, u16>, Error> {
+        Ok(Frame {
+            stack: self
+                .stack
+                .iter()
+                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offset))
+                .collect::<Result<_, _>>()?,
+            locals: self
+                .locals
+                .iter()
+                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offset))
+                .collect::<Result<_, _>>()?,
+        })
     }
 }
 
@@ -122,7 +142,7 @@ impl Frame<ClassConstantIndex, u16> {
             _ => (),
         }
 
-        self.full_stack_map_frame()
+        self.full_stack_map_frame(offset_delta)
     }
 
     /// Compute a full stack map frame
@@ -242,6 +262,32 @@ impl<U> VerificationType<RefType, U> {
             (Self::Null, Self::Object(_)) => true,
             (Self::Object(t1), Self::Object(t2)) => class_graph.is_java_assignable(t1, t2),
             _ => false,
+        }
+    }
+}
+
+impl VerificationType<RefType, (RefType, Offset)> {
+    /// Resolve the type into its serializable form
+    fn into_serializable(
+        &self,
+        constants_pool: &mut ConstantsPool,
+        block_offset: Offset,
+    ) -> Result<VerificationType<ClassConstantIndex, u16>, Error> {
+        match self {
+            VerificationType::Integer => Ok(VerificationType::Integer),
+            VerificationType::Float => Ok(VerificationType::Float),
+            VerificationType::Long => Ok(VerificationType::Long),
+            VerificationType::Double => Ok(VerificationType::Double),
+            VerificationType::Null => Ok(VerificationType::Null),
+            VerificationType::UninitializedThis => Ok(VerificationType::UninitializedThis),
+            VerificationType::Object(ref_type) => {
+                let utf8_index = constants_pool.get_utf8(ref_type.render())?;
+                let class_index = constants_pool.get_class(utf8_index)?;
+                Ok(VerificationType::Object(class_index))
+            }
+            VerificationType::Uninitialized((_, Offset(offset_in_block))) => Ok(
+                VerificationType::Uninitialized((block_offset.0 + offset_in_block) as u16),
+            ),
         }
     }
 }

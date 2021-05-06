@@ -35,7 +35,11 @@ pub enum Error {
     },
 
     /// A label needs to have incompatible frames
-    IncompatibleFrames(SynLabel, Frame, Frame),
+    IncompatibleFrames(
+        SynLabel,
+        Frame<RefType, (RefType, Offset)>,
+        Frame<RefType, (RefType, Offset)>,
+    ),
 }
 
 pub enum VerifierErrorKind {

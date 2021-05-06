@@ -6,15 +6,15 @@ use byteorder::WriteBytesExt;
 /// In order to load bytecode into the JVM, the JVM requires that methods be annotated with
 /// `StackMapTable` attributes to describe the state of the frame at offsets that can be jumped to.
 #[derive(Clone, Eq, PartialEq)]
-pub struct Frame {
+pub struct Frame<Cls, U> {
     /// Local variables in the frame
-    pub locals: OffsetVec<VerificationType<RefType, (RefType, Offset)>>,
+    pub locals: OffsetVec<VerificationType<Cls, U>>,
 
     /// Stack in the frame
-    pub stack: OffsetVec<VerificationType<RefType, (RefType, Offset)>>,
+    pub stack: OffsetVec<VerificationType<Cls, U>>,
 }
 
-impl Frame {
+impl Frame<RefType, (RefType, Offset)> {
     /// Update the frame to reflect the effects of the given (non-branching) instruction
     ///
     ///   * `insn_offset_in_basic_block` - used in uninitialized verification types
@@ -58,6 +58,80 @@ impl Frame {
     pub fn update_maximums(&self, max_locals: &mut Offset, max_stack: &mut Offset) {
         max_locals.0 = max_locals.0.max(self.locals.offset_len().0);
         max_stack.0 = max_stack.0.max(self.stack.offset_len().0);
+    }
+}
+
+impl Frame<ClassConstantIndex, u16> {
+    /// Compute a stack map frame for this frame, given the previous frame
+    ///
+    /// This will only use the `Full` option if none of the other stack map frame variants are
+    /// enough to encode the transition.
+    pub fn stack_map_frame(&self, offset_delta: u16, previous_frame: &Self) -> StackMapFrame {
+        match self.stack.len() {
+            0 => {
+                let this_locals_len = self.locals.len();
+                let prev_locals_len = previous_frame.locals.len();
+
+                if this_locals_len <= prev_locals_len {
+                    let len_difference = prev_locals_len - this_locals_len;
+                    if len_difference < 4 {
+                        let this_is_prefix_of_pref = self
+                            .locals
+                            .iter()
+                            .zip(previous_frame.locals.iter())
+                            .all(|((_, _, t1), (_, _, t2))| t1 == t2);
+
+                        if this_is_prefix_of_pref {
+                            if len_difference == 0 {
+                                return StackMapFrame::SameLocalsNoStack { offset_delta };
+                            } else {
+                                return StackMapFrame::ChopLocalsNoStack {
+                                    offset_delta,
+                                    chopped_k: len_difference as u8,
+                                };
+                            }
+                        }
+                    }
+                } else {
+                    if this_locals_len - prev_locals_len < 4 {
+                        let mut this_iter = self.locals.iter().map(|(_, _, t)| t);
+                        let mut prev_is_prefix_of_this = true;
+                        for (_, _, t1) in previous_frame.locals.iter() {
+                            let t2 = this_iter.next().unwrap();
+                            if t1 != t2 {
+                                prev_is_prefix_of_this = false;
+                                break;
+                            }
+                        }
+
+                        if prev_is_prefix_of_this {
+                            return StackMapFrame::AppendLocalsNoStack {
+                                offset_delta,
+                                locals: this_iter.cloned().collect(),
+                            };
+                        }
+                    }
+                }
+            }
+            1 if self.locals == previous_frame.locals => {
+                return StackMapFrame::SameLocalsOneStack {
+                    offset_delta,
+                    stack: self.stack.iter().map(|(_, _, t)| t.clone()).next().unwrap(),
+                }
+            }
+            _ => (),
+        }
+
+        self.full_stack_map_frame()
+    }
+
+    /// Compute a full stack map frame
+    pub fn full_stack_map_frame(&self, offset_delta: u16) -> StackMapFrame {
+        StackMapFrame::Full {
+            offset_delta,
+            stack: self.stack.iter().map(|(_, _, t)| t.clone()).collect(),
+            locals: self.locals.iter().map(|(_, _, t)| t.clone()).collect(),
+        }
     }
 }
 
@@ -206,7 +280,7 @@ pub trait ConstantsReader {
 }
 
 fn interpret_instruction(
-    frame: &mut Frame,
+    frame: &mut Frame<RefType, (RefType, Offset)>,
     constants_reader: &impl ConstantsReader,
     class_graph: &ClassGraph,
     this_class: &RefType,
@@ -900,7 +974,7 @@ fn interpret_instruction(
 }
 
 fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
-    frame: &mut Frame,
+    frame: &mut Frame<RefType, (RefType, Offset)>,
     class_graph: &ClassGraph,
     this_method_return_type: &Option<FieldType>,
     insn: &BranchInstruction<Lbl, LblWide, LblNext>,

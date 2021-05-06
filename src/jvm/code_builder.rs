@@ -59,7 +59,7 @@ pub struct CodeBuilder {
 
     /// Labels which have been referenced in blocks so far, but not placed yet (keys do not overlap
     /// with keys of `block`)
-    unplaced_labels: HashMap<SynLabel, Frame>,
+    unplaced_labels: HashMap<SynLabel, Frame<RefType, (RefType, Offset)>>,
 
     /// Offset of the end of the last block in `blocks`
     blocks_end_offset: Offset,
@@ -87,6 +87,48 @@ pub struct CodeBuilder {
 }
 
 impl CodeBuilder {
+    /// Create a builder for a new method
+    pub fn new(
+        descriptor: MethodDescriptor,
+        is_instance_method: bool,
+        is_constructor: bool,
+        class_graph: ClassGraph,
+        constants_pool: ConstantsPool,
+        this_type: RefType,
+    ) -> CodeBuilder {
+        // The initial local variables are just the parameters (including maybe "this")
+        let mut locals = OffsetVec::new();
+        if is_constructor {
+            locals.push(VerificationType::UninitializedThis);
+        } else if is_instance_method {
+            locals.push(VerificationType::Object(this_type.clone()));
+        }
+        for arg_type in &descriptor.parameters {
+            locals.push(VerificationType::from(arg_type.clone()));
+        }
+
+        let max_locals = locals.offset_len();
+        let entry_frame = Frame {
+            locals,
+            stack: OffsetVec::new(),
+        };
+
+        CodeBuilder {
+            descriptor,
+            blocks: HashMap::new(),
+            block_order: vec![],
+            unplaced_labels: HashMap::new(),
+            blocks_end_offset: Offset(0),
+            current_block: Some(CurrentBlock::new(SynLabel::START, entry_frame)),
+            max_stack: Offset(0),
+            max_locals,
+            next_label: SynLabel::START.next(),
+            class_graph,
+            constants_pool,
+            this_type,
+        }
+    }
+
     /// Generate a fresh label
     pub fn fresh_label(&mut self) -> SynLabel {
         let to_return = self.next_label;
@@ -169,7 +211,7 @@ impl CodeBuilder {
 
     /// Query the expected frame for a label that has already been referred to and possibly even
     /// jumped to
-    pub fn lookup_frame(&self, label: SynLabel) -> Option<&Frame> {
+    pub fn lookup_frame(&self, label: SynLabel) -> Option<&Frame<RefType, (RefType, Offset)>> {
         // The block is already placed
         if let Some(basic_block) = self.blocks.get(&label) {
             return Some(&basic_block.frame);
@@ -259,8 +301,8 @@ impl CodeBuilder {
     fn assert_frame_for_label(
         &mut self,
         label: SynLabel,
-        expected: &Frame,
-        extra_block: Option<(SynLabel, &Frame)>,
+        expected: &Frame<RefType, (RefType, Offset)>,
+        extra_block: Option<(SynLabel, &Frame<RefType, (RefType, Offset)>)>,
     ) -> Result<(), Error> {
         // Annoying edge case
         match extra_block {
@@ -300,10 +342,10 @@ struct CurrentBlock {
     pub label: SynLabel,
 
     /// State of the frame at the start of `instructions`
-    pub entry_frame: Frame,
+    pub entry_frame: Frame<RefType, (RefType, Offset)>,
 
     /// Tracks the state of the frame at the end of `instructions`
-    pub latest_frame: Frame,
+    pub latest_frame: Frame<RefType, (RefType, Offset)>,
 
     /// Accumulated instructions
     pub instructions: OffsetVec<Instruction>,
@@ -311,7 +353,7 @@ struct CurrentBlock {
 
 impl CurrentBlock {
     /// New block starting with a given frame
-    pub fn new(label: SynLabel, entry_frame: Frame) -> CurrentBlock {
+    pub fn new(label: SynLabel, entry_frame: Frame<RefType, (RefType, Offset)>) -> CurrentBlock {
         CurrentBlock {
             label,
             latest_frame: entry_frame.clone(),
@@ -374,7 +416,7 @@ pub struct BasicBlock<Lbl, LblWide, LblFall> {
     pub offset_from_start: Offset,
 
     /// Frame at the start of the block
-    pub frame: Frame,
+    pub frame: Frame<RefType, (RefType, Offset)>,
 
     /// Straight-line instructions in the block
     pub instructions: OffsetVec<Instruction>,

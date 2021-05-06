@@ -1,6 +1,6 @@
 use super::{
     Attribute, ClassConstantIndex, ConstantIndex, InnerClassAccessFlags, Serialize,
-    Utf8ConstantIndex, VerificationType, Width,
+    Utf8ConstantIndex, VerificationType,
 };
 use byteorder::WriteBytesExt;
 
@@ -117,70 +117,99 @@ pub enum StackMapFrame {
     /// Tags: 64-127 or 247
     SameLocalsOneStack {
         offset_delta: u16,
-        stack_verification: VerificationType<ClassConstantIndex, u16>,
+        stack: VerificationType<ClassConstantIndex, u16>,
     },
 
     /// Frame is like the previous frame, but without the last `chopped_k` locals
+    ///
+    /// Note: `chopped_k` must be in the range 1 to 3 inclusive
     /// Tags: 248-250
-    ChoppedFrameNoStack { offset_delta: u16, chopped_k: u8 },
+    ChopLocalsNoStack { offset_delta: u16, chopped_k: u8 },
 
-    /// Frame is like the previous frame, but with an extra `locals_verifications.len()` locals
+    /// Frame is like the previous frame, but with extra locals
     /// Tags: 252-254
-    AppendFrameNoStack {
+    AppendLocalsNoStack {
         offset_delta: u16,
-        local_verifications: Vec<VerificationType<ClassConstantIndex, u16>>,
+        locals: Vec<VerificationType<ClassConstantIndex, u16>>,
     },
 
     /// Frame has exactly the locals and stack specified
     /// Tag: 255
-    FullFrame {
+    Full {
         offset_delta: u16,
-        local_verifications: Vec<VerificationType<ClassConstantIndex, u16>>,
-        stack_verifications: Vec<VerificationType<ClassConstantIndex, u16>>,
+        locals: Vec<VerificationType<ClassConstantIndex, u16>>,
+        stack: Vec<VerificationType<ClassConstantIndex, u16>>,
     },
 }
 
 impl Serialize for StackMapFrame {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
         match self {
-            StackMapFrame::SameLocalsNoStack {
-                offset_delta: o @ 0..=63,
-            } => {
-                (*o as u8).serialize(writer)?;
-            }
+            // `same_frame` and `same_frame_extended`
             StackMapFrame::SameLocalsNoStack { offset_delta } => {
-                251u8.serialize(writer)?;
+                if *offset_delta <= 63 {
+                    (*offset_delta as u8).serialize(writer)?;
+                } else {
+                    251u8.serialize(writer)?;
+                    offset_delta.serialize(writer)?;
+                }
+            }
+
+            // `same_locals_1_stack_item_frame` and `same_locals_1_stack_item_frame_extended`
+            StackMapFrame::SameLocalsOneStack {
+                offset_delta,
+                stack,
+            } => {
+                if *offset_delta <= 63 {
+                    (*offset_delta as u8 + 64).serialize(writer)?;
+                } else {
+                    247u8.serialize(writer)?;
+                    offset_delta.serialize(writer)?;
+                }
+                stack.serialize(writer)?;
+            }
+
+            // `chop_frame`
+            StackMapFrame::ChopLocalsNoStack {
+                offset_delta,
+                chopped_k,
+            } => {
+                assert!(
+                    0 < *chopped_k && *chopped_k < 4,
+                    "ChopLocalsNoStack chops 1-3 locals"
+                );
+                (251 - chopped_k).serialize(writer)?;
                 offset_delta.serialize(writer)?;
             }
-            StackMapFrame::SameLocalsOneStack {
-                offset_delta: o @ 0..=63,
-                stack_verification,
-            } => {
-                (*o as u8 + 64).serialize(writer)?;
-                stack_verification.serialize(writer)?;
-            }
-            StackMapFrame::FullFrame {
+
+            // `append_frame`
+            StackMapFrame::AppendLocalsNoStack {
                 offset_delta,
-                local_verifications,
-                stack_verifications,
+                locals,
+            } => {
+                let added_k = locals.len();
+                assert!(
+                    0 < added_k && added_k < 4,
+                    "AppendLocalsNoStack adds 1-3 locals"
+                );
+                (251 + added_k as u8).serialize(writer)?;
+                offset_delta.serialize(writer)?;
+                for local in locals {
+                    local.serialize(writer)?;
+                }
+            }
+
+            // `full_frame`
+            StackMapFrame::Full {
+                offset_delta,
+                locals,
+                stack,
             } => {
                 255u8.serialize(writer)?;
                 offset_delta.serialize(writer)?;
-
-                let local_size = local_verifications.len() as u16;
-                local_size.serialize(writer)?;
-                for ver in local_verifications {
-                    ver.serialize(writer)?;
-                }
-
-                let stack_size =
-                    stack_verifications.iter().map(|v| v.width()).sum::<usize>() as u16;
-                stack_size.serialize(writer)?;
-                for ver in stack_verifications {
-                    ver.serialize(writer)?;
-                }
+                locals.serialize(writer)?;
+                stack.serialize(writer)?;
             }
-            _ => todo!(),
         };
         Ok(())
     }

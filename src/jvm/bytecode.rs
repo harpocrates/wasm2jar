@@ -1,18 +1,26 @@
-use super::{BaseType, ConstantIndex, Serialize, Width};
+//! This module contains the AST of JVM bytecode. The representations is slightly different from
+//! the usual presentation to make it more convenient to construct bytecode. For instance:
+//!
+//!   - The "wide" instruction doesn't show up at all, but instead gets merged into the
+//!     instructions it is allowed to modify
+//!
+//!   - Some instructions (like the branches) get abstracted into one instruction with a field.
+//!     This helps with repetitive pattern matches and also simplifies tasks like inverting a
+//!     branch condition.
+//!
+//!   - Some instructions (like `jsr`) are just omitted. We just don't need them since we never
+//!     emit them
+//!
+
+use super::*;
 use byteorder::WriteBytesExt;
 use std::convert::TryFrom;
 use std::io::Result;
 use std::ops::Not;
 
-/// JVM bytecode instruction
-///
-/// This is a very slightly abstracted to be more convenient when constructing. For instance:
-///
-///   - the "wide" instruction doesn't show up at all
-///   - some instructions (like the branches) get abstracted into one instruction with a field
-///   - some instructions (like `jsr`) are just omitted
-///
-pub enum Instruction<Lbl, LblExt> {
+/// Non-branching JVM bytecode instruction
+#[derive(Clone, Debug)]
+pub enum Instruction {
     Nop,
     AConstNull,
     IConstM1,
@@ -51,6 +59,11 @@ pub enum Instruction<Lbl, LblExt> {
     FStore(u16),
     DStore(u16),
     AStore(u16),
+    IKill(u16), // imaginary instruction to signal a local is no longer to be used
+    LKill(u16),
+    FKill(u16),
+    DKill(u16),
+    AKill(u16),
     IAStore,
     LAStore,
     FAStore,
@@ -117,37 +130,32 @@ pub enum Instruction<Lbl, LblExt> {
     I2C,
     I2S,
     LCmp,
-    FCmp(CompareMode),          // covers `fmpl` and `fcmpg`
-    DCmp(CompareMode),          // covers `dmpl` and `dcmpg`
-    If(OrdComparison, Lbl),     // covers `ifeq`, `ifne`, `iflt`, `ifge`, `ifgt`, `ifle`
-    IfICmp(OrdComparison, Lbl), // covers `if_icmpeq`, `if_icmpne`, `if_icmplt`, ... `if_icmple`
-    IfACmp(EqComparison, Lbl),  // covers `if_acmpeq`, `if_acmpne`
-    Goto(Lbl),
-    GotoW(LblExt),
-    IReturn,
-    LReturn,
-    FReturn,
-    DReturn,
-    AReturn,
-    Return,
-    GetStatic(ConstantIndex),
-    PutStatic(ConstantIndex),
-    GetField(ConstantIndex),
-    PutField(ConstantIndex),
-    Invoke(InvokeType, ConstantIndex),
-    New(ConstantIndex),
+    FCmp(CompareMode), // covers `fcmpl` and `fcmpg`
+    DCmp(CompareMode), // covers `dcmpl` and `dcmpg`
+    GetStatic(FieldRefConstantIndex),
+    PutStatic(FieldRefConstantIndex),
+    GetField(FieldRefConstantIndex),
+    PutField(FieldRefConstantIndex),
+    Invoke(InvokeType, MethodRefConstantIndex),
+    InvokeDynamic(InvokeDynamicConstantIndex),
+    New(ClassConstantIndex),
     NewArray(BaseType),
-    ANewArray(ConstantIndex),
+    ANewArray(ClassConstantIndex),
     ArrayLength,
-    AThrow,
-    CheckCast(ConstantIndex),
-    InstanceOf(ConstantIndex),
-    IfNull(EqComparison, Lbl), // covers `ifnull`, `ifnonnull`
+    CheckCast(ClassConstantIndex),
+    InstanceOf(ClassConstantIndex),
 }
 
-impl<Lbl, LblExt> Width for Instruction<Lbl, LblExt> {
+impl Width for Instruction {
     fn width(&self) -> usize {
         match self {
+          Instruction::IKill(_)
+          | Instruction::LKill(_)
+          | Instruction::FKill(_)
+          | Instruction::DKill(_)
+          | Instruction::AKill(_)
+          => 0,
+
           Instruction::Nop
           | Instruction::AConstNull
           | Instruction::IConstM1
@@ -249,14 +257,7 @@ impl<Lbl, LblExt> Width for Instruction<Lbl, LblExt> {
           | Instruction::LCmp
           | Instruction::FCmp(_)
           | Instruction::DCmp(_)
-          | Instruction::IReturn
-          | Instruction::LReturn
-          | Instruction::FReturn
-          | Instruction::DReturn
-          | Instruction::AReturn
-          | Instruction::Return
           | Instruction::ArrayLength
-          | Instruction::AThrow
           => 1,
 
           Instruction::BiPush(_)
@@ -278,10 +279,6 @@ impl<Lbl, LblExt> Width for Instruction<Lbl, LblExt> {
           Instruction::SiPush(_)
           | Instruction::Ldc(_)
           | Instruction::Ldc2(_) // always wide, unlike `ldc` vs. `ldc_w`
-          | Instruction::Goto(_)
-          | Instruction::If(_, _)
-          | Instruction::IfICmp(_, _)
-          | Instruction::IfACmp(_, _)
           | Instruction::GetStatic(_)
           | Instruction::PutStatic(_)
           | Instruction::GetField(_)
@@ -293,7 +290,6 @@ impl<Lbl, LblExt> Width for Instruction<Lbl, LblExt> {
           | Instruction::ANewArray(_)
           | Instruction::CheckCast(_)
           | Instruction::InstanceOf(_)
-          | Instruction::IfNull(_, _)
           => 3,
 
           Instruction::ILoad(_)
@@ -309,15 +305,14 @@ impl<Lbl, LblExt> Width for Instruction<Lbl, LblExt> {
           => 4,
 
           Instruction::IInc(_, _)
-          | Instruction::GotoW(_)
           | Instruction::Invoke(InvokeType::Interface(_), _)
-          | Instruction::Invoke(InvokeType::Dynamic, _)
+          | Instruction::InvokeDynamic(_)
           => 5,
         }
     }
 }
 
-impl Serialize for Instruction<i16, i32> {
+impl Serialize for Instruction {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
         /* The load/store instructions follow the same pattern:
          *
@@ -402,6 +397,11 @@ impl Serialize for Instruction<i16, i32> {
             Instruction::FStore(idx) => serialize_load_or_store(*idx, 0x43, 0x38, writer)?,
             Instruction::DStore(idx) => serialize_load_or_store(*idx, 0x47, 0x39, writer)?,
             Instruction::AStore(idx) => serialize_load_or_store(*idx, 0x4B, 0x3A, writer)?,
+            Instruction::IKill(_)
+            | Instruction::LKill(_)
+            | Instruction::FKill(_)
+            | Instruction::DKill(_)
+            | Instruction::AKill(_) => (),
             Instruction::IAStore => 0x4fu8.serialize(writer)?,
             Instruction::LAStore => 0x50u8.serialize(writer)?,
             Instruction::FAStore => 0x51u8.serialize(writer)?,
@@ -488,96 +488,48 @@ impl Serialize for Instruction<i16, i32> {
             Instruction::FCmp(CompareMode::G) => 0x96u8.serialize(writer)?,
             Instruction::DCmp(CompareMode::L) => 0x97u8.serialize(writer)?,
             Instruction::DCmp(CompareMode::G) => 0x98u8.serialize(writer)?,
-            Instruction::If(comp, lbl) => {
-                let opcode: u8 = match comp {
-                    OrdComparison::EQ => 0x99,
-                    OrdComparison::NE => 0x9a,
-                    OrdComparison::LT => 0x9b,
-                    OrdComparison::GE => 0x9c,
-                    OrdComparison::GT => 0x9d,
-                    OrdComparison::LE => 0x9e,
-                };
-                opcode.serialize(writer)?;
-                lbl.serialize(writer)?;
-            }
-            Instruction::IfICmp(comp, lbl) => {
-                let opcode: u8 = match comp {
-                    OrdComparison::EQ => 0x9f,
-                    OrdComparison::NE => 0xa0,
-                    OrdComparison::LT => 0xa1,
-                    OrdComparison::GE => 0xa2,
-                    OrdComparison::GT => 0xa3,
-                    OrdComparison::LE => 0xa4,
-                };
-                opcode.serialize(writer)?;
-                lbl.serialize(writer)?;
-            }
-            Instruction::IfACmp(comp, lbl) => {
-                let opcode: u8 = match comp {
-                    EqComparison::EQ => 0xa5,
-                    EqComparison::NE => 0xa6,
-                };
-                opcode.serialize(writer)?;
-                lbl.serialize(writer)?;
-            }
-
-            Instruction::Goto(lbl) => {
-                0xa7u8.serialize(writer)?;
-                lbl.serialize(writer)?;
-            }
-
-            Instruction::GotoW(lbl_ext) => {
-                0xa8u8.serialize(writer)?;
-                lbl_ext.serialize(writer)?;
-            }
-            Instruction::IReturn => 0xacu8.serialize(writer)?,
-            Instruction::LReturn => 0xadu8.serialize(writer)?,
-            Instruction::FReturn => 0xaeu8.serialize(writer)?,
-            Instruction::DReturn => 0xafu8.serialize(writer)?,
-            Instruction::AReturn => 0xb0u8.serialize(writer)?,
-            Instruction::Return => 0xb1u8.serialize(writer)?,
             Instruction::GetStatic(idx) => {
                 0xb2u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::PutStatic(idx) => {
                 0xb3u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::GetField(idx) => {
                 0xb4u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::PutField(idx) => {
                 0xb5u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::Invoke(InvokeType::Virtual, idx) => {
                 0xb6u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::Invoke(InvokeType::Special, idx) => {
                 0xb7u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::Invoke(InvokeType::Static, idx) => {
                 0xb8u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::Invoke(InvokeType::Interface(cnt), idx) => {
                 0xb9u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
                 cnt.serialize(writer)?;
                 0u8.serialize(writer)?;
             }
-            Instruction::Invoke(InvokeType::Dynamic, idx) => {
+            Instruction::InvokeDynamic(idx) => {
                 0xb9u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
                 0u16.serialize(writer)?;
             }
             Instruction::New(idx) => {
                 0xbbu8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::NewArray(basetype) => {
                 let atype: u8 = match basetype {
@@ -595,19 +547,200 @@ impl Serialize for Instruction<i16, i32> {
             }
             Instruction::ANewArray(idx) => {
                 0xbdu8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::ArrayLength => 0xbeu8.serialize(writer)?,
-            Instruction::AThrow => 0xbfu8.serialize(writer)?,
             Instruction::CheckCast(idx) => {
                 0xc0u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
             Instruction::InstanceOf(idx) => {
                 0xc1u8.serialize(writer)?;
-                idx.0.serialize(writer)?;
+                idx.serialize(writer)?;
             }
-            Instruction::IfNull(comp, lbl) => {
+        }
+        Ok(())
+    }
+}
+
+/// Branching JVM bytecode instruction
+///
+/// The type parameters let us abstract over the representation of
+///
+///   * __regular relative jump targets__: used in almost all branch instructions
+///   * __wide relative jump targets__: used only in `goto_w`
+///   * __fallthough targets__: used in all instructions that fall through
+///
+/// Shortly before the final serialization step, regular jump targets will become signed 16-bit
+/// offsets into the code array, wide jump targets will become signed 32-bit offsets into the code
+/// array, and fallthrough targets will be replaced with unit (since they are implicit from the
+/// order of the blocks in the code array).
+#[derive(Clone, Debug)]
+pub enum BranchInstruction<Lbl, LblWide, LblNext> {
+    If(OrdComparison, Lbl, LblNext), // covers `ifeq`, `ifne`, `iflt`, `ifge`, `ifgt`, `ifle`
+    IfICmp(OrdComparison, Lbl, LblNext), // covers `if_icmpeq`, `if_icmpne`, `if_icmplt`, ... `if_icmple`
+    IfACmp(EqComparison, Lbl, LblNext),  // covers `if_acmpeq`, `if_acmpne`
+    Goto(Lbl),
+    GotoW(LblWide),
+    IReturn,
+    LReturn,
+    FReturn,
+    DReturn,
+    AReturn,
+    Return,
+    AThrow,
+    IfNull(EqComparison, Lbl, LblNext), // covers `ifnull`, `ifnonnull`
+
+    /// This is a synthetic marker used to explicitly end a block which just falls through to the
+    /// next block. In the JVM, this is implicit when a block ends without a jump. Making it
+    /// explicit allows us to enforce that all blocks end in a branch instruction.
+    FallThrough(LblNext),
+}
+
+impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, LblNext> {
+    /// If the instruction can fall through to the next block, get that next block
+    pub fn fallthrough_target(&self) -> Option<LblNext> {
+        match self {
+            BranchInstruction::Goto(_)
+            | BranchInstruction::GotoW(_)
+            | BranchInstruction::IReturn
+            | BranchInstruction::LReturn
+            | BranchInstruction::FReturn
+            | BranchInstruction::DReturn
+            | BranchInstruction::AReturn
+            | BranchInstruction::Return
+            | BranchInstruction::AThrow => None,
+
+            BranchInstruction::If(_, _, lbl)
+            | BranchInstruction::IfICmp(_, _, lbl)
+            | BranchInstruction::IfACmp(_, _, lbl)
+            | BranchInstruction::IfNull(_, _, lbl)
+            | BranchInstruction::FallThrough(lbl) => Some(*lbl),
+        }
+    }
+
+    /// If the instruction can jump to another block (non-fallthrough), get that block
+    pub fn jump_target(&self) -> Option<JumpTarget<Lbl, LblWide>> {
+        match self {
+            BranchInstruction::If(_, lbl, _) => Some(JumpTarget::Regular(*lbl)),
+            BranchInstruction::IfICmp(_, lbl, _) => Some(JumpTarget::Regular(*lbl)),
+            BranchInstruction::IfACmp(_, lbl, _) => Some(JumpTarget::Regular(*lbl)),
+            BranchInstruction::Goto(lbl) => Some(JumpTarget::Regular(*lbl)),
+            BranchInstruction::GotoW(lbl_w) => Some(JumpTarget::Wide(*lbl_w)),
+            BranchInstruction::IReturn => None,
+            BranchInstruction::LReturn => None,
+            BranchInstruction::FReturn => None,
+            BranchInstruction::DReturn => None,
+            BranchInstruction::AReturn => None,
+            BranchInstruction::Return => None,
+            BranchInstruction::AThrow => None,
+            BranchInstruction::IfNull(_, lbl, _) => Some(JumpTarget::Regular(*lbl)),
+            BranchInstruction::FallThrough(_) => None,
+        }
+    }
+
+    pub fn map_labels<Lbl2, LblWide2, LblNext2>(
+        &self,
+        map_label: impl FnOnce(&Lbl) -> Lbl2,
+        map_wide_label: impl FnOnce(&LblWide) -> LblWide2,
+        map_next_label: impl FnOnce(&LblNext) -> LblNext2,
+    ) -> BranchInstruction<Lbl2, LblWide2, LblNext2> {
+        use BranchInstruction::*;
+
+        match self {
+            If(op, lbl, next) => If(*op, map_label(lbl), map_next_label(next)),
+            IfICmp(op, lbl, next) => IfICmp(*op, map_label(lbl), map_next_label(next)),
+            IfACmp(op, lbl, next) => IfACmp(*op, map_label(lbl), map_next_label(next)),
+            Goto(lbl) => Goto(map_label(lbl)),
+            GotoW(wide) => GotoW(map_wide_label(wide)),
+            IReturn => IReturn,
+            LReturn => LReturn,
+            FReturn => FReturn,
+            DReturn => DReturn,
+            AReturn => AReturn,
+            Return => Return,
+            AThrow => AThrow,
+            IfNull(op, lbl, next) => IfNull(*op, map_label(lbl), map_next_label(next)),
+            FallThrough(next) => FallThrough(map_next_label(next)),
+        }
+    }
+}
+
+impl<Lbl, LblWide, LblFall> Width for BranchInstruction<Lbl, LblWide, LblFall> {
+    fn width(&self) -> usize {
+        match self {
+            BranchInstruction::FallThrough(_) => 0,
+
+            BranchInstruction::IReturn
+            | BranchInstruction::LReturn
+            | BranchInstruction::FReturn
+            | BranchInstruction::DReturn
+            | BranchInstruction::AReturn
+            | BranchInstruction::Return
+            | BranchInstruction::AThrow => 1,
+
+            BranchInstruction::Goto(_)
+            | BranchInstruction::If(_, _, _)
+            | BranchInstruction::IfICmp(_, _, _)
+            | BranchInstruction::IfACmp(_, _, _)
+            | BranchInstruction::IfNull(_, _, _) => 3,
+
+            BranchInstruction::GotoW(_) => 5,
+        }
+    }
+}
+
+impl Serialize for BranchInstruction<i16, i32, ()> {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
+        match self {
+            BranchInstruction::If(comp, lbl, ()) => {
+                let opcode: u8 = match comp {
+                    OrdComparison::EQ => 0x99,
+                    OrdComparison::NE => 0x9a,
+                    OrdComparison::LT => 0x9b,
+                    OrdComparison::GE => 0x9c,
+                    OrdComparison::GT => 0x9d,
+                    OrdComparison::LE => 0x9e,
+                };
+                opcode.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+            BranchInstruction::IfICmp(comp, lbl, ()) => {
+                let opcode: u8 = match comp {
+                    OrdComparison::EQ => 0x9f,
+                    OrdComparison::NE => 0xa0,
+                    OrdComparison::LT => 0xa1,
+                    OrdComparison::GE => 0xa2,
+                    OrdComparison::GT => 0xa3,
+                    OrdComparison::LE => 0xa4,
+                };
+                opcode.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+            BranchInstruction::IfACmp(comp, lbl, ()) => {
+                let opcode: u8 = match comp {
+                    EqComparison::EQ => 0xa5,
+                    EqComparison::NE => 0xa6,
+                };
+                opcode.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+            BranchInstruction::Goto(lbl) => {
+                0xa7u8.serialize(writer)?;
+                lbl.serialize(writer)?;
+            }
+            BranchInstruction::GotoW(lbl_ext) => {
+                0xa8u8.serialize(writer)?;
+                lbl_ext.serialize(writer)?;
+            }
+            BranchInstruction::IReturn => 0xacu8.serialize(writer)?,
+            BranchInstruction::LReturn => 0xadu8.serialize(writer)?,
+            BranchInstruction::FReturn => 0xaeu8.serialize(writer)?,
+            BranchInstruction::DReturn => 0xafu8.serialize(writer)?,
+            BranchInstruction::AReturn => 0xb0u8.serialize(writer)?,
+            BranchInstruction::Return => 0xb1u8.serialize(writer)?,
+            BranchInstruction::AThrow => 0xbfu8.serialize(writer)?,
+            BranchInstruction::IfNull(comp, lbl, ()) => {
                 let opcode: u8 = match comp {
                     EqComparison::EQ => 0xc6,
                     EqComparison::NE => 0xc7,
@@ -615,8 +748,25 @@ impl Serialize for Instruction<i16, i32> {
                 opcode.serialize(writer)?;
                 lbl.serialize(writer)?;
             }
+            BranchInstruction::FallThrough(()) => (),
         }
         Ok(())
+    }
+}
+
+/// Non-fallthrough jump target of a `BranchInstruction`
+pub enum JumpTarget<Lbl, LblWide> {
+    Regular(Lbl),
+    Wide(LblWide),
+}
+
+impl<A> JumpTarget<A, A> {
+    /// If both targets are the same, extract the target
+    pub fn merge(self) -> A {
+        match self {
+            JumpTarget::Regular(a) => a,
+            JumpTarget::Wide(a) => a,
+        }
     }
 }
 
@@ -683,11 +833,13 @@ impl Not for EqComparison {
 }
 
 /// Type of method to invoke
+///
+/// Note: `InvokeDynamic` is kept separate because the constant argument it expects is not to a
+/// `Constant::MethodRef`.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub enum InvokeType {
     Virtual,
     Special,
     Static,
     Interface(u8), // `count` is of total arguments, where `long`/`double` count for 2
-    Dynamic,
 }

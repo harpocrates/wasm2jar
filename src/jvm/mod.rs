@@ -1,13 +1,27 @@
 mod access_flags;
+mod attributes;
 mod binary_format;
 mod bytecode;
+mod class;
+mod class_graph;
+mod code_builder;
 mod constants;
 mod descriptors;
+mod errors;
+mod interpreter;
 mod offset_vec;
+mod version;
 
 pub use access_flags::*;
+pub use attributes::*;
 pub use binary_format::*;
 pub use bytecode::*;
+pub use class::*;
+pub use class_graph::*;
+pub use code_builder::*;
 pub use constants::*;
 pub use descriptors::*;
+pub use errors::*;
+pub use interpreter::*;
 pub use offset_vec::*;
+pub use version::*;

@@ -32,6 +32,12 @@ impl Serialize for u32 {
     }
 }
 
+impl Serialize for u64 {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
+        writer.write_u64::<BigEndian>(*self)
+    }
+}
+
 impl Serialize for i8 {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
         writer.write_i8(*self)
@@ -47,6 +53,24 @@ impl Serialize for i16 {
 impl Serialize for i32 {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
         writer.write_i32::<BigEndian>(*self)
+    }
+}
+
+impl Serialize for i64 {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
+        writer.write_i64::<BigEndian>(*self)
+    }
+}
+
+impl Serialize for f32 {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
+        writer.write_f32::<BigEndian>(*self)
+    }
+}
+
+impl Serialize for f64 {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
+        writer.write_f64::<BigEndian>(*self)
     }
 }
 

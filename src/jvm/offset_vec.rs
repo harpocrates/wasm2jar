@@ -29,7 +29,7 @@ pub struct OffsetVec<T: Sized> {
     entries: Vec<(Offset, T)>,
 
     /// Offset of the next element to be added
-    next_offset: Offset,
+    offset_len: Offset,
 
     /// Offset for the first element (usually 0, but sometimes 1)
     initial_offset: Offset,
@@ -52,7 +52,7 @@ impl<T: Sized + Width> OffsetVec<T> {
     pub fn new() -> OffsetVec<T> {
         OffsetVec {
             entries: vec![],
-            next_offset: Offset(0),
+            offset_len: Offset(0),
             initial_offset: Offset(0),
         }
     }
@@ -61,7 +61,7 @@ impl<T: Sized + Width> OffsetVec<T> {
     pub fn new_starting_at(initial_offset: Offset) -> OffsetVec<T> {
         OffsetVec {
             entries: vec![],
-            next_offset: initial_offset,
+            offset_len: initial_offset,
             initial_offset,
         }
     }
@@ -73,23 +73,23 @@ impl<T: Sized + Width> OffsetVec<T> {
 
     /// Current offset size of the `OffsetVec` (aka. offset of the next element
     /// to be added)
-    pub fn next_offset(&self) -> Offset {
-        self.next_offset
+    pub fn offset_len(&self) -> Offset {
+        self.offset_len
     }
 
     /// Add an entry to the back
     pub fn push(&mut self, slot: T) -> Offset {
-        let offset = self.next_offset;
-        self.next_offset.0 += slot.width();
+        let offset = self.offset_len;
+        self.offset_len.0 += slot.width();
         self.entries.push((offset, slot));
 
         offset
     }
 
     /// Remove an entry from the back
-    pub fn pop_slot(&mut self) -> Option<(Offset, usize, T)> {
+    pub fn pop(&mut self) -> Option<(Offset, usize, T)> {
         self.entries.pop().map(|(off, elem)| {
-            self.next_offset = off;
+            self.offset_len = off;
             (off, self.entries.len(), elem)
         })
     }
@@ -97,17 +97,43 @@ impl<T: Sized + Width> OffsetVec<T> {
     /// Empty the vector
     pub fn clear(&mut self) {
         self.entries.clear();
-        self.next_offset = self.initial_offset;
+        self.offset_len = self.initial_offset;
     }
 
     /// Get an entry (and its index) by its offset in the vector
     ///
     /// Note: this uses binary search to find the offset
-    pub fn get_offset(&self, offset: Offset) -> Option<(usize, &T)> {
-        self.entries
-            .binary_search_by_key(&offset, |(off, _)| *off)
-            .ok()
-            .map(|idx| (idx, &self.entries[idx].1))
+    pub fn get_offset(&self, offset: Offset) -> OffsetResult<T> {
+        match self.entries.binary_search_by_key(&offset, |(off, _)| *off) {
+            Err(insert_at) if insert_at == self.entries.len() => OffsetResult::TooLarge,
+            Err(insert_at) => OffsetResult::InvalidOffset(insert_at),
+            Ok(found_idx) => OffsetResult::Ok(found_idx, &self.entries[found_idx].1),
+        }
+    }
+
+    /// Set an entry by its offset in the vector
+    ///
+    /// Note: this uses binary search to find the offset
+    pub fn set_offset(&mut self, offset: Offset, value: T) -> OffsetResult<'static, ()> {
+        if offset == self.offset_len() {
+            self.push(value);
+            OffsetResult::Ok(self.len() - 1, &())
+        } else {
+            match self.entries.binary_search_by_key(&offset, |(off, _)| *off) {
+                Err(insert_at) if insert_at == self.entries.len() => OffsetResult::TooLarge,
+                Err(insert_at) => OffsetResult::InvalidOffset(insert_at),
+                Ok(found_idx) => {
+                    let replacing = &mut self.entries[found_idx].1;
+                    if replacing.width() != value.width() {
+                        OffsetResult::IncompatibleWidth(value.width(), replacing.width())
+                    } else {
+                        let mut value = value;
+                        std::mem::swap(replacing, &mut value);
+                        OffsetResult::Ok(found_idx, &())
+                    }
+                }
+            }
+        }
     }
 
     /// Get an entry (and its offset) by its position in the vector
@@ -124,11 +150,51 @@ impl<T: Sized + Width> OffsetVec<T> {
 /// instead of the total number of elements.
 impl<A: Width + Serialize> Serialize for OffsetVec<A> {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        (self.next_offset().0 as u16).serialize(writer)?;
+        (self.offset_len().0 as u16).serialize(writer)?;
         for (_, _, elem) in self {
             elem.serialize(writer)?;
         }
         Ok(())
+    }
+}
+
+impl<A: PartialEq> PartialEq for OffsetVec<A> {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
+impl<A: Eq> Eq for OffsetVec<A> {}
+
+impl<A: Width> Default for OffsetVec<A> {
+    fn default() -> Self {
+        OffsetVec::new()
+    }
+}
+
+pub enum OffsetResult<'a, T> {
+    /// Element was accessed
+    Ok(usize, &'a T),
+
+    /// Offset was invalid, and falls in the middle of the element at this index
+    InvalidOffset(usize),
+
+    /// Width is incompatible (only occurs when trying to set an element)
+    IncompatibleWidth(usize, usize),
+
+    /// Offset is too big
+    TooLarge,
+}
+
+impl<'a, T> OffsetResult<'a, T> {
+    /// Convert to an `Option` and keep only the value found
+    pub fn ok(&self) -> Option<&'a T> {
+        match self {
+            OffsetResult::Ok(_, found) => Some(found),
+            OffsetResult::InvalidOffset(_)
+            | OffsetResult::TooLarge
+            | OffsetResult::IncompatibleWidth(_, _) => None,
+        }
     }
 }
 

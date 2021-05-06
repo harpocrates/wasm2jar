@@ -18,11 +18,10 @@ impl Version {
     };
 }
 
-impl Serialize for JvmVersion {
+impl Serialize for Version {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
         self.minor_version.serialize(writer)?;
         self.major_version.serialize(writer)?;
         Ok(())
     }
 }
-

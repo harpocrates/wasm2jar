@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::{Error, ErrorKind, Result};
 use std::str::Chars;
 
@@ -81,41 +82,22 @@ impl Descriptor for BaseType {
     }
 }
 
-/// Type of a class, instance, or local variable
+/// Reference type
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum FieldType {
-    Base(BaseType),
-    Object(String),
-    Array(Box<FieldType>),
+pub enum RefType {
+    Object(Cow<'static, str>),
+    Array(Box<FieldType>), // TODO: consider including dimension depth so as to avoid nested boxes
 }
 
-impl FieldType {
-    pub fn array(field_type: FieldType) -> FieldType {
-        FieldType::Array(Box::new(field_type))
-    }
-
-    pub fn object(class_name: &str) -> FieldType {
-        FieldType::Object(class_name.to_owned())
-    }
-
-    pub const INT: FieldType = FieldType::Base(BaseType::Int);
-    pub const LONG: FieldType = FieldType::Base(BaseType::Long);
-    pub const FLOAT: FieldType = FieldType::Base(BaseType::Float);
-    pub const DOUBLE: FieldType = FieldType::Base(BaseType::Double);
-    pub const SHORT: FieldType = FieldType::Base(BaseType::Short);
-    pub const BYTE: FieldType = FieldType::Base(BaseType::Byte);
-}
-
-impl Descriptor for FieldType {
+impl Descriptor for RefType {
     fn render_to(&self, write_to: &mut String) {
         match self {
-            FieldType::Base(base_type) => base_type.render_to(write_to),
-            FieldType::Object(class_name) => {
+            RefType::Object(class_name) => {
                 write_to.push('L');
                 write_to.push_str(class_name);
                 write_to.push(';');
             }
-            FieldType::Array(field_type) => {
+            RefType::Array(field_type) => {
                 write_to.push('[');
                 field_type.render_to(write_to);
             }
@@ -123,9 +105,8 @@ impl Descriptor for FieldType {
     }
 
     fn parse_from(source: &mut Chars) -> Result<Self> {
-        match source.clone().next() {
+        match source.next() {
             Some('L') => {
-                let _ = source.next();
                 let mut class_name = String::new();
                 loop {
                     let c: char = source.next().ok_or_else(|| {
@@ -133,24 +114,97 @@ impl Descriptor for FieldType {
                         Error::new(ErrorKind::UnexpectedEof, msg)
                     })?;
                     if c == ';' {
-                        return Ok(FieldType::Object(class_name));
+                        return Ok(RefType::object(class_name));
                     } else {
                         class_name.push(c)
                     }
                 }
             }
             Some('[') => {
-                let _ = source.next();
-                let elem_typ = Self::parse_from(source)?;
-                Ok(FieldType::array(elem_typ))
+                let elem_typ = FieldType::parse_from(source)?;
+                Ok(RefType::array(elem_typ))
             }
-            Some(_) => {
-                let base_type = BaseType::parse_from(source)?;
-                Ok(FieldType::Base(base_type))
+            Some(c) => {
+                let msg = format!("Invalid reference type character '{}'", c);
+                return Err(Error::new(ErrorKind::InvalidInput, msg));
             }
             None => {
                 let msg = "Missing field type";
                 Err(Error::new(ErrorKind::UnexpectedEof, msg))
+            }
+        }
+    }
+}
+
+impl RefType {
+    pub fn array(field_type: FieldType) -> RefType {
+        RefType::Array(Box::new(field_type))
+    }
+
+    pub fn object(class_name: impl Into<Cow<'static, str>>) -> RefType {
+        RefType::Object(class_name.into())
+    }
+
+    pub const OBJECT_NAME: &'static str = "java/lang/Object";
+    pub const CLONEABLE_NAME: &'static str = "java/lang/Cloneable";
+    pub const SERIALIZABLE_NAME: &'static str = "java/io/Serializable";
+    pub const THROWABLE_NAME: &'static str = "java/lang/Throwable";
+    pub const CLASS_NAME: &'static str = "java/lang/Class";
+    pub const STRING_NAME: &'static str = "java/lang/String";
+    pub const METHOD_HANDLE_NAME: &'static str = "java/lang/invoke/MethodHandle";
+    pub const METHOD_TYPE_NAME: &'static str = "java/lang/invoke/MethodType";
+
+    pub const OBJECT_CLASS: RefType = Self::Object(Cow::Borrowed(Self::OBJECT_NAME));
+    pub const THROWABLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::THROWABLE_NAME));
+    pub const CLASS_CLASS: RefType = Self::Object(Cow::Borrowed(Self::CLASS_NAME));
+    pub const STRING_CLASS: RefType = Self::Object(Cow::Borrowed(Self::STRING_NAME));
+    pub const METHOD_HANDLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_HANDLE_NAME));
+    pub const METHOD_TYPE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_TYPE_NAME));
+}
+
+/// Type of a class, instance, or local variable
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum FieldType {
+    Base(BaseType),
+    Ref(RefType),
+}
+
+impl FieldType {
+    pub const INT: FieldType = FieldType::Base(BaseType::Int);
+    pub const LONG: FieldType = FieldType::Base(BaseType::Long);
+    pub const FLOAT: FieldType = FieldType::Base(BaseType::Float);
+    pub const DOUBLE: FieldType = FieldType::Base(BaseType::Double);
+    pub const CHAR: FieldType = FieldType::Base(BaseType::Char);
+    pub const SHORT: FieldType = FieldType::Base(BaseType::Short);
+    pub const BYTE: FieldType = FieldType::Base(BaseType::Byte);
+    pub const BOOLEAN: FieldType = FieldType::Base(BaseType::Boolean);
+
+    pub fn array(field_type: FieldType) -> FieldType {
+        FieldType::Ref(RefType::array(field_type))
+    }
+
+    pub fn object(class_name: impl Into<Cow<'static, str>>) -> FieldType {
+        FieldType::Ref(RefType::object(class_name))
+    }
+}
+
+impl Descriptor for FieldType {
+    fn render_to(&self, write_to: &mut String) {
+        match self {
+            FieldType::Base(base_type) => base_type.render_to(write_to),
+            FieldType::Ref(reference_type) => reference_type.render_to(write_to),
+        }
+    }
+
+    fn parse_from(source: &mut Chars) -> Result<Self> {
+        match source.clone().next() {
+            None => Err(Error::new(ErrorKind::UnexpectedEof, "Missing field type")),
+            Some('B') | Some('C') | Some('D') | Some('F') | Some('I') | Some('J') | Some('S')
+            | Some('Z') => BaseType::parse_from(source).map(FieldType::Base),
+            Some('L') | Some('[') => RefType::parse_from(source).map(FieldType::Ref),
+            Some(c) => {
+                let msg = format!("Invalid reference type character '{}'", c);
+                Err(Error::new(ErrorKind::InvalidInput, msg))
             }
         }
     }
@@ -518,19 +572,14 @@ mod test {
     #[test]
     fn field_types() {
         round_trip("I", FieldType::Base(BaseType::Int));
-        round_trip(
-            "Ljava/lang/Object;",
-            FieldType::Object("java/lang/Object".to_string()),
-        );
+        round_trip("Ljava/lang/Object;", FieldType::object("java/lang/Object"));
         round_trip(
             "[[[D",
-            FieldType::array(FieldType::array(FieldType::array(FieldType::Base(
-                BaseType::Double,
-            )))),
+            FieldType::array(FieldType::array(FieldType::array(FieldType::DOUBLE))),
         );
         round_trip(
             "[Ljava/lang/String;",
-            FieldType::array(FieldType::Object("java/lang/String".to_string())),
+            FieldType::array(FieldType::object("java/lang/String")),
         );
     }
 
@@ -540,11 +589,11 @@ mod test {
             "(IDLjava/lang/Thread;)Ljava/lang/Object;",
             MethodDescriptor {
                 parameters: vec![
-                    FieldType::Base(BaseType::Int),
-                    FieldType::Base(BaseType::Double),
-                    FieldType::Object("java/lang/Thread".to_string()),
+                    FieldType::INT,
+                    FieldType::DOUBLE,
+                    FieldType::object("java/lang/Thread"),
                 ],
-                return_type: Some(FieldType::Object("java/lang/Object".to_string())),
+                return_type: Some(FieldType::object("java/lang/Object")),
             },
         )
     }

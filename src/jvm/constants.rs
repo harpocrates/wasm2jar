@@ -344,12 +344,7 @@ impl ConstantsReader for ConstantsPool {
 
         let desc = self.lookup_utf8(utf8_index)?;
 
-        /* TODO: I don't understand how sometimes we use the regular `pkg/Cls` syntax (and not
-         *       `Lpkg/Cls;` but then it is also OK to have `[Lpkg/Cls;`. Motivating example:
-         *
-         *          (Foo)my_object         =>     checkcast #7      // class pkg/Foo
-         *          (Foo[])my_object       =>     checkcast #8      // class "[Lpkg/Foo;"
-         */
+        // This exception is documented in section 4.4.1 (The CONSTANT_Class_info Structure)
         let ref_type = if let Some('[') = desc.chars().next() {
             RefType::parse(&desc).map_err(|_| VerifierErrorKind::BadDescriptor(desc.to_string()))?
         } else {

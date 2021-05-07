@@ -1,7 +1,7 @@
 use super::*;
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{RefCell, RefMut};
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::rc::Rc;
@@ -119,7 +119,7 @@ impl CodeBuilder {
         CodeBuilder {
             descriptor,
             blocks: HashMap::new(),
-            block_order: vec![],
+            block_order: vec![SynLabel::START],
             unplaced_labels: HashMap::new(),
             blocks_end_offset: Offset(0),
             current_block: Some(CurrentBlock::new(SynLabel::START, entry_frame)),
@@ -158,25 +158,23 @@ impl CodeBuilder {
             Err(_) => return Err(Error::MethodCodeMaxStackOverflow(self.max_stack)),
         };
 
-        // Take a copy of the mapping from label to offset (our next iteration is destructive)
-        let mut first_block_is_jumped_to: bool = false;
-        let label_offsets: HashMap<SynLabel, Offset> = self
-            .blocks
-            .iter()
-            .map(|(block_label, basic_block)| {
-                first_block_is_jumped_to |= basic_block
-                    .branch_end
-                    .jump_target()
-                    .filter(|j| j.merge() == SynLabel::START)
-                    .is_some();
+        // Extract a mapping of label to offset and labels used (our next iteration is destructive)
+        let mut jump_targets: HashSet<SynLabel> = HashSet::new();
+        let mut label_offsets: HashMap<SynLabel, Offset> = HashMap::new();
+        for (block_label, basic_block) in &self.blocks {
+            label_offsets.insert(*block_label, basic_block.offset_from_start);
+            if let Some(jump_target) = basic_block.branch_end.jump_target() {
+                jump_targets.insert(jump_target.merge());
+            }
+        }
+        let jump_targets = jump_targets;
+        let label_offsets = label_offsets;
 
-                (*block_label, basic_block.offset_from_start)
-            })
-            .collect();
-
-        // Loop through the blocks in placement order
-        let mut attributes = vec![];
+        // Loop through the blocks in placement order to accumulate code and frames
         let mut code_array: BytecodeArray = BytecodeArray(vec![]);
+        let implicit_frame: Frame<ClassConstantIndex, u16> = self.blocks[&SynLabel::START]
+            .frame
+            .into_serializable(&mut self.constants_pool.borrow_mut(), Offset(0))?;
         let mut frames: Vec<(Offset, Frame<ClassConstantIndex, u16>)> = vec![];
         let mut fallthrough_label: Option<SynLabel> = None;
         for block_label in &self.block_order {
@@ -188,17 +186,26 @@ impl CodeBuilder {
             }
             let basic_block = self.blocks.remove(block_label).expect("missing block");
 
-            frames.push((
-                basic_block.offset_from_start,
-                basic_block.frame.into_serializable(
-                    &mut self.constants_pool.borrow_mut(),
+            // Guard against empty blocks (they will cause pain when we get to stack map tables)
+            if basic_block.width() == 0 {
+                return Err(Error::EmptyBlock(basic_block))?;
+            }
+
+            // If this block is ever jumped to, construct a stack map frame for it
+            if jump_targets.contains(&block_label) {
+                frames.push((
                     basic_block.offset_from_start,
-                )?,
-            ));
+                    basic_block.frame.into_serializable(
+                        &mut self.constants_pool.borrow_mut(),
+                        basic_block.offset_from_start,
+                    )?,
+                ));
+            }
+
+            // Serialize the instructions in the block to the bytecode array
             for (_, _, insn) in basic_block.instructions.iter() {
                 insn.serialize(&mut code_array.0).map_err(Error::IoError)?;
             }
-
             let branch_end_offset: i64 =
                 (basic_block.offset_from_start.0 + basic_block.instructions.offset_len().0) as i64;
             let end_insn = basic_block.branch_end.map_labels(
@@ -223,23 +230,26 @@ impl CodeBuilder {
             "method cannot end with fallthrough label"
         );
 
-        /* Add StackMapTable attributes if there are frames to emit. The first block's frame counts
-         * only if we jump to it.
-         */
-        if frames.len() > 1 || first_block_is_jumped_to {
-            let first_implicit_frame = frames[0].clone();
-            let mut stack_map_frames = vec![];
-            for ((off, frame), (prev_off, prev_frame)) in frames
-                .iter()
-                .zip(vec![first_implicit_frame].iter().chain(frames.iter()))
-            {
-                let offset_delta = if stack_map_frames.is_empty() {
-                    off.0 - prev_off.0
-                } else {
-                    off.0 - prev_off.0 - 1
-                };
-                stack_map_frames.push(frame.stack_map_frame(offset_delta as u16, prev_frame));
-            }
+        // Build up stack map frames
+        let mut previous_frame = implicit_frame;
+        let mut previous_offset = Offset(0);
+        let mut stack_map_frames = vec![];
+        for (offset, frame) in frames {
+            let offset_delta = if stack_map_frames.is_empty() {
+                offset.0 - previous_offset.0
+            } else {
+                offset.0 - previous_offset.0 - 1
+            };
+            stack_map_frames.push(frame.stack_map_frame(offset_delta as u16, &previous_frame));
+
+            previous_frame = frame;
+            previous_offset = offset;
+        }
+
+        let mut attributes = vec![];
+
+        // Add `StackMapTable` attribute only if there are frames
+        if !stack_map_frames.is_empty() {
             let stack_map_table = StackMapTable(stack_map_frames);
             attributes.push(
                 self.constants_pool
@@ -326,7 +336,7 @@ impl CodeBuilder {
             )?;
 
             // Update all the local state in the builder
-            self.blocks_end_offset.0 += basic_block.instructions.offset_len().0;
+            self.blocks_end_offset.0 += basic_block.width();
             self.block_order
                 .extend(next_curr_block_opt.iter().map(|b| b.label));
             self.current_block = next_curr_block_opt;
@@ -394,7 +404,7 @@ impl CodeBuilder {
 
             // Update all the local state in the builder
             let _ = self.unplaced_labels.remove(&label);
-            self.blocks_end_offset.0 += basic_block.instructions.offset_len().0;
+            self.blocks_end_offset.0 += basic_block.width();
             self.block_order
                 .extend(next_curr_block_opt.iter().map(|b| b.label));
             self.current_block = next_curr_block_opt;
@@ -412,6 +422,10 @@ impl CodeBuilder {
         }
 
         Ok(())
+    }
+
+    pub fn constants(&self) -> RefMut<ConstantsPool> {
+        self.constants_pool.borrow_mut()
     }
 
     /// Check that the label has a certain frame. If the frame is already being tracked, we can
@@ -539,6 +553,7 @@ impl CurrentBlock {
 ///
 /// We also store some extra information that ultimately allows us to compute things like: the
 /// maximum height of the locals, the maximum height of the stack, and the stack map frames.
+#[derive(Debug)]
 pub struct BasicBlock<Lbl, LblWide, LblFall> {
     /// Offset of the start of the basic block from the start of the method
     pub offset_from_start: Offset,
@@ -551,6 +566,12 @@ pub struct BasicBlock<Lbl, LblWide, LblFall> {
 
     /// Branch instruction to close the block
     pub branch_end: BranchInstruction<Lbl, LblWide, LblFall>,
+}
+
+impl<Lbl, LblWide, LblFall> Width for BasicBlock<Lbl, LblWide, LblFall> {
+    fn width(&self) -> usize {
+        self.instructions.offset_len().0 + self.branch_end.width()
+    }
 }
 
 /// Opaque label

@@ -1,8 +1,9 @@
 use super::{
-    BranchInstruction, Constant, ConstantIndex, Frame, Instruction, Offset, RefType, SynLabel,
-    VerificationType,
+    BasicBlock, BranchInstruction, Constant, ConstantIndex, Frame, Instruction, Offset, RefType,
+    SynLabel, VerificationType,
 };
 
+#[derive(Debug)]
 pub enum Error {
     ConstantPoolOverflow {
         constant: Constant,
@@ -26,6 +27,9 @@ pub enum Error {
     /// This is fixable by making sure you place the block _after_ some jump to it.
     PlacingLabelBeforeReference(SynLabel),
 
+    /// A block that is empty cannot be placed (add in at least a `nop` to give it a length)
+    EmptyBlock(BasicBlock<SynLabel, SynLabel, SynLabel>),
+
     /// Error trying to verify
     VerifierError {
         instruction: Instruction,
@@ -44,6 +48,7 @@ pub enum Error {
     ),
 }
 
+#[derive(Debug)]
 pub enum VerifierErrorKind {
     EmptyStack,
     InvalidWidth(usize),

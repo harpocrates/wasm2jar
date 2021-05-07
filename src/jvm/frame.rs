@@ -5,7 +5,7 @@ use byteorder::WriteBytesExt;
 ///
 /// In order to load bytecode into the JVM, the JVM requires that methods be annotated with
 /// `StackMapTable` attributes to describe the state of the frame at offsets that can be jumped to.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct Frame<Cls, U> {
     /// Local variables in the frame
     pub locals: OffsetVec<VerificationType<Cls, U>>,
@@ -281,7 +281,11 @@ impl VerificationType<RefType, (RefType, Offset)> {
             VerificationType::Null => Ok(VerificationType::Null),
             VerificationType::UninitializedThis => Ok(VerificationType::UninitializedThis),
             VerificationType::Object(ref_type) => {
-                let utf8_index = constants_pool.get_utf8(ref_type.render())?;
+                let utf8_index = if let RefType::Object(name) = ref_type {
+                    constants_pool.get_utf8(name.as_ref())?
+                } else {
+                    constants_pool.get_utf8(ref_type.render())?
+                };
                 let class_index = constants_pool.get_class(utf8_index)?;
                 Ok(VerificationType::Object(class_index))
             }

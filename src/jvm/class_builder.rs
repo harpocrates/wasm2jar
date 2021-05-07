@@ -93,14 +93,13 @@ impl ClassBuilder {
     /// Add a field to the class
     pub fn add_field(
         &mut self,
-        is_static: bool,
         access_flags: FieldAccessFlags,
         name: String,
         descriptor: String,
     ) -> Result<(), Error> {
         let name_index = self.constants_pool.borrow_mut().get_utf8(&name)?;
         let descriptor_index = self.constants_pool.borrow_mut().get_utf8(&descriptor)?;
-        let descriptor = MethodDescriptor::parse(&descriptor).map_err(Error::IoError)?;
+        let descriptor = FieldType::parse(&descriptor).map_err(Error::IoError)?;
 
         self.class.fields.push(Field {
             access_flags,
@@ -117,7 +116,7 @@ impl ClassBuilder {
             .members
             .entry(name)
             .or_insert(ClassMember::Field {
-                is_static,
+                is_static: access_flags.contains(FieldAccessFlags::STATIC),
                 descriptor,
             });
 
@@ -127,7 +126,6 @@ impl ClassBuilder {
     /// Add a method to the class
     pub fn add_method(
         &mut self,
-        is_static: bool,
         access_flags: MethodAccessFlags,
         name: String,
         descriptor: String,
@@ -157,10 +155,81 @@ impl ClassBuilder {
             .members
             .entry(name)
             .or_insert(ClassMember::Method {
-                is_static,
+                is_static: access_flags.contains(MethodAccessFlags::STATIC),
                 descriptor,
             });
 
         Ok(())
     }
+
+    pub fn start_method(
+        &mut self,
+        access_flags: MethodAccessFlags,
+        name: String,
+        descriptor: String,
+    ) -> Result<MethodBuilder, Error> {
+        let is_static = access_flags.contains(MethodAccessFlags::STATIC);
+        let descriptor_parsed = MethodDescriptor::parse(&descriptor).map_err(Error::IoError)?;
+        self.class_graph
+            .borrow_mut()
+            .classes
+            .get_mut(&self.this_class)
+            .expect("class cannot be found in class graph")
+            .members
+            .entry(name.clone())
+            .or_insert(ClassMember::Method {
+                is_static,
+                descriptor: descriptor_parsed.clone(),
+            });
+
+        let code = CodeBuilder::new(
+            descriptor_parsed,
+            !is_static,
+            &name == "<init>",
+            self.class_graph.clone(),
+            self.constants_pool.clone(),
+            RefType::object(self.this_class.clone()),
+        );
+
+        Ok(MethodBuilder {
+            name,
+            access_flags,
+            descriptor,
+            code,
+        })
+    }
+
+    pub fn finish_method(&mut self, builder: MethodBuilder) -> Result<(), Error> {
+        let name_index = self.constants_pool.borrow_mut().get_utf8(&builder.name)?;
+        let descriptor_index = self
+            .constants_pool
+            .borrow_mut()
+            .get_utf8(&builder.descriptor)?;
+
+        let code = builder.code.result()?;
+        let code = self.constants_pool.borrow_mut().get_attribute(code)?;
+
+        self.class.methods.push(Method {
+            access_flags: builder.access_flags,
+            name_index,
+            descriptor_index,
+            attributes: vec![code],
+        });
+
+        Ok(())
+    }
+}
+
+pub struct MethodBuilder {
+    /// This method name
+    name: String,
+
+    /// Access flags
+    access_flags: MethodAccessFlags,
+
+    /// This method descriptor
+    descriptor: String,
+
+    /// Code builder
+    pub code: CodeBuilder,
 }

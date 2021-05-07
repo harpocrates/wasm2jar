@@ -300,6 +300,6 @@ pub enum ClassMember {
     },
     Field {
         is_static: bool,
-        descriptor: MethodDescriptor,
+        descriptor: FieldType,
     },
 }

@@ -267,86 +267,6 @@ impl CodeBuilder {
         })
     }
 
-    /// Generate a fresh label
-    pub fn fresh_label(&mut self) -> SynLabel {
-        let to_return = self.next_label;
-        self.next_label = self.next_label.next();
-        to_return
-    }
-
-    /// Push a new instruction to the current block
-    pub fn push_instruction(&mut self, insn: Instruction) -> Result<(), Error> {
-        if let Some(current_block) = self.current_block.as_mut() {
-            current_block
-                .latest_frame
-                .interpret_instruction(
-                    &insn,
-                    current_block.instructions.offset_len(),
-                    &self.class_graph.borrow(),
-                    &self.constants_pool.borrow(),
-                    &self.this_type,
-                )
-                .map_err(|kind| Error::VerifierError {
-                    instruction: insn.clone(),
-                    kind,
-                })?;
-            current_block
-                .latest_frame
-                .update_maximums(&mut self.max_locals, &mut self.max_stack);
-            current_block.extend_block(insn)?;
-        }
-        Ok(())
-    }
-
-    /// Push a new branch instruction to end the current block and possibly implicitly start a new
-    /// current block
-    pub fn push_branch_instruction(
-        &mut self,
-        insn: BranchInstruction<SynLabel, SynLabel, ()>,
-    ) -> Result<(), Error> {
-        if let Some(mut current_block) = self.current_block.take() {
-            current_block
-                .latest_frame
-                .interpret_branch_instruction(
-                    &insn,
-                    &self.class_graph.borrow(),
-                    &self.descriptor.return_type,
-                )
-                .map_err(|kind| Error::VerifierBranchingError {
-                    instruction: insn.clone(),
-                    kind,
-                })?;
-            current_block
-                .latest_frame
-                .update_maximums(&mut self.max_locals, &mut self.max_stack);
-
-            // Check that the jump target (if there is one) has a compatible frame
-            if let Some(jump_label) = insn.jump_target().map(|jump_target| jump_target.merge()) {
-                self.assert_frame_for_label(
-                    jump_label,
-                    &current_block.latest_frame,
-                    Some((current_block.label, &current_block.entry_frame)),
-                )?;
-            }
-
-            // Turn the current block into a regular block, possibly open the next current block
-            let (block_label, basic_block, next_curr_block_opt) = current_block.close_block(
-                self.blocks_end_offset,
-                insn.map_labels(|lbl| *lbl, |lbl| *lbl, |()| self.fresh_label()),
-            )?;
-
-            // Update all the local state in the builder
-            self.blocks_end_offset.0 += basic_block.width();
-            self.block_order
-                .extend(next_curr_block_opt.iter().map(|b| b.label));
-            self.current_block = next_curr_block_opt;
-            if let Some(_) = self.blocks.insert(block_label, basic_block) {
-                return Err(Error::DuplicateLabel(block_label));
-            }
-        }
-        Ok(())
-    }
-
     /// Query the expected frame for a label that has already been referred to and possibly even
     /// jumped to
     pub fn lookup_frame(&self, label: SynLabel) -> Option<&Frame<RefType, (RefType, Offset)>> {
@@ -366,66 +286,6 @@ impl CodeBuilder {
         }
 
         None
-    }
-
-    /// Start a new block with the given label, ending the current block (if there is one) with a
-    /// fallthrough. This can fail if:
-    ///
-    ///   * the label was already placed
-    ///   * the label was already jumped to from elsewhere, and the frames don't match
-    ///   * the label was not ever been jumped to and there is no fallthrough (so we have no way of
-    ///     inferring the expected frame)
-    ///
-    pub fn place_label(&mut self, label: SynLabel) -> Result<(), Error> {
-        if let Some(mut current_block) = self.current_block.take() {
-            let fall_through_insn = BranchInstruction::FallThrough(label);
-            current_block
-                .latest_frame
-                .interpret_branch_instruction(
-                    &fall_through_insn,
-                    &self.class_graph.borrow(),
-                    &self.descriptor.return_type,
-                )
-                .map_err(|kind| Error::VerifierBranchingError {
-                    instruction: fall_through_insn.map_labels(|lbl| *lbl, |lbl| *lbl, |_| ()),
-                    kind,
-                })?;
-
-            // Check that the jump target (if there is one) has a compatible frame
-            self.assert_frame_for_label(
-                label,
-                &current_block.latest_frame,
-                Some((current_block.label, &current_block.entry_frame)),
-            )?;
-
-            // Turn the current block into a regular block, possibly open the next current block
-            let (block_label, basic_block, next_curr_block_opt) =
-                current_block.close_block(self.blocks_end_offset, fall_through_insn)?;
-
-            // Update all the local state in the builder
-            let _ = self.unplaced_labels.remove(&label);
-            self.blocks_end_offset.0 += basic_block.width();
-            self.block_order
-                .extend(next_curr_block_opt.iter().map(|b| b.label));
-            self.current_block = next_curr_block_opt;
-            if let Some(_) = self.blocks.insert(block_label, basic_block) {
-                return Err(Error::DuplicateLabel(block_label));
-            }
-        } else {
-            // Find the frame
-            let frame = self
-                .unplaced_labels
-                .remove(&label)
-                .ok_or(Error::PlacingLabelBeforeReference(label))?;
-
-            self.current_block = Some(CurrentBlock::new(label, frame));
-        }
-
-        Ok(())
-    }
-
-    pub fn constants(&self) -> RefMut<ConstantsPool> {
-        self.constants_pool.borrow_mut()
     }
 
     /// Check that the label has a certain frame. If the frame is already being tracked, we can
@@ -476,6 +336,139 @@ impl CodeBuilder {
             let _ = self.unplaced_labels.insert(label, expected.clone());
             Ok(())
         }
+    }
+}
+
+impl BytecodeBuilder for CodeBuilder {
+    type Lbl = SynLabel;
+    type Err = Error;
+
+    fn fresh_label(&mut self) -> SynLabel {
+        let to_return = self.next_label;
+        self.next_label = self.next_label.next();
+        to_return
+    }
+
+    fn push_instruction(&mut self, insn: Instruction) -> Result<(), Error> {
+        if let Some(current_block) = self.current_block.as_mut() {
+            current_block
+                .latest_frame
+                .interpret_instruction(
+                    &insn,
+                    current_block.instructions.offset_len(),
+                    &self.class_graph.borrow(),
+                    &self.constants_pool.borrow(),
+                    &self.this_type,
+                )
+                .map_err(|kind| Error::VerifierError {
+                    instruction: insn.clone(),
+                    kind,
+                })?;
+            current_block
+                .latest_frame
+                .update_maximums(&mut self.max_locals, &mut self.max_stack);
+            current_block.extend_block(insn)?;
+        }
+        Ok(())
+    }
+
+    fn push_branch_instruction(
+        &mut self,
+        insn: BranchInstruction<SynLabel, SynLabel, ()>,
+    ) -> Result<(), Error> {
+        if let Some(mut current_block) = self.current_block.take() {
+            current_block
+                .latest_frame
+                .interpret_branch_instruction(
+                    &insn,
+                    &self.class_graph.borrow(),
+                    &self.descriptor.return_type,
+                )
+                .map_err(|kind| Error::VerifierBranchingError {
+                    instruction: insn.clone(),
+                    kind,
+                })?;
+            current_block
+                .latest_frame
+                .update_maximums(&mut self.max_locals, &mut self.max_stack);
+
+            // Check that the jump target (if there is one) has a compatible frame
+            if let Some(jump_label) = insn.jump_target().map(|jump_target| jump_target.merge()) {
+                self.assert_frame_for_label(
+                    jump_label,
+                    &current_block.latest_frame,
+                    Some((current_block.label, &current_block.entry_frame)),
+                )?;
+            }
+
+            // Turn the current block into a regular block, possibly open the next current block
+            let (block_label, basic_block, next_curr_block_opt) = current_block.close_block(
+                self.blocks_end_offset,
+                insn.map_labels(|lbl| *lbl, |lbl| *lbl, |()| self.fresh_label()),
+            )?;
+
+            // Update all the local state in the builder
+            self.blocks_end_offset.0 += basic_block.width();
+            self.block_order
+                .extend(next_curr_block_opt.iter().map(|b| b.label));
+            self.current_block = next_curr_block_opt;
+            if let Some(_) = self.blocks.insert(block_label, basic_block) {
+                return Err(Error::DuplicateLabel(block_label));
+            }
+        }
+        Ok(())
+    }
+
+    fn place_label(&mut self, label: SynLabel) -> Result<(), Error> {
+        if let Some(mut current_block) = self.current_block.take() {
+            let fall_through_insn = BranchInstruction::FallThrough(label);
+            current_block
+                .latest_frame
+                .interpret_branch_instruction(
+                    &fall_through_insn,
+                    &self.class_graph.borrow(),
+                    &self.descriptor.return_type,
+                )
+                .map_err(|kind| Error::VerifierBranchingError {
+                    instruction: fall_through_insn.map_labels(|lbl| *lbl, |lbl| *lbl, |_| ()),
+                    kind,
+                })?;
+
+            // Check that the jump target (if there is one) has a compatible frame
+            self.assert_frame_for_label(
+                label,
+                &current_block.latest_frame,
+                Some((current_block.label, &current_block.entry_frame)),
+            )?;
+
+            // Turn the current block into a regular block, possibly open the next current block
+            let (block_label, basic_block, next_curr_block_opt) =
+                current_block.close_block(self.blocks_end_offset, fall_through_insn)?;
+
+            // Update all the local state in the builder
+            let _ = self.unplaced_labels.remove(&label);
+            self.blocks_end_offset.0 += basic_block.width();
+            self.block_order
+                .extend(next_curr_block_opt.iter().map(|b| b.label));
+            self.current_block = next_curr_block_opt;
+            if let Some(_) = self.blocks.insert(block_label, basic_block) {
+                return Err(Error::DuplicateLabel(block_label));
+            }
+        } else {
+            // Find the frame
+            let frame = self
+                .unplaced_labels
+                .remove(&label)
+                .ok_or(Error::PlacingLabelBeforeReference(label))?;
+
+            self.current_block = Some(CurrentBlock::new(label, frame));
+        }
+
+        Ok(())
+    }
+
+    fn constants(&self) -> RefMut<ConstantsPool> {
+        self.constants_pool.borrow_mut()
     }
 }
 

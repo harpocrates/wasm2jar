@@ -212,6 +212,16 @@ impl ClassGraph {
                 },
             },
         );
+        java_lang_integer.members.insert(
+            String::from("<bitCount>"),
+            ClassMember::Method {
+                is_static: true,
+                descriptor: MethodDescriptor {
+                    parameters: vec![FieldType::INT],
+                    return_type: Some(FieldType::INT),
+                }
+            }
+        );
 
         // java.lang.Float
         let java_lang_float = self

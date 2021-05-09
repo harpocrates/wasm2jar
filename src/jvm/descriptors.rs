@@ -145,6 +145,28 @@ impl RefType {
         RefType::Object(class_name.into())
     }
 
+    /// Render the type for a class info
+    ///
+    /// When making a `CONSTANT_Class_info`, reference types are almost always objects. However,
+    /// there are a handful of places where an array type needs to be fit in (eg. for a `checkcast`
+    /// to an array type). See section 4.4.1 for more.
+    pub fn render_class_info(&self) -> Cow<'static, str> {
+        match self {
+            RefType::Object(Cow::Borrowed(object_desc)) => Cow::Borrowed(object_desc),
+            RefType::Object(Cow::Owned(object_desc)) => Cow::Owned(object_desc.clone()),
+            array => Cow::Owned(array.render()),
+        }
+    }
+
+    /// Parse a class from a class info
+    pub fn parse_class_info(descriptor: &str) -> Result<RefType> {
+        if let Some('[') = descriptor.chars().next() {
+            RefType::parse(&descriptor)
+        } else {
+            Ok(RefType::object(descriptor.to_string()))
+        }
+    }
+
     pub const OBJECT_NAME: &'static str = "java/lang/Object";
     pub const CLONEABLE_NAME: &'static str = "java/lang/Cloneable";
     pub const SERIALIZABLE_NAME: &'static str = "java/io/Serializable";

@@ -341,7 +341,6 @@ impl CodeBuilder {
 
 impl BytecodeBuilder for CodeBuilder {
     type Lbl = SynLabel;
-    type Err = Error;
 
     fn fresh_label(&mut self) -> SynLabel {
         let to_return = self.next_label;

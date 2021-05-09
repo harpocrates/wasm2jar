@@ -281,11 +281,7 @@ impl VerificationType<RefType, (RefType, Offset)> {
             VerificationType::Null => Ok(VerificationType::Null),
             VerificationType::UninitializedThis => Ok(VerificationType::UninitializedThis),
             VerificationType::Object(ref_type) => {
-                let utf8_index = if let RefType::Object(name) = ref_type {
-                    constants_pool.get_utf8(name.as_ref())?
-                } else {
-                    constants_pool.get_utf8(ref_type.render())?
-                };
+                let utf8_index = constants_pool.get_utf8(ref_type.render_class_info())?;
                 let class_index = constants_pool.get_class(utf8_index)?;
                 Ok(VerificationType::Object(class_index))
             }
@@ -503,6 +499,18 @@ fn interpret_instruction(
                 }
                 _ => return Err(VerifierErrorKind::InvalidIndex),
             };
+        }
+
+        AHint(cls_idx) => {
+            let specific_type = pop_offset_vec(stack)?;
+            let general_type = VType::Object(constants_reader.lookup_class_reftype(*cls_idx)?);
+            let is_valid_weakening =
+                VerificationType::is_assignable(class_graph, &specific_type, &general_type);
+            if is_valid_weakening {
+                stack.push(general_type);
+            } else {
+                return Err(VerifierErrorKind::InvalidType);
+            }
         }
 
         IAStore => {

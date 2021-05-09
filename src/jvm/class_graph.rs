@@ -213,15 +213,45 @@ impl ClassGraph {
             },
         );
         java_lang_integer.members.insert(
-            String::from("<bitCount>"),
+            String::from("valueOf"),
             ClassMember::Method {
                 is_static: true,
                 descriptor: MethodDescriptor {
                     parameters: vec![FieldType::INT],
-                    return_type: Some(FieldType::INT),
-                }
-            }
+                    return_type: Some(FieldType::object("java/lang/Integer")),
+                },
+            },
         );
+        for name in vec!["bitCount", "numberOfLeadingZeros", "numberOfTrailingZeros"] {
+            java_lang_integer.members.insert(
+                String::from(name),
+                ClassMember::Method {
+                    is_static: true,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![FieldType::INT],
+                        return_type: Some(FieldType::INT),
+                    },
+                },
+            );
+        }
+        for name in vec![
+            "compareUnsigned",
+            "divideUnsigned",
+            "remainderUnsigned",
+            "rotateLeft",
+            "rotateRight",
+        ] {
+            java_lang_integer.members.insert(
+                String::from(name),
+                ClassMember::Method {
+                    is_static: true,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![FieldType::INT, FieldType::INT],
+                        return_type: Some(FieldType::INT),
+                    },
+                },
+            );
+        }
 
         // java.lang.Float
         let java_lang_float = self
@@ -264,6 +294,62 @@ impl ClassGraph {
                 },
             },
         );
+        java_lang_long.members.insert(
+            String::from("valueOf"),
+            ClassMember::Method {
+                is_static: true,
+                descriptor: MethodDescriptor {
+                    parameters: vec![FieldType::LONG],
+                    return_type: Some(FieldType::object("java/lang/Long")),
+                },
+            },
+        );
+        for name in vec!["bitCount", "numberOfLeadingZeros", "numberOfTrailingZeros"] {
+            java_lang_long.members.insert(
+                String::from(name),
+                ClassMember::Method {
+                    is_static: true,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![FieldType::LONG],
+                        return_type: Some(FieldType::INT),
+                    },
+                },
+            );
+        }
+        java_lang_long.members.insert(
+            String::from("compareUnsigned"),
+            ClassMember::Method {
+                is_static: true,
+                descriptor: MethodDescriptor {
+                    parameters: vec![FieldType::LONG, FieldType::LONG],
+                    return_type: Some(FieldType::INT),
+                },
+            },
+        );
+        for name in vec!["divideUnsigned", "remainderUnsigned"] {
+            java_lang_long.members.insert(
+                String::from(name),
+                ClassMember::Method {
+                    is_static: true,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![FieldType::LONG, FieldType::LONG],
+                        return_type: Some(FieldType::LONG),
+                    },
+                },
+            );
+        }
+        for name in vec!["rotateLeft", "rotateRight"] {
+            java_lang_long.members.insert(
+                String::from(name),
+                ClassMember::Method {
+                    is_static: true,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![FieldType::LONG, FieldType::INT],
+                        return_type: Some(FieldType::LONG),
+                    },
+                },
+            );
+        }
 
         // java.lang.Double
         let java_lang_double = self
@@ -285,6 +371,39 @@ impl ClassGraph {
                 },
             },
         );
+
+        // java.lang.Math
+        let java_lang_math = self
+            .classes
+            .entry(String::from("java/lang/Math"))
+            .or_insert(ClassData {
+                superclass: Some(String::from("java/lang/Object")),
+                interfaces: HashSet::new(),
+                is_interface: false,
+                members: HashMap::new(),
+            });
+        java_lang_math.members.insert(
+            String::from("ceil"),
+            ClassMember::Method {
+                is_static: true,
+                descriptor: MethodDescriptor {
+                    parameters: vec![FieldType::DOUBLE],
+                    return_type: Some(FieldType::DOUBLE),
+                },
+            },
+        );
+        for typ in vec![FieldType::FLOAT, FieldType::DOUBLE] {
+            java_lang_math.members.insert(
+                String::from("copySign"), // TODO: duplicate keys will override each other
+                ClassMember::Method {
+                    is_static: true,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![typ.clone(), typ.clone()],
+                        return_type: Some(typ),
+                    },
+                },
+            );
+        }
     }
 }
 

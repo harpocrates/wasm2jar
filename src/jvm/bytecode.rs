@@ -64,6 +64,7 @@ pub enum Instruction {
     FKill(u16),
     DKill(u16),
     AKill(u16),
+    AHint(ClassConstantIndex), // hint for the verifier to infer a more general type
     IAStore,
     LAStore,
     FAStore,
@@ -154,6 +155,7 @@ impl Width for Instruction {
           | Instruction::FKill(_)
           | Instruction::DKill(_)
           | Instruction::AKill(_)
+          | Instruction::AHint(_)
           => 0,
 
           Instruction::Nop
@@ -401,7 +403,8 @@ impl Serialize for Instruction {
             | Instruction::LKill(_)
             | Instruction::FKill(_)
             | Instruction::DKill(_)
-            | Instruction::AKill(_) => (),
+            | Instruction::AKill(_)
+            | Instruction::AHint(_) => (),
             Instruction::IAStore => 0x4fu8.serialize(writer)?,
             Instruction::LAStore => 0x50u8.serialize(writer)?,
             Instruction::FAStore => 0x51u8.serialize(writer)?,

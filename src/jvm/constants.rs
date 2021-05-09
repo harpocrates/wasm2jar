@@ -343,14 +343,8 @@ impl ConstantsReader for ConstantsPool {
         };
 
         let desc = self.lookup_utf8(utf8_index)?;
-
-        // This exception is documented in section 4.4.1 (The CONSTANT_Class_info Structure)
-        let ref_type = if let Some('[') = desc.chars().next() {
-            RefType::parse(&desc).map_err(|_| VerifierErrorKind::BadDescriptor(desc.to_string()))?
-        } else {
-            RefType::object(String::from(desc))
-        };
-
+        let ref_type = RefType::parse_class_info(desc)
+            .map_err(|_| VerifierErrorKind::BadDescriptor(desc.to_string()))?;
         Ok(ref_type)
     }
 

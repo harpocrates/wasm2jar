@@ -1,12 +1,13 @@
 use super::{BranchCond, BytecodeBuilderExts, Error};
 use crate::jvm::{
-    BranchInstruction, BytecodeBuilder, EqComparison, Instruction, Offset, OffsetVec, OrdComparison,
+    BranchInstruction, BytecodeBuilder, EqComparison, FieldType, Instruction, Offset, OffsetVec,
+    OrdComparison, RefType, Width,
 };
 use crate::wasm::{ref_type_from_general, ControlFrame, FunctionType, StackType};
 use std::convert::TryFrom;
 use std::ops::Not;
 use wasmparser::{
-    FuncValidator, FunctionBody, Operator, TypeOrFuncType, WasmFeatures, WasmModuleResources,
+    FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType, WasmFeatures, WasmModuleResources,
 };
 
 /// Context for translating a WASM function into a JVM one
@@ -67,25 +68,31 @@ where
             let local_type = StackType::from_general(&local_type)
                 .ok_or_else(|| Error::UnsupportedStackType(local_type))?;
             for _ in 0..count {
-                self.push_local(local_type)?;
+                let _ = self.push_local(local_type, false)?;
             }
         }
 
         Ok(())
     }
 
-    /// Push a new local onto our "stack" of locals
-    fn push_local(&mut self, local_type: StackType) -> Result<(), Error> {
+    /// Push a new local onto our "stack" of locals. If `value_from_stack` is true, there should
+    /// be a value of the right type at the top of the stack and that should be the initial value
+    /// of the local. Otherwise, assign some "zero" value.
+    fn push_local(&mut self, local_type: StackType, value_from_stack: bool) -> Result<u16, Error> {
         let field_type = local_type.field_type();
         let next_local_idx =
             u16::try_from(self.jvm_locals.offset_len().0).map_err(|_| Error::LocalsOverflow)?;
-        self.jvm_code.zero_local(next_local_idx, field_type)?;
+        if value_from_stack {
+            self.jvm_code.set_local(next_local_idx, &field_type)?;
+        } else {
+            self.jvm_code.zero_local(next_local_idx, field_type)?;
+        }
         self.jvm_locals.push(local_type);
-        Ok(())
+        Ok(next_local_idx)
     }
 
     /// Pop a local from our "stack" of locals
-    fn pop_locals(&mut self) -> Result<(), Error> {
+    fn pop_local(&mut self) -> Result<(), Error> {
         if let Some((offset, _, local_type)) = self.jvm_locals.pop() {
             let field_type = local_type.field_type();
             self.jvm_code.kill_local(offset.0 as u16, field_type)?;
@@ -147,7 +154,13 @@ where
             // Control flow
             Operator::If { ty } => self.visit_if(ty, BranchCond::If(OrdComparison::EQ))?,
             Operator::Else => self.visit_else()?,
+            Operator::Block { ty } => self.visit_block(ty)?,
+            Operator::Loop { ty } => self.visit_loop(ty)?,
             Operator::End => self.visit_end()?,
+            Operator::Br { relative_depth } => self.visit_branch(relative_depth)?,
+            Operator::BrIf { relative_depth } => {
+                self.visit_branch_if(relative_depth, BranchCond::If(OrdComparison::EQ))?
+            }
 
             // Constants
             Operator::I32Const { value } => self.jvm_code.const_int(value)?,
@@ -242,6 +255,10 @@ where
             Operator::I32LeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::LE), next_op)?,
 
             Operator::Drop => self.jvm_code.pop()?,
+            Operator::Select => self.visit_select(None, BranchCond::If(OrdComparison::EQ))?,
+            Operator::TypedSelect { ty } => {
+                self.visit_select(Some(ty), BranchCond::If(OrdComparison::EQ))?
+            }
 
             _ => todo!(),
         }
@@ -261,6 +278,16 @@ where
             Some((Operator::If { ty }, offset)) => {
                 self.wasm_validator.op(offset, &Operator::If { ty })?;
                 self.visit_if(ty, condition)?;
+            }
+            Some((Operator::BrIf { relative_depth }, offset)) => {
+                self.wasm_validator
+                    .op(offset, &Operator::BrIf { relative_depth })?;
+                self.visit_branch_if(relative_depth, condition)?;
+            }
+            Some((Operator::TypedSelect { ty }, offset)) => {
+                self.wasm_validator
+                    .op(offset, &Operator::TypedSelect { ty })?;
+                self.visit_select(Some(ty), condition)?
             }
 
             other => {
@@ -321,7 +348,58 @@ where
         Ok(())
     }
 
+    /// Visit a `block` block
+    fn visit_block(&mut self, ty: TypeOrFuncType) -> Result<(), Error> {
+        let ty = self.block_type(ty)?;
+
+        #[cfg(debug_assertions)]
+        self.assert_top_stack(&ty.inputs);
+
+        let base_stack_height = self.wasm_validator.operand_stack_height() - ty.inputs.len() as u32;
+        let end_block = self.jvm_code.fresh_label();
+        let return_values = ty.outputs;
+
+        self.wasm_frames.push(ControlFrame::Block {
+            end_block,
+            return_values,
+            base_stack_height,
+        });
+
+        Ok(())
+    }
+
+    /// Visit a `loop` block
+    fn visit_loop(&mut self, ty: TypeOrFuncType) -> Result<(), Error> {
+        let ty = self.block_type(ty)?;
+
+        #[cfg(debug_assertions)]
+        self.assert_top_stack(&ty.inputs);
+
+        let base_stack_height = self.wasm_validator.operand_stack_height() - ty.inputs.len() as u32;
+        let start_loop = self.jvm_code.fresh_label();
+        let after_block = self.jvm_code.fresh_label();
+        let return_values = ty.outputs;
+
+        self.wasm_frames.push(ControlFrame::Loop {
+            start_loop,
+            after_block,
+            return_values,
+            base_stack_height,
+        });
+        self.jvm_code.place_label(start_loop)?;
+
+        Ok(())
+    }
+
     /// Visit the end of a block
+    ///
+    /// Note: unlike `br`/`br_if`, reaching the end of a block naturally means that the stack
+    /// should be precisely in the state of:
+    ///
+    ///   * the top values correspond the the block's return values
+    ///   * the height of the stack under those return values matches the height of the stack when
+    ///     the block was entered (and also under the argument values)
+    ///
     fn visit_end(&mut self) -> Result<(), Error> {
         Ok(match self.wasm_frames.pop() {
             // all functions end with one final `End`
@@ -331,6 +409,10 @@ where
             // at the end of all control flow blocks, we just fallthrough
             Some(control_frame) => {
                 self.jvm_code.place_label(control_frame.end_label())?;
+
+                #[cfg(debug_assertions)]
+                self.assert_top_stack(control_frame.return_values());
+
                 debug_assert_eq!(
                     control_frame.base_stack_height() + control_frame.return_values().len() as u32,
                     self.wasm_validator.operand_stack_height(),
@@ -338,6 +420,127 @@ where
                 );
             }
         })
+    }
+
+    /// Visit a `br` to an outer block
+    fn visit_branch(&mut self, relative_depth: u32) -> Result<(), Error> {
+        let target_frame = self
+            .wasm_frames
+            .iter()
+            .nth_back(relative_depth as usize)
+            .expect("No frame found for branch");
+        let return_values = target_frame.return_values().to_vec();
+        let target_label = target_frame.branch_label();
+
+        #[cfg(debug_assertions)]
+        self.assert_top_stack(&return_values);
+
+        // A `br` may involve unwinding the stack to the proper height
+        let required_pops = self.wasm_validator.operand_stack_height()
+            - return_values.len() as u32
+            - target_frame.base_stack_height();
+
+        if required_pops > 0 {
+            // Stash return values (so we can unwind the stack under them)
+            let mut stash_locals: Vec<(u16, &StackType)> = vec![];
+            for return_value in return_values.iter().rev() {
+                let local_idx = self.push_local(*return_value, true)?;
+                stash_locals.push((local_idx, return_value));
+            }
+
+            // Unwind the stack as many times as needed
+            // TODO: optimize unwinding two width 1 types with `pop2`
+            for _ in 0..required_pops {
+                self.jvm_code.pop()?;
+            }
+
+            // Unstash return values
+            for (local_idx, return_value) in stash_locals {
+                self.jvm_code
+                    .get_local(local_idx, &return_value.field_type())?;
+                self.pop_local()?;
+            }
+        }
+
+        self.jvm_code
+            .push_branch_instruction(BranchInstruction::Goto(target_label))?;
+
+        Ok(())
+    }
+
+    /// Visit a `br_if` to an outer block
+    fn visit_branch_if(&mut self, relative_depth: u32, condition: BranchCond) -> Result<(), Error> {
+        let skip_branch = self.jvm_code.fresh_label();
+
+        self.jvm_code
+            .push_branch_instruction(condition.not().into_instruction(skip_branch, ()))?;
+        self.visit_branch(relative_depth)?;
+        self.jvm_code.place_label(skip_branch)?;
+
+        Ok(())
+    }
+
+    /// Visit a `select`
+    fn visit_select(&mut self, ty: Option<Type>, condition: BranchCond) -> Result<(), Error> {
+        let ty = match ty {
+            None => None,
+            Some(ty) => {
+                let stack_type_opt = StackType::from_general(&ty);
+                Some(stack_type_opt.ok_or_else(|| Error::UnsupportedReferenceType(ty))?)
+            }
+        };
+
+        // The hint only matter for reference types
+        let ref_ty_hint: Option<RefType> = ty.and_then(|st| match st.field_type() {
+            FieldType::Ref(hint_ref) => Some(hint_ref),
+            _ => None,
+        });
+
+        let else_block = self.jvm_code.fresh_label();
+        let end_block = self.jvm_code.fresh_label();
+
+        // Are we selecting between two wide values? (if not, it is two regular values)
+        let select_is_wide = self
+            .jvm_code
+            .current_frame()
+            .expect("no current frame")
+            .stack
+            .iter()
+            .last()
+            .map_or(false, |(_, _, t)| t.width() == 2);
+
+        self.jvm_code
+            .push_branch_instruction(condition.not().into_instruction(else_block, ()))?;
+
+        // Keep the bottom value
+        if select_is_wide {
+            self.jvm_code.push_instruction(Instruction::Pop2)?;
+        } else {
+            self.jvm_code.push_instruction(Instruction::Pop)?;
+        }
+        if let Some(ref_ty) = ref_ty_hint.clone() {
+            self.jvm_code.push_instruction(Instruction::AHint(ref_ty))?;
+        }
+        self.jvm_code
+            .push_branch_instruction(BranchInstruction::Goto(end_block))?;
+
+        // Keep the top value
+        self.jvm_code.place_label(else_block)?;
+        if select_is_wide {
+            self.jvm_code.push_instruction(Instruction::Dup2X2)?;
+            self.jvm_code.push_instruction(Instruction::Pop2)?;
+            self.jvm_code.push_instruction(Instruction::Pop2)?;
+        } else {
+            self.jvm_code.push_instruction(Instruction::Dup2X1)?;
+            self.jvm_code.push_instruction(Instruction::Pop2)?;
+        }
+        if let Some(ref_ty) = ref_ty_hint {
+            self.jvm_code.push_instruction(Instruction::AHint(ref_ty))?;
+        }
+
+        self.jvm_code.place_label(end_block)?;
+
+        Ok(())
     }
 
     /// Convert a block type into a function type

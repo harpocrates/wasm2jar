@@ -501,9 +501,9 @@ fn interpret_instruction(
             };
         }
 
-        AHint(cls_idx) => {
+        AHint(general_type) => {
+            let general_type = VType::Object(general_type.clone());
             let specific_type = pop_offset_vec(stack)?;
-            let general_type = VType::Object(constants_reader.lookup_class_reftype(*cls_idx)?);
             let is_valid_weakening =
                 VerificationType::is_assignable(class_graph, &specific_type, &general_type);
             if is_valid_weakening {

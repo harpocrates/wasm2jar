@@ -339,7 +339,7 @@ impl CodeBuilder {
     }
 }
 
-impl BytecodeBuilder for CodeBuilder {
+impl BytecodeBuilder<Error> for CodeBuilder {
     type Lbl = SynLabel;
 
     fn fresh_label(&mut self) -> SynLabel {
@@ -468,6 +468,12 @@ impl BytecodeBuilder for CodeBuilder {
 
     fn constants(&self) -> RefMut<ConstantsPool> {
         self.constants_pool.borrow_mut()
+    }
+
+    fn current_frame(&self) -> Option<&Frame<RefType, (RefType, Offset)>> {
+        self.current_block
+            .as_ref()
+            .map(|current_block| &current_block.latest_frame)
     }
 }
 

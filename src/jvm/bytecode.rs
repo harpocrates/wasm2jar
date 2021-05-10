@@ -64,7 +64,7 @@ pub enum Instruction {
     FKill(u16),
     DKill(u16),
     AKill(u16),
-    AHint(ClassConstantIndex), // hint for the verifier to infer a more general type
+    AHint(RefType), // hint for the verifier to infer a more general type
     IAStore,
     LAStore,
     FAStore,

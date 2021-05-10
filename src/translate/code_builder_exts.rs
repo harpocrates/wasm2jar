@@ -1,9 +1,52 @@
-use crate::jvm::{BranchInstruction, BytecodeBuilder, Error, FieldType, Instruction};
+use crate::jvm::{
+    BranchInstruction, BytecodeBuilder, EqComparison, Error, FieldType, Instruction, OrdComparison,
+    RefType, Width,
+};
+use std::ops::Not;
 
 pub trait BytecodeBuilderExts: BytecodeBuilder<Error> {
     /// Zero initialize a local variable
     fn zero_local(&mut self, offset: u16, field_type: FieldType) -> Result<(), Error> {
-        let insn = match field_type {
+        match field_type {
+            FieldType::INT
+            | FieldType::CHAR
+            | FieldType::SHORT
+            | FieldType::BYTE
+            | FieldType::BOOLEAN => {
+                self.push_instruction(Instruction::IConst0)?;
+                self.push_instruction(Instruction::IStore(offset))?;
+            }
+            FieldType::FLOAT => {
+                self.push_instruction(Instruction::FConst0)?;
+                self.push_instruction(Instruction::FStore(offset))?;
+            }
+            FieldType::LONG => {
+                self.push_instruction(Instruction::LConst0)?;
+                self.push_instruction(Instruction::LStore(offset))?;
+            }
+            FieldType::DOUBLE => {
+                self.push_instruction(Instruction::DConst0)?;
+                self.push_instruction(Instruction::DStore(offset))?;
+            }
+            FieldType::Ref(ref_type) => {
+                self.push_instruction(Instruction::AConstNull)?;
+                self.push_instruction(Instruction::AHint(ref_type))?;
+                self.push_instruction(Instruction::AStore(offset))?;
+            }
+        };
+        Ok(())
+    }
+
+    /// Push a null of a specific value to the stack
+    fn const_null(&mut self, ref_type: RefType) -> Result<(), Error> {
+        self.push_instruction(Instruction::AConstNull)?;
+        self.push_instruction(Instruction::AHint(ref_type))?;
+        Ok(())
+    }
+
+    /// Get a local at a particular offset
+    fn get_local(&mut self, offset: u16, field_type: &FieldType) -> Result<(), Error> {
+        let insn = match *field_type {
             FieldType::INT
             | FieldType::CHAR
             | FieldType::SHORT
@@ -12,15 +55,23 @@ pub trait BytecodeBuilderExts: BytecodeBuilder<Error> {
             FieldType::FLOAT => Instruction::FLoad(offset),
             FieldType::LONG => Instruction::LLoad(offset),
             FieldType::DOUBLE => Instruction::DLoad(offset),
-            FieldType::Ref(ref_type) => {
-                self.push_instruction(Instruction::AConstNull)?;
+            FieldType::Ref(_) => Instruction::ALoad(offset),
+        };
+        self.push_instruction(insn)
+    }
 
-                // Since we know exactly the field type we want, hint to the verifier
-                let mut constants = self.constants();
-                let utf8_index = constants.get_utf8(ref_type.render_class_info())?;
-                let class_index = constants.get_class(utf8_index)?;
-                Instruction::AHint(class_index)
-            }
+    /// Set a local at a particular offset
+    fn set_local(&mut self, offset: u16, field_type: &FieldType) -> Result<(), Error> {
+        let insn = match *field_type {
+            FieldType::INT
+            | FieldType::CHAR
+            | FieldType::SHORT
+            | FieldType::BYTE
+            | FieldType::BOOLEAN => Instruction::IStore(offset),
+            FieldType::FLOAT => Instruction::FStore(offset),
+            FieldType::LONG => Instruction::LStore(offset),
+            FieldType::DOUBLE => Instruction::DStore(offset),
+            FieldType::Ref(_) => Instruction::AStore(offset),
         };
         self.push_instruction(insn)
     }
@@ -129,6 +180,93 @@ pub trait BytecodeBuilderExts: BytecodeBuilder<Error> {
         }
         Ok(())
     }
+
+    /// Pop the top of the stack, accounting for the different possible type widths
+    fn pop(&mut self) -> Result<(), Error> {
+        if let Some(frame) = self.current_frame() {
+            let wide_typ = frame
+                .stack
+                .iter()
+                .last()
+                .map_or(false, |(_, _, t)| t.width() == 2);
+            let insn = if wide_typ {
+                Instruction::Pop2
+            } else {
+                Instruction::Pop
+            };
+            self.push_instruction(insn)?;
+        }
+        Ok(())
+    }
+
+    /// Duplicate the top of the stack, accounting for the different possible type widths
+    fn dup(&mut self) -> Result<(), Error> {
+        if let Some(frame) = self.current_frame() {
+            let wide_typ = frame
+                .stack
+                .iter()
+                .last()
+                .map_or(false, |(_, _, t)| t.width() == 2);
+            let insn = if wide_typ {
+                Instruction::Dup2
+            } else {
+                Instruction::Dup
+            };
+            self.push_instruction(insn)?;
+        }
+        Ok(())
+    }
+
+    /// Push 1 or 0 onto the stack depending if the condition holds or not
+    fn condition(&mut self, condition: &BranchCond) -> Result<(), Error> {
+        let els = self.fresh_label();
+        let end = self.fresh_label();
+
+        self.push_branch_instruction(condition.into_instruction(els, ()))?;
+        self.push_instruction(Instruction::IConst0)?;
+        self.push_branch_instruction(BranchInstruction::Goto(end))?;
+        self.place_label(els)?;
+        self.push_instruction(Instruction::IConst1)?;
+        self.place_label(end)?;
+
+        Ok(())
+    }
 }
 
 impl<A: BytecodeBuilder> BytecodeBuilderExts for A {}
+
+/// Conditional branch condition
+pub enum BranchCond {
+    If(OrdComparison),
+    IfICmp(OrdComparison),
+    IfACmp(EqComparison),
+    IfNull(EqComparison),
+}
+
+impl Not for BranchCond {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        match self {
+            BranchCond::If(ord) => BranchCond::If(!ord),
+            BranchCond::IfICmp(ord) => BranchCond::IfICmp(!ord),
+            BranchCond::IfACmp(eq) => BranchCond::IfACmp(!eq),
+            BranchCond::IfNull(eq) => BranchCond::IfNull(!eq),
+        }
+    }
+}
+
+impl BranchCond {
+    pub fn into_instruction<Lbl, LblWide, LblNext>(
+        &self,
+        jump_lbl: Lbl,
+        fallthrough_lbl: LblNext,
+    ) -> BranchInstruction<Lbl, LblWide, LblNext> {
+        match self {
+            BranchCond::If(ord) => BranchInstruction::If(*ord, jump_lbl, fallthrough_lbl),
+            BranchCond::IfICmp(ord) => BranchInstruction::IfICmp(*ord, jump_lbl, fallthrough_lbl),
+            BranchCond::IfACmp(eq) => BranchInstruction::IfACmp(*eq, jump_lbl, fallthrough_lbl),
+            BranchCond::IfNull(eq) => BranchInstruction::IfNull(*eq, jump_lbl, fallthrough_lbl),
+        }
+    }
+}

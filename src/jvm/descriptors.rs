@@ -168,20 +168,31 @@ impl RefType {
     }
 
     pub const OBJECT_NAME: &'static str = "java/lang/Object";
-    pub const CLONEABLE_NAME: &'static str = "java/lang/Cloneable";
-    pub const SERIALIZABLE_NAME: &'static str = "java/io/Serializable";
-    pub const THROWABLE_NAME: &'static str = "java/lang/Throwable";
+
     pub const CLASS_NAME: &'static str = "java/lang/Class";
     pub const STRING_NAME: &'static str = "java/lang/String";
     pub const METHOD_HANDLE_NAME: &'static str = "java/lang/invoke/MethodHandle";
     pub const METHOD_TYPE_NAME: &'static str = "java/lang/invoke/MethodType";
 
+    pub const CLONEABLE_NAME: &'static str = "java/lang/Cloneable";
+    pub const SERIALIZABLE_NAME: &'static str = "java/io/Serializable";
+    pub const THROWABLE_NAME: &'static str = "java/lang/Throwable";
+    pub const CHARSEQUENCE_NAME: &'static str = "java/lang/CharSequence";
+    pub const NUMBER_NAME: &'static str = "java/lang/Number";
+    pub const INTEGER_NAME: &'static str = "java/lang/Integer";
+    pub const FLOAT_NAME: &'static str = "java/lang/Float";
+    pub const LONG_NAME: &'static str = "java/lang/Long";
+    pub const DOUBLE_NAME: &'static str = "java/lang/Double";
+    pub const MATH_NAME: &'static str = "java/lang/Math";
+
     pub const OBJECT_CLASS: RefType = Self::Object(Cow::Borrowed(Self::OBJECT_NAME));
-    pub const THROWABLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::THROWABLE_NAME));
+
     pub const CLASS_CLASS: RefType = Self::Object(Cow::Borrowed(Self::CLASS_NAME));
     pub const STRING_CLASS: RefType = Self::Object(Cow::Borrowed(Self::STRING_NAME));
     pub const METHOD_HANDLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_HANDLE_NAME));
     pub const METHOD_TYPE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_TYPE_NAME));
+
+    pub const THROWABLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::THROWABLE_NAME));
 }
 
 /// Type of a class, instance, or local variable

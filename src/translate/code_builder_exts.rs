@@ -1,10 +1,11 @@
 use crate::jvm::{
-    BranchInstruction, BytecodeBuilder, EqComparison, Error, FieldType, Instruction, OrdComparison,
-    RefType, Width,
+    BranchInstruction, CodeBuilder, Descriptor, EqComparison, Error, FieldType, Instruction,
+    InvokeType, OrdComparison, RefType, Width,
 };
+use std::borrow::Cow;
 use std::ops::Not;
 
-pub trait BytecodeBuilderExts: BytecodeBuilder<Error> {
+pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// Zero initialize a local variable
     fn zero_local(&mut self, offset: u16, field_type: FieldType) -> Result<(), Error> {
         match field_type {
@@ -90,6 +91,23 @@ pub trait BytecodeBuilderExts: BytecodeBuilder<Error> {
             FieldType::Ref(_) => Instruction::AKill(offset),
         };
         self.push_instruction(insn)
+    }
+
+    /// Return from the function
+    fn return_(&mut self, field_type_opt: Option<FieldType>) -> Result<(), Error> {
+        let insn = match field_type_opt {
+            None => BranchInstruction::Return,
+            Some(FieldType::INT)
+            | Some(FieldType::CHAR)
+            | Some(FieldType::SHORT)
+            | Some(FieldType::BYTE)
+            | Some(FieldType::BOOLEAN) => BranchInstruction::IReturn,
+            Some(FieldType::FLOAT) => BranchInstruction::FReturn,
+            Some(FieldType::LONG) => BranchInstruction::LReturn,
+            Some(FieldType::DOUBLE) => BranchInstruction::DReturn,
+            Some(FieldType::Ref(_)) => BranchInstruction::AReturn,
+        };
+        self.push_branch_instruction(insn)
     }
 
     /// Push an integer constant onto the stack
@@ -231,9 +249,67 @@ pub trait BytecodeBuilderExts: BytecodeBuilder<Error> {
 
         Ok(())
     }
+
+    /// Invoke a method
+    ///
+    /// There cannot be any ambiguity about which method this is when using this helper (otherwise
+    /// an `Error::AmbiguousMethod` will be returned).
+    fn invoke(
+        &mut self,
+        class_name: impl Into<Cow<'static, str>>,
+        method_name: impl Into<Cow<'static, str>>,
+    ) -> Result<(), Error> {
+        let class_name = class_name.into();
+        let method_name = method_name.into();
+
+        // Query the class graph for the descriptor
+        let (descriptor, is_interface): (String, bool) = {
+            let class_graph = self.class_graph();
+            let class = class_graph
+                .classes
+                .get(&class_name)
+                .ok_or_else(|| Error::MissingClass(class_name.to_string()))?;
+            let is_interface = class.is_interface;
+            let method_overloads = class
+                .methods
+                .get(&method_name)
+                .ok_or_else(|| Error::MissingMember(method_name.to_string()))?
+                .iter()
+                .filter_map(|(desc, is_static)| {
+                    if *is_static {
+                        Some(desc.render())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<String>>();
+
+            if method_overloads.len() == 1 {
+                let mut method_overloads = method_overloads;
+                (method_overloads.pop().unwrap(), is_interface)
+            } else {
+                return Err(Error::AmbiguousMethod(
+                    class_name.to_string(),
+                    method_name.to_string(),
+                ));
+            }
+        };
+
+        let method_ref = {
+            let mut constants = self.constants();
+            let class_utf8 = constants.get_utf8(class_name)?;
+            let class_idx = constants.get_class(class_utf8)?;
+            let method_utf8 = constants.get_utf8(method_name)?;
+            let desc_utf8 = constants.get_utf8(descriptor)?;
+            let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
+            constants.get_method_ref(class_idx, name_and_type_idx, is_interface)?
+        };
+
+        self.push_instruction(Instruction::Invoke(InvokeType::Static, method_ref))
+    }
 }
 
-impl<A: BytecodeBuilder> BytecodeBuilderExts for A {}
+impl<A: CodeBuilder> CodeBuilderExts for A {}
 
 /// Conditional branch condition
 pub enum BranchCond {

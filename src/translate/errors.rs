@@ -1,13 +1,11 @@
 use crate::jvm;
-use wasmparser::{BinaryReaderError, Type, TypeOrFuncType};
+use crate::wasm;
 
 #[derive(Debug)]
 pub enum Error {
     BytecodeGen(jvm::Error),
-    WasmParser(BinaryReaderError),
-    UnsupportedStackType(Type),
-    UnsupportedReferenceType(Type),
-    UnsupportedFunctionType(TypeOrFuncType),
+    WasmParser(wasmparser::BinaryReaderError),
+    UnsupportedType(wasm::BadType),
     LocalsOverflow,
 }
 
@@ -17,8 +15,14 @@ impl From<jvm::Error> for Error {
     }
 }
 
-impl From<BinaryReaderError> for Error {
-    fn from(err: BinaryReaderError) -> Error {
+impl From<wasm::BadType> for Error {
+    fn from(err: wasm::BadType) -> Error {
+        Error::UnsupportedType(err)
+    }
+}
+
+impl From<wasmparser::BinaryReaderError> for Error {
+    fn from(err: wasmparser::BinaryReaderError) -> Error {
         Error::WasmParser(err)
     }
 }

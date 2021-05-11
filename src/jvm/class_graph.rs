@@ -1,4 +1,5 @@
 use super::{FieldType, MethodDescriptor, RefType};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 /// Tracks the relationships between classes/interfaces and the members on those classes
@@ -7,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 /// of the types/members in the generated code. Then, when a class needs to access some member, it
 /// can import the necessary segment of the class graph into its constant pool.
 pub struct ClassGraph {
-    pub classes: HashMap<String, ClassData>,
+    pub classes: HashMap<Cow<'static, str>, ClassData>,
 }
 
 impl ClassGraph {
@@ -86,323 +87,327 @@ impl ClassGraph {
     /// Add standard types to the class graph
     pub fn insert_lang_types(&mut self) {
         // java.lang.Object
-        let java_lang_object = self
-            .classes
-            .entry(String::from(RefType::OBJECT_NAME))
-            .or_insert(ClassData {
-                superclass: None,
-                interfaces: HashSet::new(),
-                is_interface: false,
-                members: HashMap::new(),
-            });
-
-        java_lang_object.members.insert(
-            String::from("equals"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
+        {
+            let java_lang_object = self
+                .classes
+                .entry(Cow::Borrowed(RefType::OBJECT_NAME))
+                .or_insert(ClassData {
+                    superclass: None,
+                    interfaces: HashSet::new(),
+                    is_interface: false,
+                    methods: HashMap::new(),
+                    fields: HashMap::new(),
+                });
+            java_lang_object.add_method(
+                false,
+                "equals",
+                MethodDescriptor {
                     parameters: vec![FieldType::Ref(RefType::OBJECT_CLASS)],
                     return_type: Some(FieldType::BOOLEAN),
                 },
-            },
-        );
-        java_lang_object.members.insert(
-            String::from("hashCode"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
+            );
+            java_lang_object.add_method(
+                false,
+                "hashCode",
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::OBJECT_CLASS)],
+                    return_type: Some(FieldType::INT),
+                },
+            );
+            java_lang_object.add_method(
+                false,
+                "<init>",
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: None,
+                },
+            );
+        }
+
+        // java.lang.CharSequence
+        {
+            let java_lang_charsequence = self
+                .classes
+                .entry(Cow::Borrowed(RefType::CHARSEQUENCE_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, true));
+            java_lang_charsequence.add_method(
+                false,
+                "length",
+                MethodDescriptor {
                     parameters: vec![],
                     return_type: Some(FieldType::INT),
                 },
-            },
-        );
-        java_lang_object.members.insert(
-            String::from("<init>"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
-                    parameters: vec![],
-                    return_type: None,
-                },
-            },
-        );
+            );
+        }
 
         // java.lang.String
-        let java_lang_string = self
-            .classes
-            .entry(String::from(RefType::STRING_NAME))
-            .or_insert(ClassData {
-                superclass: Some(String::from(RefType::OBJECT_NAME)),
-                interfaces: HashSet::new(),
-                is_interface: false,
-                members: HashMap::new(),
-            });
-
-        java_lang_string.members.insert(
-            String::from("getBytes"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
+        {
+            let java_lang_string = self
+                .classes
+                .entry(Cow::Borrowed(RefType::STRING_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+            java_lang_string.add_interfaces(vec![RefType::CHARSEQUENCE_NAME]);
+            java_lang_string.add_method(
+                false,
+                "getBytes",
+                MethodDescriptor {
                     parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
                     return_type: None,
                 },
-            },
-        );
+            );
+        }
+
+        // java.lang.Class
+        {
+            let _java_lang_class = self
+                .classes
+                .entry(Cow::Borrowed(RefType::CLASS_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+        }
+
+        // java.lang.invoke.MethodType
+        {
+            let _java_lang_invoke_methodtype = self
+                .classes
+                .entry(Cow::Borrowed(RefType::METHOD_TYPE_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+        }
+
+        // java.lang.invoke.MethodHandle
+        {
+            let _java_lang_invoke_methodtype = self
+                .classes
+                .entry(Cow::Borrowed(RefType::METHOD_HANDLE_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+        }
 
         // java.lang.Number
-        let java_lang_number = self
-            .classes
-            .entry(String::from("java/lang/Number"))
-            .or_insert(ClassData {
-                superclass: Some(String::from(RefType::OBJECT_NAME)),
-                interfaces: HashSet::new(),
-                is_interface: false,
-                members: HashMap::new(),
-            });
-
-        java_lang_number.members.extend(
-            vec![
+        {
+            let java_lang_number = self
+                .classes
+                .entry(Cow::Borrowed(RefType::NUMBER_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+            for (extractor, extracted_type) in vec![
                 ("byteValue", FieldType::BYTE),
                 ("doubleValue", FieldType::DOUBLE),
                 ("floatValue", FieldType::FLOAT),
                 ("intValue", FieldType::INT),
                 ("longValue", FieldType::LONG),
                 ("shortValue", FieldType::SHORT),
-            ]
-            .into_iter()
-            .map(|(name, typ)| {
-                let method = ClassMember::Method {
-                    is_static: false,
-                    descriptor: MethodDescriptor {
+            ] {
+                java_lang_number.add_method(
+                    false,
+                    extractor,
+                    MethodDescriptor {
                         parameters: vec![],
-                        return_type: Some(typ),
+                        return_type: Some(extracted_type),
                     },
-                };
-                (String::from(name), method)
-            }),
-        );
-        java_lang_number.members.insert(
-            String::from("<init>"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
-                    parameters: vec![],
-                    return_type: None,
-                },
-            },
-        );
+                );
+            }
+        }
 
         // java.lang.Integer
-        let java_lang_integer = self
-            .classes
-            .entry(String::from("java/lang/Integer"))
-            .or_insert(ClassData {
-                superclass: Some(String::from("java/lang/Number")),
-                interfaces: HashSet::new(),
-                is_interface: false,
-                members: HashMap::new(),
-            });
-        java_lang_integer.members.insert(
-            String::from("<init>"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::INT],
-                    return_type: None,
-                },
-            },
-        );
-        java_lang_integer.members.insert(
-            String::from("valueOf"),
-            ClassMember::Method {
-                is_static: true,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::INT],
-                    return_type: Some(FieldType::object("java/lang/Integer")),
-                },
-            },
-        );
-        for name in vec!["bitCount", "numberOfLeadingZeros", "numberOfTrailingZeros"] {
-            java_lang_integer.members.insert(
-                String::from(name),
-                ClassMember::Method {
-                    is_static: true,
-                    descriptor: MethodDescriptor {
+        {
+            let java_lang_integer = self
+                .classes
+                .entry(Cow::Borrowed(RefType::INTEGER_NAME))
+                .or_insert(ClassData::new(RefType::NUMBER_NAME, false));
+            for (name, output_ty) in vec![
+                ("valueOf", FieldType::object(RefType::INTEGER_NAME)),
+                ("bitCount", FieldType::INT),
+                ("numberOfLeadingZeros", FieldType::INT),
+                ("numberOfTrailingZeros", FieldType::INT),
+            ] {
+                java_lang_integer.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
                         parameters: vec![FieldType::INT],
-                        return_type: Some(FieldType::INT),
+                        return_type: Some(output_ty),
                     },
-                },
-            );
-        }
-        for name in vec![
-            "compareUnsigned",
-            "divideUnsigned",
-            "remainderUnsigned",
-            "rotateLeft",
-            "rotateRight",
-        ] {
-            java_lang_integer.members.insert(
-                String::from(name),
-                ClassMember::Method {
-                    is_static: true,
-                    descriptor: MethodDescriptor {
+                );
+            }
+            for name in vec![
+                "compare",
+                "compareUnsigned",
+                "divideUnsigned",
+                "remainderUnsigned",
+                "rotateLeft",
+                "rotateRight",
+            ] {
+                java_lang_integer.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
                         parameters: vec![FieldType::INT, FieldType::INT],
                         return_type: Some(FieldType::INT),
                     },
-                },
-            );
+                );
+            }
         }
 
         // java.lang.Float
-        let java_lang_float = self
-            .classes
-            .entry(String::from("java/lang/Float"))
-            .or_insert(ClassData {
-                superclass: Some(String::from("java/lang/Number")),
-                interfaces: HashSet::new(),
-                is_interface: false,
-                members: HashMap::new(),
-            });
-        java_lang_float.members.insert(
-            String::from("<init>"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::FLOAT],
-                    return_type: None,
-                },
-            },
-        );
+        {
+            let java_lang_float = self
+                .classes
+                .entry(Cow::Borrowed(RefType::FLOAT_NAME))
+                .or_insert(ClassData::new(RefType::NUMBER_NAME, false));
+            for (name, input_ty, output_ty) in vec![
+                (
+                    "valueOf",
+                    FieldType::FLOAT,
+                    FieldType::object(RefType::FLOAT_NAME),
+                ),
+                ("floatToRawIntBits", FieldType::FLOAT, FieldType::INT),
+                ("intBitsToFloat", FieldType::INT, FieldType::FLOAT),
+            ] {
+                java_lang_float.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
+                        parameters: vec![input_ty],
+                        return_type: Some(output_ty),
+                    },
+                );
+            }
+            for name in vec!["max", "min"] {
+                java_lang_float.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
+                        parameters: vec![FieldType::FLOAT, FieldType::FLOAT],
+                        return_type: Some(FieldType::FLOAT),
+                    },
+                );
+            }
+        }
 
         // java.lang.Long
-        let java_lang_long = self
-            .classes
-            .entry(String::from("java/lang/Long"))
-            .or_insert(ClassData {
-                superclass: Some(String::from("java/lang/Number")),
-                interfaces: HashSet::new(),
-                is_interface: false,
-                members: HashMap::new(),
-            });
-        java_lang_long.members.insert(
-            String::from("<init>"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::LONG],
-                    return_type: None,
-                },
-            },
-        );
-        java_lang_long.members.insert(
-            String::from("valueOf"),
-            ClassMember::Method {
-                is_static: true,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::LONG],
-                    return_type: Some(FieldType::object("java/lang/Long")),
-                },
-            },
-        );
-        for name in vec!["bitCount", "numberOfLeadingZeros", "numberOfTrailingZeros"] {
-            java_lang_long.members.insert(
-                String::from(name),
-                ClassMember::Method {
-                    is_static: true,
-                    descriptor: MethodDescriptor {
+        {
+            let java_lang_long = self
+                .classes
+                .entry(Cow::Borrowed(RefType::LONG_NAME))
+                .or_insert(ClassData::new(RefType::NUMBER_NAME, false));
+            for (name, output_ty) in vec![
+                ("valueOf", FieldType::object(RefType::LONG_NAME)),
+                ("bitCount", FieldType::INT),
+                ("numberOfLeadingZeros", FieldType::INT),
+                ("numberOfTrailingZeros", FieldType::INT),
+            ] {
+                java_lang_long.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
                         parameters: vec![FieldType::LONG],
-                        return_type: Some(FieldType::INT),
+                        return_type: Some(output_ty),
                     },
-                },
-            );
-        }
-        java_lang_long.members.insert(
-            String::from("compareUnsigned"),
-            ClassMember::Method {
-                is_static: true,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::LONG, FieldType::LONG],
-                    return_type: Some(FieldType::INT),
-                },
-            },
-        );
-        for name in vec!["divideUnsigned", "remainderUnsigned"] {
-            java_lang_long.members.insert(
-                String::from(name),
-                ClassMember::Method {
-                    is_static: true,
-                    descriptor: MethodDescriptor {
-                        parameters: vec![FieldType::LONG, FieldType::LONG],
-                        return_type: Some(FieldType::LONG),
+                );
+            }
+            for (name, input_tys, output_ty) in vec![
+                (
+                    "compare",
+                    vec![FieldType::LONG, FieldType::LONG],
+                    FieldType::INT,
+                ),
+                (
+                    "compareUnsigned",
+                    vec![FieldType::LONG, FieldType::LONG],
+                    FieldType::INT,
+                ),
+                (
+                    "divideUnsigned",
+                    vec![FieldType::LONG, FieldType::LONG],
+                    FieldType::LONG,
+                ),
+                (
+                    "remainderUnsigned",
+                    vec![FieldType::LONG, FieldType::LONG],
+                    FieldType::LONG,
+                ),
+                (
+                    "rotateLeft",
+                    vec![FieldType::LONG, FieldType::INT],
+                    FieldType::LONG,
+                ),
+                (
+                    "rotateRight",
+                    vec![FieldType::LONG, FieldType::INT],
+                    FieldType::LONG,
+                ),
+            ] {
+                java_lang_long.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
+                        parameters: input_tys,
+                        return_type: Some(output_ty),
                     },
-                },
-            );
-        }
-        for name in vec!["rotateLeft", "rotateRight"] {
-            java_lang_long.members.insert(
-                String::from(name),
-                ClassMember::Method {
-                    is_static: true,
-                    descriptor: MethodDescriptor {
-                        parameters: vec![FieldType::LONG, FieldType::INT],
-                        return_type: Some(FieldType::LONG),
-                    },
-                },
-            );
+                );
+            }
         }
 
         // java.lang.Double
-        let java_lang_double = self
-            .classes
-            .entry(String::from("java/lang/Double"))
-            .or_insert(ClassData {
-                superclass: Some(String::from("java/lang/Number")),
-                interfaces: HashSet::new(),
-                is_interface: false,
-                members: HashMap::new(),
-            });
-        java_lang_double.members.insert(
-            String::from("<init>"),
-            ClassMember::Method {
-                is_static: false,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::DOUBLE],
-                    return_type: None,
-                },
-            },
-        );
+        {
+            let java_lang_double = self
+                .classes
+                .entry(Cow::Borrowed(RefType::DOUBLE_NAME))
+                .or_insert(ClassData::new(RefType::NUMBER_NAME, false));
+            for (name, input_ty, output_ty) in vec![
+                (
+                    "valueOf",
+                    FieldType::DOUBLE,
+                    FieldType::object(RefType::DOUBLE_NAME),
+                ),
+                ("doubleToRawLongBits", FieldType::DOUBLE, FieldType::LONG),
+                ("longBitsToDouble", FieldType::LONG, FieldType::DOUBLE),
+            ] {
+                java_lang_double.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
+                        parameters: vec![input_ty],
+                        return_type: Some(output_ty),
+                    },
+                );
+            }
+            for name in vec!["max", "min"] {
+                java_lang_double.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
+                        parameters: vec![FieldType::DOUBLE, FieldType::DOUBLE],
+                        return_type: Some(FieldType::DOUBLE),
+                    },
+                );
+            }
+        }
 
         // java.lang.Math
-        let java_lang_math = self
-            .classes
-            .entry(String::from("java/lang/Math"))
-            .or_insert(ClassData {
-                superclass: Some(String::from("java/lang/Object")),
-                interfaces: HashSet::new(),
-                is_interface: false,
-                members: HashMap::new(),
-            });
-        java_lang_math.members.insert(
-            String::from("ceil"),
-            ClassMember::Method {
-                is_static: true,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::DOUBLE],
-                    return_type: Some(FieldType::DOUBLE),
-                },
-            },
-        );
-        for typ in vec![FieldType::FLOAT, FieldType::DOUBLE] {
-            java_lang_math.members.insert(
-                String::from("copySign"), // TODO: duplicate keys will override each other
-                ClassMember::Method {
-                    is_static: true,
-                    descriptor: MethodDescriptor {
-                        parameters: vec![typ.clone(), typ.clone()],
-                        return_type: Some(typ),
+        {
+            let java_lang_math = self
+                .classes
+                .entry(Cow::Borrowed(RefType::MATH_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+            for name in vec!["ceil", "floor"] {
+                java_lang_math.add_method(
+                    true,
+                    name,
+                    MethodDescriptor {
+                        parameters: vec![FieldType::DOUBLE],
+                        return_type: Some(FieldType::DOUBLE),
                     },
-                },
-            );
+                );
+            }
+            for input_output_ty in vec![FieldType::FLOAT, FieldType::DOUBLE] {
+                java_lang_math.add_method(
+                    true,
+                    "copySign",
+                    MethodDescriptor {
+                        parameters: vec![input_output_ty.clone(), input_output_ty.clone()],
+                        return_type: Some(input_output_ty),
+                    },
+                );
+            }
         }
     }
 }
@@ -410,25 +415,55 @@ impl ClassGraph {
 // TODO: should we track subclasses?
 pub struct ClassData {
     /// Superclass is only ever `null` for `java/lang/Object` itself
-    pub superclass: Option<String>,
+    pub superclass: Option<Cow<'static, str>>,
 
     /// Interfaces implemented (or super-interfaces)
-    pub interfaces: HashSet<String>,
+    pub interfaces: HashSet<Cow<'static, str>>,
 
     /// Is this an interface?
     pub is_interface: bool,
 
-    /// Fields and methods
-    pub members: HashMap<String, ClassMember>,
+    /// Methods
+    pub methods: HashMap<Cow<'static, str>, HashMap<MethodDescriptor, bool>>,
+
+    /// Fields
+    pub fields: HashMap<Cow<'static, str>, (bool, FieldType)>,
 }
 
-pub enum ClassMember {
-    Method {
-        is_static: bool,
-        descriptor: MethodDescriptor,
-    },
-    Field {
-        is_static: bool,
-        descriptor: FieldType,
-    },
+impl ClassData {
+    pub fn new<S: Into<Cow<'static, str>>>(superclass: S, is_interface: bool) -> ClassData {
+        let superclass = Some(superclass.into());
+        ClassData {
+            superclass,
+            interfaces: HashSet::new(),
+            is_interface,
+            methods: HashMap::new(),
+            fields: HashMap::new(),
+        }
+    }
+
+    pub fn add_interfaces<S>(&mut self, interfaces: impl IntoIterator<Item = S>)
+    where
+        S: Into<Cow<'static, str>>,
+    {
+        self.interfaces
+            .extend(interfaces.into_iter().map(|s| s.into()));
+    }
+
+    pub fn add_field<S>(&mut self, is_static: bool, name: S, descriptor: FieldType)
+    where
+        S: Into<Cow<'static, str>>,
+    {
+        self.fields.insert(name.into(), (is_static, descriptor));
+    }
+
+    pub fn add_method<S>(&mut self, is_static: bool, name: S, descriptor: MethodDescriptor)
+    where
+        S: Into<Cow<'static, str>>,
+    {
+        self.methods
+            .entry(name.into())
+            .or_insert(HashMap::new())
+            .insert(descriptor, is_static);
+    }
 }

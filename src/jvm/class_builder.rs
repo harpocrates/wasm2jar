@@ -1,7 +1,7 @@
 use super::*;
 
+use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 pub struct ClassBuilder {
@@ -28,22 +28,20 @@ impl ClassBuilder {
         interfaces: Vec<String>,
         class_graph: Rc<RefCell<ClassGraph>>,
     ) -> Result<ClassBuilder, Error> {
+        let mut class_data = ClassData::new(super_class.clone(), is_interface);
+        class_data.add_interfaces(interfaces.iter().cloned());
+
         // Make sure this class is in the class graph
         class_graph
             .borrow_mut()
             .classes
-            .entry(this_class.clone())
-            .or_insert(ClassData {
-                superclass: Some(super_class.clone()),
-                interfaces: interfaces.iter().cloned().collect(),
-                is_interface,
-                members: HashMap::new(),
-            });
+            .entry(Cow::Owned(this_class.clone()))
+            .or_insert(class_data);
 
         // Construct a fresh constant pool
         let mut constants = ConstantsPool::new();
         let this_class_utf8 = constants.get_utf8(&this_class)?;
-        let super_class_utf8 = constants.get_utf8(&super_class)?;
+        let super_class_utf8 = constants.get_utf8(super_class)?;
 
         let class = ClassFile {
             version: Version::JAVA8,
@@ -108,17 +106,17 @@ impl ClassBuilder {
             attributes: vec![],
         });
 
+        let class_str: &str = &self.this_class;
         self.class_graph
             .borrow_mut()
             .classes
-            .get_mut(&self.this_class)
+            .get_mut(class_str)
             .expect("class cannot be found in class graph")
-            .members
-            .entry(name)
-            .or_insert(ClassMember::Field {
-                is_static: access_flags.contains(FieldAccessFlags::STATIC),
+            .add_field(
+                access_flags.contains(FieldAccessFlags::STATIC),
+                name,
                 descriptor,
-            });
+            );
 
         Ok(())
     }
@@ -147,17 +145,17 @@ impl ClassBuilder {
             attributes,
         });
 
+        let class_str: &str = &self.this_class;
         self.class_graph
             .borrow_mut()
             .classes
-            .get_mut(&self.this_class)
+            .get_mut(class_str)
             .expect("class cannot be found in class graph")
-            .members
-            .entry(name)
-            .or_insert(ClassMember::Method {
-                is_static: access_flags.contains(MethodAccessFlags::STATIC),
+            .add_method(
+                access_flags.contains(MethodAccessFlags::STATIC),
+                name,
                 descriptor,
-            });
+            );
 
         Ok(())
     }
@@ -170,19 +168,15 @@ impl ClassBuilder {
     ) -> Result<MethodBuilder, Error> {
         let is_static = access_flags.contains(MethodAccessFlags::STATIC);
         let descriptor_parsed = MethodDescriptor::parse(&descriptor).map_err(Error::IoError)?;
+        let class_str: &str = &self.this_class;
         self.class_graph
             .borrow_mut()
             .classes
-            .get_mut(&self.this_class)
+            .get_mut(class_str)
             .expect("class cannot be found in class graph")
-            .members
-            .entry(name.clone())
-            .or_insert(ClassMember::Method {
-                is_static,
-                descriptor: descriptor_parsed.clone(),
-            });
+            .add_method(is_static, name.clone(), descriptor_parsed.clone());
 
-        let code = CodeBuilder::new(
+        let code = BytecodeBuilder::new(
             descriptor_parsed,
             !is_static,
             &name == "<init>",
@@ -231,5 +225,5 @@ pub struct MethodBuilder {
     descriptor: String,
 
     /// Code builder
-    pub code: CodeBuilder,
+    pub code: BytecodeBuilder,
 }

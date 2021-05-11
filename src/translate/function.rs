@@ -1,17 +1,18 @@
-use super::{BranchCond, BytecodeBuilderExts, Error};
+use super::{BranchCond, CodeBuilderExts, Error};
 use crate::jvm::{
-    BranchInstruction, BytecodeBuilder, EqComparison, FieldType, Instruction, Offset, OffsetVec,
-    OrdComparison, RefType, Width,
+    BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, OffsetVec, OrdComparison,
+    RefType, Width,
 };
-use crate::wasm::{ref_type_from_general, ControlFrame, FunctionType, StackType};
+use crate::wasm::{
+    ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
+};
 use std::convert::TryFrom;
 use std::ops::Not;
-use wasmparser::{
-    FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType, WasmFeatures, WasmModuleResources,
-};
+use wasmparser::{FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType, WasmFeatures};
 
 /// Context for translating a WASM function into a JVM one
-pub struct FunctionTranslator<'a, B: BytecodeBuilder + Sized, R> {
+pub struct FunctionTranslator<'a, B: CodeBuilder + Sized, R> {
+    typ: FunctionType,
     jvm_code: B,
     jvm_locals: OffsetVec<StackType>,
     wasm_validator: FuncValidator<R>,
@@ -21,10 +22,11 @@ pub struct FunctionTranslator<'a, B: BytecodeBuilder + Sized, R> {
 
 impl<'a, B, R> FunctionTranslator<'a, B, R>
 where
-    B: BytecodeBuilderExts + Sized,
-    R: WasmModuleResources,
+    B: CodeBuilderExts + Sized,
+    R: WasmModuleResourcesExt,
 {
     pub fn new(
+        typ: FunctionType,
         jvm_code: B,
         wasm_function: FunctionBody<'a>,
         wasm_ty: u32,
@@ -36,6 +38,7 @@ where
             FuncValidator::new(wasm_ty, wasm_offset, wasm_resources, wasm_features)?;
 
         Ok(FunctionTranslator {
+            typ,
             jvm_code,
             jvm_locals: OffsetVec::new(), // TODO: include `this`
             wasm_validator,
@@ -65,8 +68,7 @@ where
             self.wasm_validator
                 .define_locals(offset, count, local_type)?;
 
-            let local_type = StackType::from_general(&local_type)
-                .ok_or_else(|| Error::UnsupportedStackType(local_type))?;
+            let local_type = StackType::from_general(local_type)?;
             for _ in 0..count {
                 let _ = self.push_local(local_type, false)?;
             }
@@ -149,20 +151,95 @@ where
         self.wasm_validator.op(offset, &operator)?;
 
         match operator {
+            // Control Instructions
+            Operator::Unreachable => todo!(),
             Operator::Nop => self.jvm_code.push_instruction(Instruction::Nop)?,
-
-            // Control flow
-            Operator::If { ty } => self.visit_if(ty, BranchCond::If(OrdComparison::EQ))?,
-            Operator::Else => self.visit_else()?,
             Operator::Block { ty } => self.visit_block(ty)?,
             Operator::Loop { ty } => self.visit_loop(ty)?,
+            Operator::If { ty } => self.visit_if(ty, BranchCond::If(OrdComparison::EQ))?,
+            Operator::Else => self.visit_else()?,
             Operator::End => self.visit_end()?,
             Operator::Br { relative_depth } => self.visit_branch(relative_depth)?,
             Operator::BrIf { relative_depth } => {
                 self.visit_branch_if(relative_depth, BranchCond::If(OrdComparison::EQ))?
             }
+            Operator::BrTable { .. } => todo!(),
+            Operator::Return => self.visit_return()?,
+            Operator::Call { .. } => todo!(),
+            Operator::CallIndirect { .. } => todo!(),
 
-            // Constants
+            // Parametric Instructions
+            Operator::Drop => self.jvm_code.pop()?,
+            Operator::Select => self.visit_select(None, BranchCond::If(OrdComparison::EQ))?,
+            Operator::TypedSelect { ty } => {
+                self.visit_select(Some(ty), BranchCond::If(OrdComparison::EQ))?
+            }
+
+            // Variable Instructions
+            Operator::LocalGet { local_index } => {
+                let idx = local_index as usize;
+                let (off, stack_type) = self.jvm_locals.get_index(idx).expect("missing local");
+                self.jvm_code
+                    .get_local(off.0 as u16, &stack_type.field_type())?;
+            }
+            Operator::LocalSet { local_index } => {
+                let idx = local_index as usize;
+                let (off, stack_type) = self.jvm_locals.get_index(idx).expect("missing local");
+                self.jvm_code
+                    .set_local(off.0 as u16, &stack_type.field_type())?;
+            }
+            Operator::LocalTee { local_index } => {
+                let idx = local_index as usize;
+                let (off, stack_type) = self.jvm_locals.get_index(idx).expect("missing local");
+                self.jvm_code.dup()?;
+                self.jvm_code
+                    .set_local(off.0 as u16, &stack_type.field_type())?;
+            }
+            Operator::GlobalGet { .. } => todo!(),
+            Operator::GlobalSet { .. } => todo!(),
+
+            // Table instructions
+            Operator::TableGet { .. } => todo!(),
+            Operator::TableSet { .. } => todo!(),
+            Operator::TableInit { .. } => todo!(),
+            Operator::TableCopy { .. } => todo!(),
+            Operator::TableGrow { .. } => todo!(),
+            Operator::TableSize { .. } => todo!(),
+            Operator::TableFill { .. } => todo!(),
+
+            // Memory Instructions
+            Operator::I32Load { .. } => todo!(),
+            Operator::I64Load { .. } => todo!(),
+            Operator::F32Load { .. } => todo!(),
+            Operator::F64Load { .. } => todo!(),
+            Operator::I32Load8S { .. } => todo!(),
+            Operator::I32Load8U { .. } => todo!(),
+            Operator::I32Load16S { .. } => todo!(),
+            Operator::I32Load16U { .. } => todo!(),
+            Operator::I64Load8S { .. } => todo!(),
+            Operator::I64Load8U { .. } => todo!(),
+            Operator::I64Load16S { .. } => todo!(),
+            Operator::I64Load16U { .. } => todo!(),
+            Operator::I64Load32S { .. } => todo!(),
+            Operator::I64Load32U { .. } => todo!(),
+            Operator::I32Store { .. } => todo!(),
+            Operator::I64Store { .. } => todo!(),
+            Operator::F32Store { .. } => todo!(),
+            Operator::F64Store { .. } => todo!(),
+            Operator::I32Store8 { .. } => todo!(),
+            Operator::I32Store16 { .. } => todo!(),
+            Operator::I64Store8 { .. } => todo!(),
+            Operator::I64Store16 { .. } => todo!(),
+            Operator::I64Store32 { .. } => todo!(),
+            Operator::MemorySize { .. } => todo!(),
+            Operator::MemoryGrow { .. } => todo!(),
+            Operator::MemoryInit { .. } => todo!(),
+            Operator::MemoryCopy { .. } => todo!(),
+            Operator::MemoryFill { .. } => todo!(),
+            Operator::DataDrop { .. } => todo!(),
+            Operator::ElemDrop { .. } => todo!(),
+
+            // Numeric Instructions
             Operator::I32Const { value } => self.jvm_code.const_int(value)?,
             Operator::I64Const { value } => self.jvm_code.const_long(value)?,
             Operator::F32Const { value } => {
@@ -171,94 +248,243 @@ where
             Operator::F64Const { value } => {
                 self.jvm_code.const_double(f64::from_bits(value.bits()))?
             }
-            Operator::RefNull { ty } => {
-                let ref_type = ref_type_from_general(&ty);
-                self.jvm_code
-                    .const_null(ref_type.ok_or_else(|| Error::UnsupportedReferenceType(ty))?)?;
-            }
 
-            // Arithmetic
-            Operator::I32Add => self.jvm_code.push_instruction(IAdd)?,
-            Operator::I64Add => self.jvm_code.push_instruction(LAdd)?,
-            Operator::F32Add => self.jvm_code.push_instruction(FAdd)?,
-            Operator::F64Add => self.jvm_code.push_instruction(DAdd)?,
-            Operator::I32Sub => self.jvm_code.push_instruction(ISub)?,
-            Operator::I64Sub => self.jvm_code.push_instruction(LSub)?,
-            Operator::F32Sub => self.jvm_code.push_instruction(FSub)?,
-            Operator::F64Sub => self.jvm_code.push_instruction(DSub)?,
-            Operator::I32Mul => self.jvm_code.push_instruction(IMul)?,
-            Operator::I64Mul => self.jvm_code.push_instruction(LMul)?,
-            Operator::F32Mul => self.jvm_code.push_instruction(FMul)?,
-            Operator::F64Mul => self.jvm_code.push_instruction(DMul)?,
-            Operator::I32DivS => self.jvm_code.push_instruction(IDiv)?,
-            Operator::I64DivS => self.jvm_code.push_instruction(LDiv)?,
-            Operator::F32Div => self.jvm_code.push_instruction(FDiv)?,
-            Operator::F64Div => self.jvm_code.push_instruction(DDiv)?,
-            Operator::I32RemS => self.jvm_code.push_instruction(IRem)?,
-            Operator::I64RemS => self.jvm_code.push_instruction(LRem)?,
-            Operator::F32Neg => self.jvm_code.push_instruction(FNeg)?,
-            Operator::F64Neg => self.jvm_code.push_instruction(DNeg)?,
-
-            // Bitwise
-            Operator::I32And => self.jvm_code.push_instruction(IAnd)?,
-            Operator::I64And => self.jvm_code.push_instruction(LAnd)?,
-            Operator::I32Or => self.jvm_code.push_instruction(IOr)?,
-            Operator::I64Or => self.jvm_code.push_instruction(LOr)?,
-            Operator::I32Xor => self.jvm_code.push_instruction(IXor)?,
-            Operator::I64Xor => self.jvm_code.push_instruction(LXor)?,
-
-            // Shifts
-            Operator::I32Shl => self.jvm_code.push_instruction(ISh(Left))?,
-            Operator::I64Shl => self.jvm_code.push_instruction(LSh(Left))?,
-            Operator::I32ShrS => self.jvm_code.push_instruction(ISh(ArithmeticRight))?,
-            Operator::I64ShrS => self.jvm_code.push_instruction(LSh(ArithmeticRight))?,
-            Operator::I32ShrU => self.jvm_code.push_instruction(ISh(LogicalRight))?,
-            Operator::I64ShrU => self.jvm_code.push_instruction(LSh(LogicalRight))?,
-
-            // Locals
-            Operator::LocalGet { local_index } => {
-                let (Offset(off), stack_type) = self
-                    .jvm_locals
-                    .get_index(local_index as usize)
-                    .expect("missing local");
-                self.jvm_code
-                    .get_local(off as u16, &stack_type.field_type())?;
-            }
-            Operator::LocalSet { local_index } => {
-                let (Offset(off), stack_type) = self
-                    .jvm_locals
-                    .get_index(local_index as usize)
-                    .expect("missing local");
-                self.jvm_code
-                    .set_local(off as u16, &stack_type.field_type())?;
-            }
-            Operator::LocalTee { local_index } => {
-                let (Offset(off), stack_type) = self
-                    .jvm_locals
-                    .get_index(local_index as usize)
-                    .expect("missing local");
-                self.jvm_code.dup()?;
-                self.jvm_code
-                    .set_local(off as u16, &stack_type.field_type())?;
-            }
-
-            // Conditions
             Operator::I32Eqz => self.visit_cond(BranchCond::If(OrdComparison::EQ), next_op)?,
-            Operator::RefIsNull => {
-                self.visit_cond(BranchCond::IfNull(EqComparison::EQ), next_op)?
-            }
             Operator::I32Eq => self.visit_cond(BranchCond::IfICmp(OrdComparison::EQ), next_op)?,
             Operator::I32Ne => self.visit_cond(BranchCond::IfICmp(OrdComparison::NE), next_op)?,
             Operator::I32LtS => self.visit_cond(BranchCond::IfICmp(OrdComparison::LT), next_op)?,
-            Operator::I32GtS => self.visit_cond(BranchCond::IfICmp(OrdComparison::GT), next_op)?,
-            Operator::I32GeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::GE), next_op)?,
-            Operator::I32LeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::LE), next_op)?,
-
-            Operator::Drop => self.jvm_code.pop()?,
-            Operator::Select => self.visit_select(None, BranchCond::If(OrdComparison::EQ))?,
-            Operator::TypedSelect { ty } => {
-                self.visit_select(Some(ty), BranchCond::If(OrdComparison::EQ))?
+            Operator::I32LtU => {
+                self.jvm_code
+                    .invoke(RefType::INTEGER_NAME, "compareUnsigned")?;
+                self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
             }
+            Operator::I32GtS => self.visit_cond(BranchCond::IfICmp(OrdComparison::GT), next_op)?,
+            Operator::I32GtU => {
+                self.jvm_code
+                    .invoke(RefType::INTEGER_NAME, "compareUnsigned")?;
+                self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
+            }
+            Operator::I32LeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::LE), next_op)?,
+            Operator::I32LeU => {
+                self.jvm_code
+                    .invoke(RefType::INTEGER_NAME, "compareUnsigned")?;
+                self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
+            }
+            Operator::I32GeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::GE), next_op)?,
+            Operator::I32GeU => {
+                self.jvm_code
+                    .invoke(RefType::INTEGER_NAME, "compareUnsigned")?;
+                self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
+            }
+
+            Operator::I64Eqz => {
+                self.jvm_code.push_instruction(IConst0)?;
+                self.jvm_code.push_instruction(LCmp)?;
+                self.visit_cond(BranchCond::If(OrdComparison::EQ), next_op)?;
+            }
+            Operator::I64Eq => {
+                self.jvm_code.push_instruction(LCmp)?;
+                self.visit_cond(BranchCond::If(OrdComparison::EQ), next_op)?;
+            }
+            Operator::I64Ne => {
+                self.jvm_code.push_instruction(LCmp)?;
+                self.visit_cond(BranchCond::If(OrdComparison::NE), next_op)?;
+            }
+            Operator::I64LtS => {
+                self.jvm_code.push_instruction(LCmp)?;
+                self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
+            }
+            Operator::I64LtU => {
+                self.jvm_code
+                    .invoke(RefType::LONG_NAME, "compareUnsigned")?;
+                self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
+            }
+            Operator::I64GtS => {
+                self.jvm_code.push_instruction(LCmp)?;
+                self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
+            }
+            Operator::I64GtU => {
+                self.jvm_code
+                    .invoke(RefType::LONG_NAME, "compareUnsigned")?;
+                self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
+            }
+            Operator::I64LeS => {
+                self.jvm_code.push_instruction(LCmp)?;
+                self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
+            }
+            Operator::I64LeU => {
+                self.jvm_code
+                    .invoke(RefType::LONG_NAME, "compareUnsigned")?;
+                self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
+            }
+            Operator::I64GeS => {
+                self.jvm_code.push_instruction(LCmp)?;
+                self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
+            }
+            Operator::I64GeU => {
+                self.jvm_code
+                    .invoke(RefType::LONG_NAME, "compareUnsigned")?;
+                self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
+            }
+
+            Operator::I32Clz => self
+                .jvm_code
+                .invoke(RefType::INTEGER_NAME, "numberOfLeadingZeros")?,
+            Operator::I32Ctz => self
+                .jvm_code
+                .invoke(RefType::INTEGER_NAME, "numberOfTrailingZeros")?,
+            Operator::I32Popcnt => self.jvm_code.invoke(RefType::INTEGER_NAME, "bitCount")?,
+            Operator::I32Add => self.jvm_code.push_instruction(IAdd)?,
+            Operator::I32Sub => self.jvm_code.push_instruction(ISub)?,
+            Operator::I32Mul => self.jvm_code.push_instruction(IMul)?,
+            Operator::I32DivS => self.jvm_code.push_instruction(IDiv)?,
+            Operator::I32DivU => self
+                .jvm_code
+                .invoke(RefType::INTEGER_NAME, "divideUnsigned")?,
+            Operator::I32RemS => self.jvm_code.push_instruction(IRem)?,
+            Operator::I32RemU => self
+                .jvm_code
+                .invoke(RefType::INTEGER_NAME, "remainderUnsigned")?,
+            Operator::I32And => self.jvm_code.push_instruction(IAnd)?,
+            Operator::I32Or => self.jvm_code.push_instruction(IOr)?,
+            Operator::I32Xor => self.jvm_code.push_instruction(IXor)?,
+            Operator::I32Shl => self.jvm_code.push_instruction(ISh(Left))?,
+            Operator::I32ShrS => self.jvm_code.push_instruction(ISh(ArithmeticRight))?,
+            Operator::I32ShrU => self.jvm_code.push_instruction(ISh(LogicalRight))?,
+            Operator::I32Rotl => self.jvm_code.invoke(RefType::INTEGER_NAME, "rotateLeft")?,
+            Operator::I32Rotr => self.jvm_code.invoke(RefType::INTEGER_NAME, "rotateRight")?,
+
+            Operator::I64Clz => {
+                self.jvm_code
+                    .invoke(RefType::LONG_NAME, "numberOfLeadingZeros")?;
+                self.jvm_code.push_instruction(I2L)?;
+            }
+            Operator::I64Ctz => {
+                self.jvm_code
+                    .invoke(RefType::LONG_NAME, "numberOfTrailingZeros")?;
+                self.jvm_code.push_instruction(I2L)?;
+            }
+            Operator::I64Popcnt => {
+                self.jvm_code.invoke(RefType::LONG_NAME, "bitCount")?;
+                self.jvm_code.push_instruction(I2L)?;
+            }
+            Operator::I64Add => self.jvm_code.push_instruction(LAdd)?,
+            Operator::I64Sub => self.jvm_code.push_instruction(LSub)?,
+            Operator::I64Mul => self.jvm_code.push_instruction(LMul)?,
+            Operator::I64DivS => self.jvm_code.push_instruction(LDiv)?,
+            Operator::I64RemS => self.jvm_code.push_instruction(LRem)?,
+            Operator::I64DivU => self.jvm_code.invoke(RefType::LONG_NAME, "divideUnsigned")?,
+            Operator::I64RemU => self
+                .jvm_code
+                .invoke(RefType::LONG_NAME, "remainderUnsigned")?,
+            Operator::I64And => self.jvm_code.push_instruction(LAnd)?,
+            Operator::I64Or => self.jvm_code.push_instruction(LOr)?,
+            Operator::I64Xor => self.jvm_code.push_instruction(LXor)?,
+            Operator::I64Shl => self.jvm_code.push_instruction(LSh(Left))?,
+            Operator::I64ShrS => self.jvm_code.push_instruction(LSh(ArithmeticRight))?,
+            Operator::I64ShrU => self.jvm_code.push_instruction(LSh(LogicalRight))?,
+            Operator::I64Rotl => {
+                self.jvm_code.push_instruction(L2I)?;
+                self.jvm_code.invoke(RefType::LONG_NAME, "rotateLeft")?;
+            }
+            Operator::I64Rotr => {
+                self.jvm_code.push_instruction(L2I)?;
+                self.jvm_code.invoke(RefType::LONG_NAME, "rotateRight")?;
+            }
+
+            Operator::F32Abs => todo!(),
+            Operator::F32Neg => self.jvm_code.push_instruction(FNeg)?,
+            Operator::F32Ceil => todo!(),
+            Operator::F32Floor => todo!(),
+            Operator::F32Trunc => todo!(),
+            Operator::F32Nearest => todo!(),
+            Operator::F32Sqrt => {
+                self.jvm_code.push_instruction(F2D)?;
+                self.jvm_code.invoke(RefType::MATH_NAME, "sqrt")?;
+                self.jvm_code.push_instruction(D2F)?;
+            }
+            Operator::F32Add => self.jvm_code.push_instruction(FAdd)?,
+            Operator::F32Sub => self.jvm_code.push_instruction(FSub)?,
+            Operator::F32Mul => self.jvm_code.push_instruction(FMul)?,
+            Operator::F32Div => self.jvm_code.push_instruction(FDiv)?,
+            Operator::F32Min => self.jvm_code.invoke(RefType::FLOAT_NAME, "min")?,
+            Operator::F32Max => self.jvm_code.invoke(RefType::FLOAT_NAME, "max")?,
+            Operator::F32Copysign => todo!(),
+
+            Operator::F64Abs => todo!(),
+            Operator::F64Neg => self.jvm_code.push_instruction(DNeg)?,
+            Operator::F64Ceil => todo!(),
+            Operator::F64Floor => todo!(),
+            Operator::F64Trunc => todo!(),
+            Operator::F64Nearest => todo!(),
+            Operator::F64Sqrt => self.jvm_code.invoke(RefType::MATH_NAME, "sqrt")?,
+            Operator::F64Add => self.jvm_code.push_instruction(DAdd)?,
+            Operator::F64Sub => self.jvm_code.push_instruction(DSub)?,
+            Operator::F64Mul => self.jvm_code.push_instruction(DMul)?,
+            Operator::F64Div => self.jvm_code.push_instruction(DDiv)?,
+            Operator::F64Min => self.jvm_code.invoke(RefType::DOUBLE_NAME, "min")?,
+            Operator::F64Max => self.jvm_code.invoke(RefType::DOUBLE_NAME, "max")?,
+            Operator::F64Copysign => todo!(),
+
+            Operator::I32WrapI64 => self.jvm_code.push_instruction(L2I)?,
+            Operator::I32TruncF32S => self.jvm_code.push_instruction(F2I)?,
+            Operator::I32TruncF32U => todo!(),
+            Operator::I32TruncF64S => self.jvm_code.push_instruction(D2I)?,
+            Operator::I32TruncF64U => todo!(),
+            Operator::I64ExtendI32S => self.jvm_code.push_instruction(I2L)?,
+            Operator::I64ExtendI32U => todo!(),
+            Operator::I64TruncF32S => self.jvm_code.push_instruction(F2L)?,
+            Operator::I64TruncF32U => todo!(),
+            Operator::I64TruncF64S => self.jvm_code.push_instruction(D2L)?,
+            Operator::I64TruncF64U => todo!(),
+            Operator::F32ConvertI32S => self.jvm_code.push_instruction(I2F)?,
+            Operator::F32ConvertI32U => todo!(),
+            Operator::F32ConvertI64S => self.jvm_code.push_instruction(L2F)?,
+            Operator::F32ConvertI64U => todo!(),
+            Operator::F32DemoteF64 => self.jvm_code.push_instruction(D2F)?,
+            Operator::F64ConvertI32S => self.jvm_code.push_instruction(I2D)?,
+            Operator::F64ConvertI32U => todo!(),
+            Operator::F64ConvertI64S => self.jvm_code.push_instruction(L2D)?,
+            Operator::F64ConvertI64U => todo!(),
+            Operator::F64PromoteF32 => self.jvm_code.push_instruction(F2D)?,
+
+            Operator::I32ReinterpretF32 => self
+                .jvm_code
+                .invoke(RefType::FLOAT_NAME, "floatToRawIntBits")?,
+            Operator::I64ReinterpretF64 => self
+                .jvm_code
+                .invoke(RefType::DOUBLE_NAME, "doubleToRawLongBits")?,
+            Operator::F32ReinterpretI32 => self
+                .jvm_code
+                .invoke(RefType::FLOAT_NAME, "intBitsToFloat")?,
+            Operator::F64ReinterpretI64 => self
+                .jvm_code
+                .invoke(RefType::DOUBLE_NAME, "longBitsToDouble")?,
+
+            Operator::I32Extend8S => todo!(),
+            Operator::I32Extend16S => todo!(),
+            Operator::I64Extend8S => todo!(),
+            Operator::I64Extend16S => todo!(),
+            Operator::I64Extend32S => todo!(),
+
+            Operator::I32TruncSatF32S => todo!(),
+            Operator::I32TruncSatF32U => todo!(),
+            Operator::I32TruncSatF64S => todo!(),
+            Operator::I32TruncSatF64U => todo!(),
+            Operator::I64TruncSatF32S => todo!(),
+            Operator::I64TruncSatF32U => todo!(),
+            Operator::I64TruncSatF64S => todo!(),
+            Operator::I64TruncSatF64U => todo!(),
+
+            // Reference Instructions
+            Operator::RefNull { ty } => {
+                let ref_type = ref_type_from_general(ty)?;
+                self.jvm_code.const_null(ref_type)?;
+            }
+            Operator::RefIsNull => {
+                self.visit_cond(BranchCond::IfNull(EqComparison::EQ), next_op)?
+            }
+            Operator::RefFunc { .. } => todo!(),
 
             _ => todo!(),
         }
@@ -301,7 +527,7 @@ where
 
     /// Visit the start of an `if` block
     fn visit_if(&mut self, ty: TypeOrFuncType, condition: BranchCond) -> Result<(), Error> {
-        let ty = self.block_type(ty)?;
+        let ty = self.wasm_validator.resources().block_type(ty)?;
 
         #[cfg(debug_assertions)]
         self.assert_top_stack(&ty.inputs);
@@ -350,7 +576,7 @@ where
 
     /// Visit a `block` block
     fn visit_block(&mut self, ty: TypeOrFuncType) -> Result<(), Error> {
-        let ty = self.block_type(ty)?;
+        let ty = self.wasm_validator.resources().block_type(ty)?;
 
         #[cfg(debug_assertions)]
         self.assert_top_stack(&ty.inputs);
@@ -370,7 +596,7 @@ where
 
     /// Visit a `loop` block
     fn visit_loop(&mut self, ty: TypeOrFuncType) -> Result<(), Error> {
-        let ty = self.block_type(ty)?;
+        let ty = self.wasm_validator.resources().block_type(ty)?;
 
         #[cfg(debug_assertions)]
         self.assert_top_stack(&ty.inputs);
@@ -484,10 +710,7 @@ where
     fn visit_select(&mut self, ty: Option<Type>, condition: BranchCond) -> Result<(), Error> {
         let ty = match ty {
             None => None,
-            Some(ty) => {
-                let stack_type_opt = StackType::from_general(&ty);
-                Some(stack_type_opt.ok_or_else(|| Error::UnsupportedReferenceType(ty))?)
-            }
+            Some(ty) => Some(StackType::from_general(ty)?),
         };
 
         // The hint only matter for reference types
@@ -543,27 +766,15 @@ where
         Ok(())
     }
 
-    /// Convert a block type into a function type
-    pub fn block_type(&self, type_: TypeOrFuncType) -> Result<FunctionType, Error> {
-        match type_ {
-            TypeOrFuncType::Type(typ) => {
-                let output_ty = StackType::from_general(&typ)
-                    .ok_or_else(|| Error::UnsupportedReferenceType(typ))?;
-                Ok(FunctionType {
-                    inputs: vec![],
-                    outputs: vec![output_ty],
-                })
-            }
-            TypeOrFuncType::FuncType(type_idx) => {
-                let func_ty = self
-                    .wasm_validator
-                    .resources()
-                    .func_type_at(type_idx)
-                    .ok_or_else(|| Error::UnsupportedFunctionType(type_))?;
-                FunctionType::from_general(func_ty)
-                    .ok_or_else(|| Error::UnsupportedFunctionType(type_))
-            }
+    fn visit_return(&mut self) -> Result<(), Error> {
+        match self.typ.outputs.len() {
+            0 => self.jvm_code.return_(None)?,
+            1 => self
+                .jvm_code
+                .return_(Some(self.typ.outputs[0].field_type()))?,
+            _ => todo!(),
         }
+        Ok(())
     }
 
     /// Debugging check that the top of the JVM stack matches the set of expected input types (eg.

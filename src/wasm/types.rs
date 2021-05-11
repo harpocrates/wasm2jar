@@ -14,7 +14,7 @@ pub enum StackType {
 
 impl StackType {
     /// Convert a stack type into the corresponding JVM type
-    pub const fn field_type(&self) -> FieldType {
+    pub const fn field_type(self) -> FieldType {
         match self {
             StackType::I32 => FieldType::INT,
             StackType::I64 => FieldType::LONG,
@@ -26,25 +26,25 @@ impl StackType {
     }
 
     /// Mapping from general types into stack types
-    pub const fn from_general(wasm_type: &Type) -> Option<StackType> {
-        Some(match wasm_type {
+    pub const fn from_general(wasm_type: Type) -> Result<StackType, BadType> {
+        Ok(match wasm_type {
             Type::I32 => StackType::I32,
             Type::I64 => StackType::I64,
             Type::F32 => StackType::F32,
             Type::F64 => StackType::F64,
             Type::FuncRef => StackType::FuncRef,
             Type::ExternRef => StackType::ExternRef,
-            _ => return None,
+            _ => return Err(BadType::UnsupportedType(wasm_type)),
         })
     }
 }
 
 /// Mapping from general types into reference types
-pub const fn ref_type_from_general(wasm_type: &Type) -> Option<RefType> {
-    Some(match wasm_type {
+pub const fn ref_type_from_general(wasm_type: Type) -> Result<RefType, BadType> {
+    Ok(match wasm_type {
         Type::FuncRef => RefType::METHOD_HANDLE_CLASS,
         Type::ExternRef => RefType::OBJECT_CLASS,
-        _ => return None,
+        _ => return Err(BadType::UnsupportedReferenceType(wasm_type)),
     })
 }
 
@@ -65,23 +65,25 @@ pub struct FunctionType {
 
 impl FunctionType {
     /// Mapping from general types into stack types
-    pub fn from_general<F: WasmFuncType>(wasm_type: &F) -> Option<FunctionType> {
-        let mut inputs = vec![];
-        for input in wasm_type.inputs() {
-            match StackType::from_general(&input) {
-                Some(input_type) => inputs.push(input_type),
-                None => return None,
-            }
-        }
+    pub fn from_general<F: WasmFuncType>(wasm_type: &F) -> Result<FunctionType, BadType> {
+        let inputs = wasm_type
+            .inputs()
+            .map(StackType::from_general)
+            .collect::<Result<Vec<StackType>, BadType>>()?;
 
-        let mut outputs = vec![];
-        for output in wasm_type.outputs() {
-            match StackType::from_general(&output) {
-                Some(output_type) => outputs.push(output_type),
-                None => return None,
-            }
-        }
+        let outputs = wasm_type
+            .outputs()
+            .map(StackType::from_general)
+            .collect::<Result<Vec<StackType>, BadType>>()?;
 
-        Some(FunctionType { inputs, outputs })
+        Ok(FunctionType { inputs, outputs })
     }
+}
+
+/// Ways in which types can go wrong
+#[derive(Debug)]
+pub enum BadType {
+    UnsupportedType(Type),
+    UnsupportedReferenceType(Type),
+    MissingTypeIdx(u32),
 }

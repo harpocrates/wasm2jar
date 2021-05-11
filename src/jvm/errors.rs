@@ -46,6 +46,10 @@ pub enum Error {
         Frame<RefType, (RefType, Offset)>,
         Frame<RefType, (RefType, Offset)>,
     ),
+
+    MissingClass(String),
+    MissingMember(String),
+    AmbiguousMethod(String, String),
 }
 
 #[derive(Debug)]

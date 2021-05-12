@@ -29,6 +29,14 @@ pub trait WasmModuleResourcesExt: WasmModuleResources {
             }
         }
     }
+
+    /// Query a function type from a function index
+    fn function_idx_type(&self, func_idx: u32) -> Result<FunctionType, BadType> {
+        let func = self
+            .type_of_function(func_idx)
+            .ok_or(BadType::MissingFuncIdx(func_idx))?;
+        FunctionType::from_general(func)
+    }
 }
 
 impl<A: WasmModuleResources> WasmModuleResourcesExt for A {}

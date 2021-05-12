@@ -1,6 +1,6 @@
 use crate::jvm::{
     BranchInstruction, CodeBuilder, Descriptor, EqComparison, Error, FieldType, Instruction,
-    InvokeType, OrdComparison, RefType, Width,
+    InvokeType, MethodDescriptor, OrdComparison, RefType, Width,
 };
 use std::borrow::Cow;
 use std::ops::Not;
@@ -263,36 +263,60 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         let method_name = method_name.into();
 
         // Query the class graph for the descriptor
-        let (descriptor, is_interface): (String, bool) = {
+        let (invoke_typ, descriptor): (InvokeType, MethodDescriptor) = {
             let class_graph = self.class_graph();
             let class = class_graph
                 .classes
                 .get(&class_name)
                 .ok_or_else(|| Error::MissingClass(class_name.to_string()))?;
             let is_interface = class.is_interface;
-            let method_overloads = class
+            let mut method_overloads = class
                 .methods
                 .get(&method_name)
                 .ok_or_else(|| Error::MissingMember(method_name.to_string()))?
                 .iter()
-                .filter_map(|(desc, is_static)| {
-                    if *is_static {
-                        Some(desc.render())
+                .map(|(desc, is_static)| {
+                    let typ = if *is_static {
+                        InvokeType::Static
+                    } else if is_interface {
+                        let n = desc.parameter_length(true) as u8;
+                        InvokeType::Interface(n)
                     } else {
-                        None
-                    }
-                })
-                .collect::<Vec<String>>();
+                        InvokeType::Virtual
+                    };
+                    (typ, desc.clone())
+                });
 
-            if method_overloads.len() == 1 {
-                let mut method_overloads = method_overloads;
-                (method_overloads.pop().unwrap(), is_interface)
-            } else {
-                return Err(Error::AmbiguousMethod(
-                    class_name.to_string(),
-                    method_name.to_string(),
-                ));
+            let first_overload_opt = method_overloads.next();
+            match first_overload_opt {
+                Some(first_overload) if method_overloads.next().is_none() => first_overload,
+                _ => {
+                    return Err(Error::AmbiguousMethod(
+                        class_name.to_string(),
+                        method_name.to_string(),
+                    ))
+                }
             }
+        };
+
+        self.invoke_explicit(invoke_typ, class_name, method_name, &descriptor)
+    }
+
+    /// Invoke a method explicitly specifying the invocation type and descriptor
+    fn invoke_explicit(
+        &mut self,
+        invoke_typ: InvokeType,
+        class_name: impl Into<Cow<'static, str>>,
+        method_name: impl Into<Cow<'static, str>>,
+        descriptor: &MethodDescriptor,
+    ) -> Result<(), Error> {
+        let class_name = class_name.into();
+        let method_name = method_name.into();
+        let descriptor = descriptor.render();
+        let is_interface = if let InvokeType::Interface(_) = invoke_typ {
+            true
+        } else {
+            false
         };
 
         let method_ref = {
@@ -305,7 +329,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
             constants.get_method_ref(class_idx, name_and_type_idx, is_interface)?
         };
 
-        self.push_instruction(Instruction::Invoke(InvokeType::Static, method_ref))
+        self.push_instruction(Instruction::Invoke(invoke_typ, method_ref))
     }
 }
 

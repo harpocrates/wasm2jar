@@ -1,46 +1,41 @@
 use super::{BranchCond, CodeBuilderExts, Error};
 use crate::jvm::{
-    BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, OffsetVec, OrdComparison,
-    RefType, Width,
+    BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
+    MethodDescriptor, Offset, OffsetVec, OrdComparison, RefType, Width,
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
 };
 use std::convert::TryFrom;
 use std::ops::Not;
-use wasmparser::{FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType, WasmFeatures};
+use wasmparser::{FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType};
 
 /// Context for translating a WASM function into a JVM one
-pub struct FunctionTranslator<'a, B: CodeBuilder + Sized, R> {
+pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
     typ: FunctionType,
-    jvm_code: B,
+    jvm_code: &'b mut B,
     jvm_locals: OffsetVec<StackType>,
     wasm_validator: FuncValidator<R>,
     wasm_function: FunctionBody<'a>,
     wasm_frames: Vec<ControlFrame<B::Lbl>>,
 }
 
-impl<'a, B, R> FunctionTranslator<'a, B, R>
+impl<'a, 'b, B, R> FunctionTranslator<'a, 'b, B, R>
 where
     B: CodeBuilderExts + Sized,
     R: WasmModuleResourcesExt,
 {
     pub fn new(
         typ: FunctionType,
-        jvm_code: B,
+        jvm_code: &'b mut B,
+        jvm_locals_starting_offset: usize,
         wasm_function: FunctionBody<'a>,
-        wasm_ty: u32,
-        wasm_offset: usize,
-        wasm_resources: R,
-        wasm_features: &WasmFeatures,
-    ) -> Result<FunctionTranslator<'a, B, R>, Error> {
-        let wasm_validator =
-            FuncValidator::new(wasm_ty, wasm_offset, wasm_resources, wasm_features)?;
-
+        wasm_validator: FuncValidator<R>,
+    ) -> Result<FunctionTranslator<'a, 'b, B, R>, Error> {
         Ok(FunctionTranslator {
             typ,
             jvm_code,
-            jvm_locals: OffsetVec::new(), // TODO: include `this`
+            jvm_locals: OffsetVec::new_starting_at(Offset(jvm_locals_starting_offset)),
             wasm_validator,
             wasm_function,
             wasm_frames: vec![],
@@ -392,12 +387,35 @@ where
                 self.jvm_code.invoke(RefType::LONG_NAME, "rotateRight")?;
             }
 
-            Operator::F32Abs => todo!(),
+            Operator::F32Abs => {
+                let desc = MethodDescriptor {
+                    parameters: vec![FieldType::FLOAT],
+                    return_type: Some(FieldType::FLOAT),
+                };
+                self.jvm_code.invoke_explicit(
+                    InvokeType::Static,
+                    RefType::MATH_NAME,
+                    "abs",
+                    &desc,
+                )?;
+            }
             Operator::F32Neg => self.jvm_code.push_instruction(FNeg)?,
-            Operator::F32Ceil => todo!(),
-            Operator::F32Floor => todo!(),
+            Operator::F32Ceil => {
+                self.jvm_code.push_instruction(F2D)?;
+                self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?;
+                self.jvm_code.push_instruction(D2F)?;
+            }
+            Operator::F32Floor => {
+                self.jvm_code.push_instruction(F2D)?;
+                self.jvm_code.invoke(RefType::MATH_NAME, "floor")?;
+                self.jvm_code.push_instruction(D2F)?;
+            }
             Operator::F32Trunc => todo!(),
-            Operator::F32Nearest => todo!(),
+            Operator::F32Nearest => {
+                self.jvm_code.push_instruction(F2D)?;
+                self.jvm_code.invoke(RefType::MATH_NAME, "rint")?;
+                self.jvm_code.push_instruction(D2F)?;
+            }
             Operator::F32Sqrt => {
                 self.jvm_code.push_instruction(F2D)?;
                 self.jvm_code.invoke(RefType::MATH_NAME, "sqrt")?;
@@ -409,14 +427,35 @@ where
             Operator::F32Div => self.jvm_code.push_instruction(FDiv)?,
             Operator::F32Min => self.jvm_code.invoke(RefType::FLOAT_NAME, "min")?,
             Operator::F32Max => self.jvm_code.invoke(RefType::FLOAT_NAME, "max")?,
-            Operator::F32Copysign => todo!(),
-
-            Operator::F64Abs => todo!(),
+            Operator::F32Copysign => {
+                let desc = MethodDescriptor {
+                    parameters: vec![FieldType::FLOAT, FieldType::FLOAT],
+                    return_type: Some(FieldType::FLOAT),
+                };
+                self.jvm_code.invoke_explicit(
+                    InvokeType::Static,
+                    RefType::MATH_NAME,
+                    "copySign",
+                    &desc,
+                )?;
+            }
+            Operator::F64Abs => {
+                let desc = MethodDescriptor {
+                    parameters: vec![FieldType::DOUBLE],
+                    return_type: Some(FieldType::DOUBLE),
+                };
+                self.jvm_code.invoke_explicit(
+                    InvokeType::Static,
+                    RefType::MATH_NAME,
+                    "abs",
+                    &desc,
+                )?;
+            }
             Operator::F64Neg => self.jvm_code.push_instruction(DNeg)?,
-            Operator::F64Ceil => todo!(),
-            Operator::F64Floor => todo!(),
+            Operator::F64Ceil => self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?,
+            Operator::F64Floor => self.jvm_code.invoke(RefType::MATH_NAME, "floor")?,
             Operator::F64Trunc => todo!(),
-            Operator::F64Nearest => todo!(),
+            Operator::F64Nearest => self.jvm_code.invoke(RefType::MATH_NAME, "rint")?,
             Operator::F64Sqrt => self.jvm_code.invoke(RefType::MATH_NAME, "sqrt")?,
             Operator::F64Add => self.jvm_code.push_instruction(DAdd)?,
             Operator::F64Sub => self.jvm_code.push_instruction(DSub)?,
@@ -424,7 +463,18 @@ where
             Operator::F64Div => self.jvm_code.push_instruction(DDiv)?,
             Operator::F64Min => self.jvm_code.invoke(RefType::DOUBLE_NAME, "min")?,
             Operator::F64Max => self.jvm_code.invoke(RefType::DOUBLE_NAME, "max")?,
-            Operator::F64Copysign => todo!(),
+            Operator::F64Copysign => {
+                let desc = MethodDescriptor {
+                    parameters: vec![FieldType::DOUBLE, FieldType::DOUBLE],
+                    return_type: Some(FieldType::DOUBLE),
+                };
+                self.jvm_code.invoke_explicit(
+                    InvokeType::Static,
+                    RefType::MATH_NAME,
+                    "copySign",
+                    &desc,
+                )?;
+            }
 
             Operator::I32WrapI64 => self.jvm_code.push_instruction(L2I)?,
             Operator::I32TruncF32S => self.jvm_code.push_instruction(F2I)?,

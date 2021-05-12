@@ -1,4 +1,4 @@
-use crate::jvm::{FieldType, RefType, Width};
+use crate::jvm::{FieldType, MethodDescriptor, RefType, Width};
 use wasmparser::{Type, WasmFuncType};
 
 /// Subset of WASM types that we know how to put on the WASM stack
@@ -78,6 +78,51 @@ impl FunctionType {
 
         Ok(FunctionType { inputs, outputs })
     }
+
+    /// Into a method descriptor
+    pub fn method_descriptor(&self) -> MethodDescriptor {
+        if self.outputs.len() > 1 {
+            todo!()
+        } else {
+            let parameters = self.inputs.iter().map(|input| input.field_type()).collect();
+            let return_type = self.outputs.iter().next().map(|output| output.field_type());
+            MethodDescriptor {
+                parameters,
+                return_type,
+            }
+        }
+    }
+}
+
+/// WASM type for a table
+#[derive(Copy, Clone, Debug)]
+pub enum TableType {
+    FuncRef,
+    ExternRef,
+}
+
+impl TableType {
+    /// Convert a stack type into the corresponding JVM reference typ
+    pub const fn ref_type(self) -> RefType {
+        match self {
+            TableType::FuncRef => RefType::METHOD_HANDLE_CLASS,
+            TableType::ExternRef => RefType::OBJECT_CLASS,
+        }
+    }
+
+    /// Convert a stack type into the corresponding JVM type
+    pub const fn field_type(self) -> FieldType {
+        FieldType::Ref(self.ref_type())
+    }
+
+    /// Mapping from general types into table types
+    pub const fn from_general(wasm_type: Type) -> Result<TableType, BadType> {
+        Ok(match wasm_type {
+            Type::FuncRef => TableType::FuncRef,
+            Type::ExternRef => TableType::ExternRef,
+            _ => return Err(BadType::UnsupportedTableType(wasm_type)),
+        })
+    }
 }
 
 /// Ways in which types can go wrong
@@ -85,5 +130,7 @@ impl FunctionType {
 pub enum BadType {
     UnsupportedType(Type),
     UnsupportedReferenceType(Type),
+    UnsupportedTableType(Type),
     MissingTypeIdx(u32),
+    MissingFuncIdx(u32),
 }

@@ -40,7 +40,10 @@ fn make_class() -> Result<(), wasm2jar::jvm::Error> {
     let mut method_builder = class_builder.start_method(
         MethodAccessFlags::PUBLIC,
         String::from("<init>"),
-        String::from("(II)V"),
+        MethodDescriptor {
+            parameters: vec![FieldType::INT, FieldType::INT],
+            return_type: None,
+        },
     )?;
     let code = &mut method_builder.code;
 

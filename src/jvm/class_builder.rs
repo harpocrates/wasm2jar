@@ -1,7 +1,7 @@
 use super::*;
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
 
 pub struct ClassBuilder {
@@ -164,20 +164,20 @@ impl ClassBuilder {
         &mut self,
         access_flags: MethodAccessFlags,
         name: String,
-        descriptor: String,
+        descriptor: MethodDescriptor,
     ) -> Result<MethodBuilder, Error> {
         let is_static = access_flags.contains(MethodAccessFlags::STATIC);
-        let descriptor_parsed = MethodDescriptor::parse(&descriptor).map_err(Error::IoError)?;
         let class_str: &str = &self.this_class;
+        let rendered_descriptor = descriptor.render();
         self.class_graph
             .borrow_mut()
             .classes
             .get_mut(class_str)
             .expect("class cannot be found in class graph")
-            .add_method(is_static, name.clone(), descriptor_parsed.clone());
+            .add_method(is_static, name.clone(), descriptor.clone());
 
         let code = BytecodeBuilder::new(
-            descriptor_parsed,
+            descriptor,
             !is_static,
             &name == "<init>",
             self.class_graph.clone(),
@@ -188,7 +188,7 @@ impl ClassBuilder {
         Ok(MethodBuilder {
             name,
             access_flags,
-            descriptor,
+            descriptor: rendered_descriptor,
             code,
         })
     }
@@ -211,6 +211,14 @@ impl ClassBuilder {
         });
 
         Ok(())
+    }
+
+    pub fn constants(&self) -> RefMut<ConstantsPool> {
+        self.constants_pool.borrow_mut()
+    }
+
+    pub fn class_name(&self) -> &str {
+        &self.this_class
     }
 }
 

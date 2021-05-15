@@ -1,27 +1,34 @@
-use super::{Error, FunctionTranslator, Settings};
+use super::{CodeBuilderExts, Error, FunctionTranslator, Settings};
 use crate::jvm::{
-    ClassAccessFlags, ClassBuilder, ClassFile, ClassGraph, FieldType, MethodAccessFlags, NestHost,
-    NestMembers, RefType,
+    BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile, ClassGraph, CodeBuilder,
+    FieldType, InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType,
+    MethodAccessFlags, MethodDescriptor, RefType, Width,
 };
 use crate::wasm::WasmModuleResourcesExt;
 use std::cell::RefCell;
 use std::rc::Rc;
-use wasmparser::{ExportSectionReader, FunctionBody, Payload, Validator};
+use wasmparser::{
+    Export, ExportSectionReader, ExternalKind, FunctionBody, Parser, Payload, Validator,
+};
 
-pub struct ModuleTranslator {
+pub struct ModuleTranslator<'a> {
     settings: Settings,
     validator: Validator,
+    #[allow(dead_code)]
     class_graph: Rc<RefCell<ClassGraph>>,
     class: ClassBuilder,
     previous_parts: Vec<ClassBuilder>,
     current_part: ClassBuilder,
 
+    /// Populated when we visit exports
+    exports: Vec<Export<'a>>,
+
     /// Every time we see a new function, this gets incremented
     current_func_idx: u32,
 }
 
-impl ModuleTranslator {
-    pub fn new(settings: Settings) -> Result<ModuleTranslator, Error> {
+impl<'a> ModuleTranslator<'a> {
+    pub fn new(settings: Settings) -> Result<ModuleTranslator<'a>, Error> {
         let mut validator = Validator::new();
         validator.wasm_features(settings.wasm_features);
 
@@ -37,7 +44,7 @@ impl ModuleTranslator {
             vec![],
             class_graph.clone(),
         )?;
-        let current_part = Self::new_part(&settings, class_graph.clone())?;
+        let current_part = Self::new_part(&settings, class_graph.clone(), 0)?;
 
         Ok(ModuleTranslator {
             settings,
@@ -46,20 +53,32 @@ impl ModuleTranslator {
             class,
             previous_parts: vec![],
             current_part,
+            exports: vec![],
             current_func_idx: 0,
         })
+    }
+
+    /// Parse a full module
+    pub fn parse_module(&mut self, data: &'a [u8]) -> Result<(), Error> {
+        let parser = Parser::new(0);
+        for payload in parser.parse_all(data) {
+            let payload = payload?;
+            self.process_payload(payload)?;
+        }
+        Ok(())
     }
 
     /// Construct a new inner class part
     fn new_part(
         settings: &Settings,
         class_graph: Rc<RefCell<ClassGraph>>,
+        part_idx: usize,
     ) -> Result<ClassBuilder, Error> {
         let mut part = ClassBuilder::new(
             ClassAccessFlags::PUBLIC,
             format!(
-                "{}${}0",
-                settings.output_full_class_name, settings.part_short_class_name
+                "{}${}{}",
+                settings.output_full_class_name, settings.part_short_class_name, part_idx
             ),
             RefType::OBJECT_NAME.to_string(),
             false,
@@ -67,20 +86,31 @@ impl ModuleTranslator {
             class_graph.clone(),
         )?;
 
-        // Add the nest host attribute early (the nest members on the parent is added at the end)
-        let nest_host: NestHost = {
+        // Add the `InnerClasses` attribute early (the piece on the parent is added at the end)
+        let inner_classes: InnerClasses = {
             let mut constants = part.constants();
             let outer_class_name = constants.get_utf8(&settings.output_full_class_name)?;
             let outer_class = constants.get_class(outer_class_name)?;
-            NestHost(outer_class)
+            let inner_class_name = constants.get_utf8(part.class_name())?;
+            let inner_class = constants.get_class(inner_class_name)?;
+            let inner_name =
+                constants.get_utf8(&format!("{}{}", settings.part_short_class_name, part_idx))?;
+            let inner_class_attr = InnerClass {
+                inner_class,
+                outer_class,
+                inner_name,
+                access_flags: InnerClassAccessFlags::STATIC,
+            };
+            InnerClasses(vec![inner_class_attr])
         };
-        part.add_attribute(nest_host)?;
+        part.add_attribute(inner_classes)?;
 
         Ok(part)
     }
 
     /// Process one payload
-    pub fn process_payload<'a>(&mut self, payload: Payload<'a>) -> Result<(), Error> {
+    pub fn process_payload(&mut self, payload: Payload<'a>) -> Result<(), Error> {
+        log::debug!("Payload {:?}", payload);
         match payload {
             Payload::Version { num, range } => self.validator.version(num, &range)?,
             Payload::TypeSection(section) => self.validator.type_section(&section)?,
@@ -131,7 +161,6 @@ impl ModuleTranslator {
             self.settings.output_full_class_name.clone(),
         ));
 
-        let jvm_locals_starting_offset = method_descriptor.parameter_length(false);
         let mut method_builder = self.current_part.start_method(
             MethodAccessFlags::STATIC,
             format!(
@@ -143,8 +172,8 @@ impl ModuleTranslator {
 
         let mut function_translator = FunctionTranslator::new(
             typ,
+            RefType::object(self.settings.output_full_class_name.clone()),
             &mut method_builder.code,
-            jvm_locals_starting_offset,
             function_body,
             validator,
         )?;
@@ -157,25 +186,92 @@ impl ModuleTranslator {
     }
 
     /// Visit the exports
-    fn visit_exports(&mut self, exports: ExportSectionReader) -> Result<(), Error> {
+    ///
+    /// The actual processing of the exports is in `generate_exports`, since the module resources
+    /// aren't ready at this point.
+    fn visit_exports(&mut self, exports: ExportSectionReader<'a>) -> Result<(), Error> {
         self.validator.export_section(&exports)?;
+        for export in exports {
+            self.exports.push(export?);
+        }
+        Ok(())
+    }
 
-        //   for export in exports {
-        //       let export = export?;
+    /// Generate members in the outer class corresponding to exports
+    fn generate_exports(&mut self) -> Result<(), Error> {
+        for export in &self.exports {
+            log::debug!("Export {:?}", export);
+            match export.kind {
+                ExternalKind::Function => {
+                    // Exported function
+                    let export_descriptor = self
+                        .validator
+                        .function_idx_type(export.index)?
+                        .method_descriptor();
 
-        //       match export.kind {
-        //           ExternalKind::Function => {
+                    // Implementation function
+                    let mut underlying_descriptor = export_descriptor.clone();
+                    underlying_descriptor.parameters.push(FieldType::object(
+                        self.settings.output_full_class_name.clone(),
+                    ));
 
-        //               self.class.start_method(
-        //                   MethodAccessFlags::PUBLIC,
-        //                   export.field.to_string(), // TODO: renamer
-        //                   self.validator.
+                    let mut method_builder = self.class.start_method(
+                        MethodAccessFlags::PUBLIC,
+                        export.field.to_string(), // TODO: renamer
+                        export_descriptor.clone(),
+                    )?;
 
-        //           }
-        //           _ => todo!(),
-        //       }
+                    // Push the method arguments onto the stack
+                    let mut offset = 1;
+                    for parameter in &export_descriptor.parameters {
+                        method_builder.code.get_local(offset, parameter)?;
+                        offset += parameter.width() as u16;
+                    }
+                    method_builder.code.get_local(
+                        0,
+                        &FieldType::object(self.settings.output_full_class_name.clone()),
+                    )?;
 
-        //   }
+                    // Call the implementation
+                    method_builder.code.invoke_explicit(
+                        InvokeType::Static,
+                        self.current_part.class_name().to_owned(),
+                        format!(
+                            "{}{}",
+                            self.settings.wasm_function_name_prefix, export.index
+                        ),
+                        &underlying_descriptor,
+                    )?;
+                    method_builder.code.return_(export_descriptor.return_type)?;
+
+                    self.class.finish_method(method_builder)?;
+                }
+                _ => todo!(),
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Generate a constructor
+    pub fn generate_constructor(&mut self) -> Result<(), Error> {
+        let mut method_builder = self.class.start_method(
+            MethodAccessFlags::PUBLIC,
+            String::from("<init>"),
+            MethodDescriptor {
+                parameters: vec![],
+                return_type: None,
+            },
+        )?;
+        method_builder
+            .code
+            .push_instruction(Instruction::ALoad(0))?;
+        method_builder.code.invoke(RefType::OBJECT_NAME, "<init>")?;
+        method_builder
+            .code
+            .push_branch_instruction(BranchInstruction::Return)?;
+
+        self.class.finish_method(method_builder)?;
 
         Ok(())
     }
@@ -184,27 +280,46 @@ impl ModuleTranslator {
     ///
     /// The first element in the output vector is the output class. The rest of the elements are
     /// the "part" inner classes.
-    pub fn result(mut self) -> Result<Vec<ClassFile>, Error> {
+    pub fn result(mut self) -> Result<Vec<(String, ClassFile)>, Error> {
+        self.generate_exports()?;
+        self.generate_constructor()?;
+
         // Assemble all the parts
         let mut parts = self.previous_parts;
         parts.push(self.current_part);
 
-        // Construct the `NestMembers` attribute
-        let nest_members: NestMembers = {
+        // Construct the `InnerClasses` attribute
+        let inner_classes: InnerClasses = {
+            let mut inner_class_attrs = vec![];
             let mut constants = self.class.constants();
-            let mut nest_members = vec![];
-            for part in &parts {
-                let part_name = constants.get_utf8(part.class_name().to_string())?;
-                let part_class = constants.get_class(part_name)?;
-                nest_members.push(part_class);
+            let outer_class_name = constants.get_utf8(&self.settings.output_full_class_name)?;
+            let outer_class = constants.get_class(outer_class_name)?;
+
+            for (part_idx, part) in parts.iter().enumerate() {
+                let inner_class_name = constants.get_utf8(part.class_name())?;
+                let inner_class = constants.get_class(inner_class_name)?;
+                let inner_name = constants.get_utf8(&format!(
+                    "{}{}",
+                    self.settings.part_short_class_name, part_idx
+                ))?;
+                inner_class_attrs.push(InnerClass {
+                    inner_class,
+                    outer_class,
+                    inner_name,
+                    access_flags: InnerClassAccessFlags::STATIC,
+                })
             }
-            NestMembers(nest_members)
+            InnerClasses(inner_class_attrs)
         };
-        self.class.add_attribute(nest_members)?;
+        self.class.add_attribute(inner_classes)?;
 
         // Final results
-        let mut results = vec![self.class.result()];
-        results.extend(parts.into_iter().map(|part| part.result()));
+        let mut results = vec![(self.class.class_name().to_owned(), self.class.result())];
+        results.extend(
+            parts
+                .into_iter()
+                .map(|part| (part.class_name().to_owned(), part.result())),
+        );
 
         Ok(results)
     }

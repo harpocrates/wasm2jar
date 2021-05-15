@@ -278,6 +278,8 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
                 .map(|(desc, is_static)| {
                     let typ = if *is_static {
                         InvokeType::Static
+                    } else if method_name == "<init>" || method_name == "<clinit>" {
+                        InvokeType::Special
                     } else if is_interface {
                         let n = desc.parameter_length(true) as u8;
                         InvokeType::Interface(n)

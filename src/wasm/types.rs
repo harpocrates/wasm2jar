@@ -2,7 +2,7 @@ use crate::jvm::{FieldType, MethodDescriptor, RefType, Width};
 use wasmparser::{Type, WasmFuncType};
 
 /// Subset of WASM types that we know how to put on the WASM stack
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum StackType {
     I32,
     I64,
@@ -58,6 +58,7 @@ impl Width for StackType {
 }
 
 /// WASM type of a function or block
+#[derive(Debug)]
 pub struct FunctionType {
     pub inputs: Vec<StackType>,
     pub outputs: Vec<StackType>,

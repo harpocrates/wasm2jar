@@ -1,3 +1,4 @@
+use super::Width;
 use std::borrow::Cow;
 use std::io::{Error, ErrorKind, Result};
 use std::str::Chars;
@@ -42,6 +43,20 @@ pub enum BaseType {
     Long,
     Short,
     Boolean,
+}
+
+impl Width for BaseType {
+    fn width(&self) -> usize {
+        match self {
+            BaseType::Byte
+            | BaseType::Char
+            | BaseType::Float
+            | BaseType::Int
+            | BaseType::Short
+            | BaseType::Boolean => 1,
+            BaseType::Double | BaseType::Long => 2,
+        }
+    }
 }
 
 impl Descriptor for BaseType {
@@ -200,6 +215,15 @@ impl RefType {
 pub enum FieldType {
     Base(BaseType),
     Ref(RefType),
+}
+
+impl Width for FieldType {
+    fn width(&self) -> usize {
+        match self {
+            FieldType::Base(base_type) => base_type.width(),
+            FieldType::Ref(_) => 1,
+        }
+    }
 }
 
 impl FieldType {

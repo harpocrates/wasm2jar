@@ -1,98 +1,49 @@
 use wasm2jar::*;
 
-fn main() {
-    hello();
-    make_class().unwrap();
-}
+use clap::{App, Arg};
+use std::fs;
 
-fn make_class() -> Result<(), wasm2jar::jvm::Error> {
-    use std::cell::RefCell;
-    use std::fs::File;
-    use std::rc::Rc;
-    use wasm2jar::jvm::BranchInstruction::*;
-    use wasm2jar::jvm::Instruction::*;
-    use wasm2jar::jvm::*;
+fn main() -> Result<(), translate::Error> {
+    env_logger::init();
 
-    let mut class_graph = ClassGraph::new();
-    class_graph.insert_lang_types();
-    let class_graph = Rc::new(RefCell::new(class_graph));
+    let matches = App::new("WASM to JAR converter")
+        .version("0.1.0")
+        .author("Alec Theriault <alec.theriault@gmail.com>")
+        .about("Converts WebAssembly modules into classes that run on a JVM")
+        .arg(
+            Arg::with_name("output class")
+                .long("output-class")
+                .value_name("CLASS_NAME")
+                .required(true)
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("INPUT")
+                .help("Sets the input WASM module file to use")
+                .required(true)
+                .index(1),
+        )
+        .get_matches();
 
-    let mut class_builder = ClassBuilder::new(
-        ClassAccessFlags::PUBLIC,
-        String::from("me/alec/Point"),
-        String::from("java/lang/Object"),
-        false,
-        vec![],
-        class_graph,
-    )?;
+    let settings = translate::Settings::new(
+        matches.value_of("output class").unwrap().to_owned(),
+        String::from(""),
+    );
 
-    class_builder.add_field(
-        FieldAccessFlags::PUBLIC,
-        String::from("x"),
-        String::from("I"),
-    )?;
-    class_builder.add_field(
-        FieldAccessFlags::PUBLIC,
-        String::from("y"),
-        String::from("I"),
-    )?;
+    let wasm_file = matches.value_of("INPUT").unwrap();
+    log::info!("Reading and translating '{}'", &wasm_file);
+    let wasm_bytes = fs::read(&wasm_file).map_err(jvm::Error::IoError)?;
+    let mut translator = translate::ModuleTranslator::new(settings)?;
+    translator.parse_module(&wasm_bytes)?;
 
-    let mut method_builder = class_builder.start_method(
-        MethodAccessFlags::PUBLIC,
-        String::from("<init>"),
-        MethodDescriptor {
-            parameters: vec![FieldType::INT, FieldType::INT],
-            return_type: None,
-        },
-    )?;
-    let code = &mut method_builder.code;
-
-    let object_name = code.constants().get_utf8("java/lang/Object")?;
-    let object_cls = code.constants().get_class(object_name)?;
-    let init_name = code.constants().get_utf8("<init>")?;
-    let type_name = code.constants().get_utf8("()V")?;
-    let name_and_type = code.constants().get_name_and_type(init_name, type_name)?;
-    let init_ref = code
-        .constants()
-        .get_method_ref(object_cls, name_and_type, false)?;
-
-    let this_name = code.constants().get_utf8("me/alec/Point")?;
-    let this_cls = code.constants().get_class(this_name)?;
-    let field_name_x = code.constants().get_utf8("x")?;
-    let field_name_y = code.constants().get_utf8("y")?;
-    let field_typ = code.constants().get_utf8("I")?;
-    let x_name_and_type = code
-        .constants()
-        .get_name_and_type(field_name_x, field_typ)?;
-    let y_name_and_type = code
-        .constants()
-        .get_name_and_type(field_name_y, field_typ)?;
-    let field_x = code.constants().get_field_ref(this_cls, x_name_and_type)?;
-    let field_y = code.constants().get_field_ref(this_cls, y_name_and_type)?;
-
-    let end = code.fresh_label();
-
-    code.push_instruction(ALoad(0))?;
-    code.push_instruction(Invoke(InvokeType::Special, init_ref))?;
-    code.push_instruction(ALoad(0))?;
-    code.push_instruction(ILoad(1))?;
-    code.push_instruction(PutField(field_x))?;
-    code.push_instruction(ILoad(2))?;
-    code.push_branch_instruction(If(OrdComparison::LT, end, ()))?;
-
-    code.push_instruction(ALoad(0))?;
-    code.push_instruction(ILoad(2))?;
-    code.push_instruction(PutField(field_y))?;
-
-    code.place_label(end)?;
-    code.push_branch_instruction(Return)?;
-
-    class_builder.finish_method(method_builder)?;
-
-    let class_file = class_builder.result();
-
-    let mut f = File::create("Point.class").map_err(Error::IoError)?;
-    class_file.serialize(&mut f).map_err(Error::IoError)?;
+    // Write out the results
+    for (class_name, class) in translator.result()? {
+        let class_file = format!("{}.class", class_name);
+        log::info!("Writing '{}'", class_file);
+        class
+            .save_to_path(&class_file, true)
+            .map_err(jvm::Error::IoError)?;
+    }
 
     Ok(())
 }

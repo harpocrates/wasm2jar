@@ -1,22 +1,38 @@
 use super::{BranchCond, CodeBuilderExts, Error};
 use crate::jvm::{
     BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
-    MethodDescriptor, Offset, OffsetVec, OrdComparison, RefType, Width,
+    MethodDescriptor, OffsetVec, OrdComparison, RefType, Width,
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
 };
 use std::convert::TryFrom;
+use std::iter::FromIterator;
 use std::ops::Not;
 use wasmparser::{FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType};
 
 /// Context for translating a WASM function into a JVM one
 pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
-    typ: FunctionType,
+    /// WASM type of the function being translated
+    function_typ: FunctionType,
+
+    /// Type of the module class
+    #[allow(dead_code)]
+    module_typ: RefType,
+
+    /// Code builder
     jvm_code: &'b mut B,
-    jvm_locals: OffsetVec<StackType>,
+
+    /// Local variables
+    jvm_locals: LocalsLayout,
+
+    /// Validator for the WASM function
     wasm_validator: FuncValidator<R>,
+
+    /// WASM function being translated
     wasm_function: FunctionBody<'a>,
+
+    /// Stack of WASM structured control flow frames
     wasm_frames: Vec<ControlFrame<B::Lbl>>,
 }
 
@@ -26,16 +42,25 @@ where
     R: WasmModuleResourcesExt,
 {
     pub fn new(
-        typ: FunctionType,
+        function_typ: FunctionType,
+        module_typ: RefType,
         jvm_code: &'b mut B,
-        jvm_locals_starting_offset: usize,
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<R>,
     ) -> Result<FunctionTranslator<'a, 'b, B, R>, Error> {
+        let jvm_locals = LocalsLayout::new(
+            function_typ
+                .inputs
+                .iter()
+                .map(|wasm_ty| wasm_ty.field_type()),
+            module_typ.clone(),
+        );
+
         Ok(FunctionTranslator {
-            typ,
+            function_typ,
+            module_typ,
             jvm_code,
-            jvm_locals: OffsetVec::new_starting_at(Offset(jvm_locals_starting_offset)),
+            jvm_locals,
             wasm_validator,
             wasm_function,
             wasm_frames: vec![],
@@ -63,37 +88,15 @@ where
             self.wasm_validator
                 .define_locals(offset, count, local_type)?;
 
+            // WASM locals are zero initialized
             let local_type = StackType::from_general(local_type)?;
             for _ in 0..count {
-                let _ = self.push_local(local_type, false)?;
+                let field_type = local_type.field_type();
+                let idx = self.jvm_locals.push_local(field_type.clone())?;
+                self.jvm_code.zero_local(idx, field_type)?;
             }
         }
 
-        Ok(())
-    }
-
-    /// Push a new local onto our "stack" of locals. If `value_from_stack` is true, there should
-    /// be a value of the right type at the top of the stack and that should be the initial value
-    /// of the local. Otherwise, assign some "zero" value.
-    fn push_local(&mut self, local_type: StackType, value_from_stack: bool) -> Result<u16, Error> {
-        let field_type = local_type.field_type();
-        let next_local_idx =
-            u16::try_from(self.jvm_locals.offset_len().0).map_err(|_| Error::LocalsOverflow)?;
-        if value_from_stack {
-            self.jvm_code.set_local(next_local_idx, &field_type)?;
-        } else {
-            self.jvm_code.zero_local(next_local_idx, field_type)?;
-        }
-        self.jvm_locals.push(local_type);
-        Ok(next_local_idx)
-    }
-
-    /// Pop a local from our "stack" of locals
-    fn pop_local(&mut self) -> Result<(), Error> {
-        if let Some((offset, _, local_type)) = self.jvm_locals.pop() {
-            let field_type = local_type.field_type();
-            self.jvm_code.kill_local(offset.0 as u16, field_type)?;
-        }
         Ok(())
     }
 
@@ -123,6 +126,12 @@ where
 
             self.visit_operator(this_operator, &mut next_operator)?;
         }
+
+        // If control flow falls through to the end, insert an implicit return
+        if self.jvm_code.current_frame().is_some() {
+            self.visit_return()?;
+        }
+
         self.wasm_validator.finish(Self::BAD_OFFSET)?;
         Ok(())
     }
@@ -172,23 +181,17 @@ where
 
             // Variable Instructions
             Operator::LocalGet { local_index } => {
-                let idx = local_index as usize;
-                let (off, stack_type) = self.jvm_locals.get_index(idx).expect("missing local");
-                self.jvm_code
-                    .get_local(off.0 as u16, &stack_type.field_type())?;
+                let (off, field_type) = self.jvm_locals.lookup_local(local_index)?;
+                self.jvm_code.get_local(off, field_type)?;
             }
             Operator::LocalSet { local_index } => {
-                let idx = local_index as usize;
-                let (off, stack_type) = self.jvm_locals.get_index(idx).expect("missing local");
-                self.jvm_code
-                    .set_local(off.0 as u16, &stack_type.field_type())?;
+                let (off, field_type) = self.jvm_locals.lookup_local(local_index)?;
+                self.jvm_code.set_local(off, field_type)?;
             }
             Operator::LocalTee { local_index } => {
-                let idx = local_index as usize;
-                let (off, stack_type) = self.jvm_locals.get_index(idx).expect("missing local");
+                let (off, field_type) = self.jvm_locals.lookup_local(local_index)?;
                 self.jvm_code.dup()?;
-                self.jvm_code
-                    .set_local(off.0 as u16, &stack_type.field_type())?;
+                self.jvm_code.set_local(off, field_type)?;
             }
             Operator::GlobalGet { .. } => todo!(),
             Operator::GlobalSet { .. } => todo!(),
@@ -718,10 +721,10 @@ where
 
         if required_pops > 0 {
             // Stash return values (so we can unwind the stack under them)
-            let mut stash_locals: Vec<(u16, &StackType)> = vec![];
             for return_value in return_values.iter().rev() {
-                let local_idx = self.push_local(*return_value, true)?;
-                stash_locals.push((local_idx, return_value));
+                let field_type = return_value.field_type();
+                let local_idx = self.jvm_locals.push_local(field_type.clone())?;
+                self.jvm_code.set_local(local_idx, &field_type)?;
             }
 
             // Unwind the stack as many times as needed
@@ -731,10 +734,10 @@ where
             }
 
             // Unstash return values
-            for (local_idx, return_value) in stash_locals {
-                self.jvm_code
-                    .get_local(local_idx, &return_value.field_type())?;
-                self.pop_local()?;
+            for _ in 0..return_values.len() {
+                let (local_idx, field_type) = self.jvm_locals.pop_local()?;
+                self.jvm_code.get_local(local_idx, &field_type)?;
+                self.jvm_code.kill_local(local_idx, field_type)?;
             }
         }
 
@@ -817,11 +820,11 @@ where
     }
 
     fn visit_return(&mut self) -> Result<(), Error> {
-        match self.typ.outputs.len() {
+        match self.function_typ.outputs.len() {
             0 => self.jvm_code.return_(None)?,
             1 => self
                 .jvm_code
-                .return_(Some(self.typ.outputs[0].field_type()))?,
+                .return_(Some(self.function_typ.outputs[0].field_type()))?,
             _ => todo!(),
         }
         Ok(())
@@ -851,4 +854,60 @@ where
 
     // TODO: everywhere we use this, we should find a way to thread through the _actual_ offset
     const BAD_OFFSET: usize = 0;
+}
+
+struct LocalsLayout {
+    /// Stack of locals, built up of
+    ///
+    ///   * the function arguments
+    ///   * a reference to the module class
+    ///   * a stack of additional tempporary locals
+    ///
+    jvm_locals: OffsetVec<FieldType>,
+
+    /// Index into `jvm_locals` for getting the "this" argument
+    jvm_module_idx: usize,
+}
+
+impl LocalsLayout {
+    fn new(method_arguments: impl Iterator<Item = FieldType>, module_typ: RefType) -> Self {
+        let mut jvm_locals = OffsetVec::from_iter(method_arguments);
+        let jvm_module_idx = jvm_locals.len();
+        jvm_locals.push(FieldType::Ref(module_typ));
+        LocalsLayout {
+            jvm_locals,
+            jvm_module_idx,
+        }
+    }
+
+    /// Lookup the JVM local and type associated with a WASM local index
+    ///
+    /// Adjusts for the fact that JVM locals sometimes take two slots, and that there is an extra
+    /// local argument corresponding to the parameter that is used to pass around the module.
+    fn lookup_local(&self, mut local_idx: u32) -> Result<(u16, &FieldType), Error> {
+        if local_idx as usize >= self.jvm_module_idx {
+            local_idx += 1;
+        }
+        let (off, field_type) = self
+            .jvm_locals
+            .get_index(local_idx as usize)
+            .expect("missing local");
+        Ok((off.0 as u16, &field_type))
+    }
+
+    /// Push a new local onto our "stack" of locals
+    fn push_local(&mut self, field_type: FieldType) -> Result<u16, Error> {
+        let next_local_idx =
+            u16::try_from(self.jvm_locals.offset_len().0).map_err(|_| Error::LocalsOverflow)?;
+        self.jvm_locals.push(field_type);
+        Ok(next_local_idx)
+    }
+
+    /// Pop a local from our "stack" of locals
+    fn pop_local(&mut self) -> Result<(u16, FieldType), Error> {
+        self.jvm_locals
+            .pop()
+            .map(|(offset, _, field_type)| (offset.0 as u16, field_type))
+            .ok_or(Error::LocalsOverflow)
+    }
 }

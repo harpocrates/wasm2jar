@@ -1,0 +1,18 @@
+[package]
+name = "wast2jar-bin"
+version = "0.1.0"
+authors = ["Alec Theriault <alec.theriault@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+wasm2jar = { path = "../../lib" }
+wast = "35.0.2"
+clap = "2.33"
+log = "0.4"
+env_logger = "0.8"
+termcolor = "1.1"
+walkdir = "2.3"
+
+[[bin]]
+name = "wast2jar"
+path = "src/main.rs"

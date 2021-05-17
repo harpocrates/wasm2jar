@@ -1,0 +1,16 @@
+[package]
+name = "wasm2jar"
+version = "0.1.0"
+authors = ["Alec Theriault <alec.theriault@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+wasmparser = "0.78.1"
+bitflags = "1.2.1"
+byteorder = "1.3.4"
+log = "0.4"
+
+[lib]
+name = "wasm2jar"
+path = "src/lib.rs"
+

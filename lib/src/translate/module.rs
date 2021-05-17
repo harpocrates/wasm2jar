@@ -110,7 +110,7 @@ impl<'a> ModuleTranslator<'a> {
 
     /// Process one payload
     pub fn process_payload(&mut self, payload: Payload<'a>) -> Result<(), Error> {
-        log::debug!("Payload {:?}", payload);
+        log::trace!("Payload {:?}", payload);
         match payload {
             Payload::Version { num, range } => self.validator.version(num, &range)?,
             Payload::TypeSection(section) => self.validator.type_section(&section)?,
@@ -200,7 +200,7 @@ impl<'a> ModuleTranslator<'a> {
     /// Generate members in the outer class corresponding to exports
     fn generate_exports(&mut self) -> Result<(), Error> {
         for export in &self.exports {
-            log::debug!("Export {:?}", export);
+            log::trace!("Export {:?}", export);
             match export.kind {
                 ExternalKind::Function => {
                     // Exported function

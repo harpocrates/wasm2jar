@@ -1,25 +1,6 @@
-[package]
-name = "wasm2jar"
-version = "0.1.0"
-authors = ["Alec Theriault <alec.theriault@gmail.com>"]
-edition = "2018"
-
-[dependencies]
-wasmparser = "0.78.1"
-bitflags = "1.2.1"
-byteorder = "1.3.4"
-clap = "2.33.3"
-log = "0.4"
-env_logger = "0.8.3"
-
-[dev-dependencies]
-wast = "35.0.2"
-
-[lib]
-name = "wasm2jar"
-path = "src/lib.rs"
-doctest = false
-
-[[bin]]
-name = "wasm2jar"
-path = "src/main.rs"
+[workspace]
+members = [
+    "lib",
+    "bin/wasm2jar",
+    "bin/wast2jar",
+]

@@ -29,6 +29,9 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
     /// Validator for the WASM function
     wasm_validator: FuncValidator<R>,
 
+    /// Previous height of the WASM stack
+    wasm_prev_operand_stack_height: u32,
+
     /// WASM function being translated
     wasm_function: FunctionBody<'a>,
 
@@ -62,6 +65,7 @@ where
             jvm_code,
             jvm_locals,
             wasm_validator,
+            wasm_prev_operand_stack_height: 0,
             wasm_function,
             wasm_frames: vec![],
         })
@@ -147,6 +151,8 @@ where
         operator_offset: (Operator, usize),
         next_operator_offset: &mut Option<(Operator, usize)>,
     ) -> Result<(), Error> {
+        use crate::jvm::BranchInstruction::*;
+        use crate::jvm::CompareMode::*;
         use crate::jvm::Instruction::*;
         use crate::jvm::ShiftType::*;
 
@@ -160,12 +166,12 @@ where
             Operator::Nop => self.jvm_code.push_instruction(Instruction::Nop)?,
             Operator::Block { ty } => self.visit_block(ty)?,
             Operator::Loop { ty } => self.visit_loop(ty)?,
-            Operator::If { ty } => self.visit_if(ty, BranchCond::If(OrdComparison::EQ))?,
+            Operator::If { ty } => self.visit_if(ty, BranchCond::If(OrdComparison::NE))?,
             Operator::Else => self.visit_else()?,
             Operator::End => self.visit_end()?,
             Operator::Br { relative_depth } => self.visit_branch(relative_depth)?,
             Operator::BrIf { relative_depth } => {
-                self.visit_branch_if(relative_depth, BranchCond::If(OrdComparison::EQ))?
+                self.visit_branch_if(relative_depth, BranchCond::If(OrdComparison::NE))?
             }
             Operator::BrTable { .. } => todo!(),
             Operator::Return => self.visit_return()?,
@@ -174,9 +180,9 @@ where
 
             // Parametric Instructions
             Operator::Drop => self.jvm_code.pop()?,
-            Operator::Select => self.visit_select(None, BranchCond::If(OrdComparison::EQ))?,
+            Operator::Select => self.visit_select(None, BranchCond::If(OrdComparison::NE))?,
             Operator::TypedSelect { ty } => {
-                self.visit_select(Some(ty), BranchCond::If(OrdComparison::EQ))?
+                self.visit_select(Some(ty), BranchCond::If(OrdComparison::NE))?
             }
 
             // Variable Instructions
@@ -275,8 +281,58 @@ where
                 self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
             }
 
+            Operator::F32Eq => {
+                self.jvm_code.push_instruction(FCmp(G))?; // either G or L works here
+                self.visit_cond(BranchCond::If(OrdComparison::EQ), next_op)?;
+            }
+            Operator::F32Ne => {
+                self.jvm_code.push_instruction(FCmp(G))?; // either G or L works here
+                self.visit_cond(BranchCond::If(OrdComparison::NE), next_op)?;
+            }
+            Operator::F32Lt => {
+                self.jvm_code.push_instruction(FCmp(G))?;
+                self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
+            }
+            Operator::F32Gt => {
+                self.jvm_code.push_instruction(FCmp(L))?;
+                self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
+            }
+            Operator::F32Le => {
+                self.jvm_code.push_instruction(FCmp(G))?;
+                self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
+            }
+            Operator::F32Ge => {
+                self.jvm_code.push_instruction(FCmp(L))?;
+                self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
+            }
+
+            Operator::F64Eq => {
+                self.jvm_code.push_instruction(DCmp(G))?; // either G or L works here
+                self.visit_cond(BranchCond::If(OrdComparison::EQ), next_op)?;
+            }
+            Operator::F64Ne => {
+                self.jvm_code.push_instruction(DCmp(G))?; // either G or L works here
+                self.visit_cond(BranchCond::If(OrdComparison::NE), next_op)?;
+            }
+            Operator::F64Lt => {
+                self.jvm_code.push_instruction(DCmp(G))?;
+                self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
+            }
+            Operator::F64Gt => {
+                self.jvm_code.push_instruction(DCmp(L))?;
+                self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
+            }
+            Operator::F64Le => {
+                self.jvm_code.push_instruction(DCmp(G))?;
+                self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
+            }
+            Operator::F64Ge => {
+                self.jvm_code.push_instruction(DCmp(L))?;
+                self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
+            }
+
             Operator::I64Eqz => {
-                self.jvm_code.push_instruction(IConst0)?;
+                self.jvm_code.push_instruction(LConst0)?;
                 self.jvm_code.push_instruction(LCmp)?;
                 self.visit_cond(BranchCond::If(OrdComparison::EQ), next_op)?;
             }
@@ -390,10 +446,12 @@ where
                 self.jvm_code.invoke(RefType::LONG_NAME, "rotateRight")?;
             }
 
+            // Note: we don't use `abs(F)F` because that does not flip the NaN bit
             Operator::F32Abs => {
+                self.jvm_code.push_instruction(F2D)?;
                 let desc = MethodDescriptor {
-                    parameters: vec![FieldType::FLOAT],
-                    return_type: Some(FieldType::FLOAT),
+                    parameters: vec![FieldType::DOUBLE],
+                    return_type: Some(FieldType::DOUBLE),
                 };
                 self.jvm_code.invoke_explicit(
                     InvokeType::Static,
@@ -401,6 +459,7 @@ where
                     "abs",
                     &desc,
                 )?;
+                self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Neg => self.jvm_code.push_instruction(FNeg)?,
             Operator::F32Ceil => {
@@ -413,7 +472,23 @@ where
                 self.jvm_code.invoke(RefType::MATH_NAME, "floor")?;
                 self.jvm_code.push_instruction(D2F)?;
             }
-            Operator::F32Trunc => todo!(),
+            Operator::F32Trunc => {
+                // TODO: move this to a utility method
+                let negative = self.jvm_code.fresh_label();
+                let end = self.jvm_code.fresh_label();
+                self.jvm_code.push_instruction(F2D)?;
+                self.jvm_code.push_instruction(Dup2)?;
+                self.jvm_code.push_instruction(DConst0)?;
+                self.jvm_code.push_instruction(DCmp(G))?;
+                self.jvm_code
+                    .push_branch_instruction(If(OrdComparison::LT, negative, ()))?;
+                self.jvm_code.invoke(RefType::MATH_NAME, "floor")?;
+                self.jvm_code.push_branch_instruction(Goto(end))?;
+                self.jvm_code.place_label(negative)?;
+                self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?;
+                self.jvm_code.place_label(end)?;
+                self.jvm_code.push_instruction(D2F)?;
+            }
             Operator::F32Nearest => {
                 self.jvm_code.push_instruction(F2D)?;
                 self.jvm_code.invoke(RefType::MATH_NAME, "rint")?;
@@ -457,7 +532,21 @@ where
             Operator::F64Neg => self.jvm_code.push_instruction(DNeg)?,
             Operator::F64Ceil => self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?,
             Operator::F64Floor => self.jvm_code.invoke(RefType::MATH_NAME, "floor")?,
-            Operator::F64Trunc => todo!(),
+            Operator::F64Trunc => {
+                // TODO: move this to a utility method
+                let negative = self.jvm_code.fresh_label();
+                let end = self.jvm_code.fresh_label();
+                self.jvm_code.push_instruction(Dup2)?;
+                self.jvm_code.push_instruction(DConst0)?;
+                self.jvm_code.push_instruction(DCmp(G))?;
+                self.jvm_code
+                    .push_branch_instruction(If(OrdComparison::LT, negative, ()))?;
+                self.jvm_code.invoke(RefType::MATH_NAME, "floor")?;
+                self.jvm_code.push_branch_instruction(Goto(end))?;
+                self.jvm_code.place_label(negative)?;
+                self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?;
+                self.jvm_code.place_label(end)?;
+            }
             Operator::F64Nearest => self.jvm_code.invoke(RefType::MATH_NAME, "rint")?,
             Operator::F64Sqrt => self.jvm_code.invoke(RefType::MATH_NAME, "sqrt")?,
             Operator::F64Add => self.jvm_code.push_instruction(DAdd)?,
@@ -480,15 +569,15 @@ where
             }
 
             Operator::I32WrapI64 => self.jvm_code.push_instruction(L2I)?,
-            Operator::I32TruncF32S => self.jvm_code.push_instruction(F2I)?,
+            Operator::I32TruncF32S => todo!("utility method"),
             Operator::I32TruncF32U => todo!(),
-            Operator::I32TruncF64S => self.jvm_code.push_instruction(D2I)?,
+            Operator::I32TruncF64S => todo!("utility method"),
             Operator::I32TruncF64U => todo!(),
             Operator::I64ExtendI32S => self.jvm_code.push_instruction(I2L)?,
             Operator::I64ExtendI32U => todo!(),
-            Operator::I64TruncF32S => self.jvm_code.push_instruction(F2L)?,
+            Operator::I64TruncF32S => todo!("utility method"),
             Operator::I64TruncF32U => todo!(),
-            Operator::I64TruncF64S => self.jvm_code.push_instruction(D2L)?,
+            Operator::I64TruncF64S => todo!("utility method"),
             Operator::I64TruncF64U => todo!(),
             Operator::F32ConvertI32S => self.jvm_code.push_instruction(I2F)?,
             Operator::F32ConvertI32U => todo!(),
@@ -496,9 +585,40 @@ where
             Operator::F32ConvertI64U => todo!(),
             Operator::F32DemoteF64 => self.jvm_code.push_instruction(D2F)?,
             Operator::F64ConvertI32S => self.jvm_code.push_instruction(I2D)?,
-            Operator::F64ConvertI32U => todo!(),
+            Operator::F64ConvertI32U => {
+                // TODO: move this to a utility method
+                self.jvm_code.push_instruction(I2L)?;
+                self.jvm_code.const_long(0x0000_0000_ffff_ffff)?;
+                self.jvm_code.push_instruction(LAnd)?;
+                self.jvm_code.push_instruction(L2D)?;
+            }
             Operator::F64ConvertI64S => self.jvm_code.push_instruction(L2D)?,
-            Operator::F64ConvertI64U => todo!(),
+            Operator::F64ConvertI64U => {
+                // TODO: move this to a utility method
+                let first_bit_one = self.jvm_code.fresh_label();
+                let end = self.jvm_code.fresh_label();
+                self.jvm_code.push_instruction(Dup2)?;
+                self.jvm_code.push_instruction(LConst0)?;
+                self.jvm_code.push_instruction(LCmp)?;
+                self.jvm_code
+                    .push_branch_instruction(If(OrdComparison::LT, first_bit_one, ()))?;
+                self.jvm_code.push_instruction(L2D)?;
+                self.jvm_code.push_branch_instruction(Goto(end))?;
+                self.jvm_code.place_label(first_bit_one)?;
+                self.jvm_code.push_instruction(Dup2)?;
+                self.jvm_code.push_instruction(IConst1)?;
+                self.jvm_code.push_instruction(LSh(LogicalRight))?;
+                self.jvm_code.push_instruction(Dup2X2)?;
+                self.jvm_code.push_instruction(Pop2)?;
+                self.jvm_code.push_instruction(LConst1)?;
+                self.jvm_code.push_instruction(LAnd)?;
+                self.jvm_code.push_instruction(LOr)?;
+                self.jvm_code.push_instruction(L2D)?;
+                self.jvm_code.push_instruction(IConst2)?;
+                self.jvm_code.push_instruction(I2D)?;
+                self.jvm_code.push_instruction(DMul)?;
+                self.jvm_code.place_label(end)?;
+            }
             Operator::F64PromoteF32 => self.jvm_code.push_instruction(F2D)?,
 
             Operator::I32ReinterpretF32 => self
@@ -514,19 +634,30 @@ where
                 .jvm_code
                 .invoke(RefType::DOUBLE_NAME, "longBitsToDouble")?,
 
-            Operator::I32Extend8S => todo!(),
-            Operator::I32Extend16S => todo!(),
-            Operator::I64Extend8S => todo!(),
-            Operator::I64Extend16S => todo!(),
-            Operator::I64Extend32S => todo!(),
+            Operator::I32Extend8S => self.jvm_code.push_instruction(I2B)?,
+            Operator::I32Extend16S => self.jvm_code.push_instruction(I2S)?,
+            Operator::I64Extend8S => {
+                self.jvm_code.push_instruction(L2I)?;
+                self.jvm_code.push_instruction(I2B)?;
+                self.jvm_code.push_instruction(I2L)?;
+            }
+            Operator::I64Extend16S => {
+                self.jvm_code.push_instruction(L2I)?;
+                self.jvm_code.push_instruction(I2S)?;
+                self.jvm_code.push_instruction(I2L)?;
+            }
+            Operator::I64Extend32S => {
+                self.jvm_code.push_instruction(L2I)?;
+                self.jvm_code.push_instruction(I2L)?;
+            }
 
-            Operator::I32TruncSatF32S => todo!(),
+            Operator::I32TruncSatF32S => self.jvm_code.push_instruction(F2I)?,
             Operator::I32TruncSatF32U => todo!(),
-            Operator::I32TruncSatF64S => todo!(),
+            Operator::I32TruncSatF64S => self.jvm_code.push_instruction(D2I)?,
             Operator::I32TruncSatF64U => todo!(),
-            Operator::I64TruncSatF32S => todo!(),
+            Operator::I64TruncSatF32S => self.jvm_code.push_instruction(F2L)?,
             Operator::I64TruncSatF32U => todo!(),
-            Operator::I64TruncSatF64S => todo!(),
+            Operator::I64TruncSatF64S => self.jvm_code.push_instruction(D2L)?,
             Operator::I64TruncSatF64U => todo!(),
 
             // Reference Instructions
@@ -542,6 +673,7 @@ where
             _ => todo!(),
         }
 
+        self.wasm_prev_operand_stack_height = self.wasm_validator.operand_stack_height();
         Ok(())
     }
 
@@ -559,6 +691,7 @@ where
                 self.visit_if(ty, condition)?;
             }
             Some((Operator::BrIf { relative_depth }, offset)) => {
+                self.wasm_prev_operand_stack_height = self.wasm_validator.operand_stack_height();
                 self.wasm_validator
                     .op(offset, &Operator::BrIf { relative_depth })?;
                 self.visit_branch_if(relative_depth, condition)?;
@@ -715,7 +848,7 @@ where
         self.assert_top_stack(&return_values);
 
         // A `br` may involve unwinding the stack to the proper height
-        let required_pops = self.wasm_validator.operand_stack_height()
+        let required_pops = self.wasm_prev_operand_stack_height
             - return_values.len() as u32
             - target_frame.base_stack_height();
 
@@ -751,6 +884,7 @@ where
     fn visit_branch_if(&mut self, relative_depth: u32, condition: BranchCond) -> Result<(), Error> {
         let skip_branch = self.jvm_code.fresh_label();
 
+        self.wasm_prev_operand_stack_height -= 1;
         self.jvm_code
             .push_branch_instruction(condition.not().into_instruction(skip_branch, ()))?;
         self.visit_branch(relative_depth)?;

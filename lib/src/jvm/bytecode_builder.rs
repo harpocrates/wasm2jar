@@ -119,7 +119,7 @@ impl BytecodeBuilder {
         BytecodeBuilder {
             descriptor,
             blocks: HashMap::new(),
-            block_order: vec![SynLabel::START],
+            block_order: vec![],
             unplaced_labels: HashMap::new(),
             blocks_end_offset: Offset(0),
             current_block: Some(CurrentBlock::new(SynLabel::START, entry_frame)),
@@ -177,6 +177,7 @@ impl BytecodeBuilder {
             .into_serializable(&mut self.constants_pool.borrow_mut(), Offset(0))?;
         let mut frames: Vec<(Offset, Frame<ClassConstantIndex, u16>)> = vec![];
         let mut fallthrough_label: Option<SynLabel> = None;
+
         for block_label in &self.block_order {
             if let Some(fallthrough_label) = fallthrough_label.take() {
                 assert_eq!(
@@ -185,11 +186,6 @@ impl BytecodeBuilder {
                 );
             }
             let basic_block = self.blocks.remove(block_label).expect("missing block");
-
-            // Guard against empty blocks (they will cause pain when we get to stack map tables)
-            if basic_block.width() == 0 {
-                return Err(Error::EmptyBlock(basic_block))?;
-            }
 
             // If this block is ever jumped to, construct a stack map frame for it
             if jump_targets.contains(&block_label) {
@@ -237,6 +233,12 @@ impl BytecodeBuilder {
         for (offset, frame) in frames {
             let offset_delta = if stack_map_frames.is_empty() {
                 offset.0 - previous_offset.0
+            } else if offset == previous_offset {
+                if frame != previous_frame {
+                    return Err(Error::ConflictingFrames(offset, frame, previous_frame));
+                } else {
+                    continue;
+                }
             } else {
                 offset.0 - previous_offset.0 - 1
             };
@@ -408,8 +410,7 @@ impl CodeBuilder<Error> for BytecodeBuilder {
 
             // Update all the local state in the builder
             self.blocks_end_offset.0 += basic_block.width();
-            self.block_order
-                .extend(next_curr_block_opt.iter().map(|b| b.label));
+            self.block_order.push(block_label);
             self.current_block = next_curr_block_opt;
             if let Some(_) = self.blocks.insert(block_label, basic_block) {
                 return Err(Error::DuplicateLabel(block_label));
@@ -447,8 +448,7 @@ impl CodeBuilder<Error> for BytecodeBuilder {
             // Update all the local state in the builder
             let _ = self.unplaced_labels.remove(&label);
             self.blocks_end_offset.0 += basic_block.width();
-            self.block_order
-                .extend(next_curr_block_opt.iter().map(|b| b.label));
+            self.block_order.push(block_label);
             self.current_block = next_curr_block_opt;
             if let Some(_) = self.blocks.insert(block_label, basic_block) {
                 return Err(Error::DuplicateLabel(block_label));

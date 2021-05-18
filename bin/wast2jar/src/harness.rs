@@ -1,6 +1,6 @@
-use super::java_writer;
+use super::java_harness::JavaHarness;
+use super::java_writer::JavaWriter;
 use crate::error::TestError;
-use java_writer::JavaWriter;
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::fs;
@@ -10,10 +10,10 @@ use std::path::Path;
 use std::process::Command;
 use wasm2jar::{jvm, translate};
 use wast::parser::{self, ParseBuffer};
-use wast::{Id, Module, QuoteModule, Wast, WastDirective};
+use wast::{Float32, Float64, Id, Module, QuoteModule, Span, Wast, WastDirective, Wat};
 
 pub struct TestHarness<'a> {
-    /// Path of the initial WAST source (re-interpreted into a string as best as possible):
+    /// Path of the initial WAST source (re-interpreted into a string as best as possible)
     wast_path: String,
 
     /// Source of the WAST to translate
@@ -29,13 +29,16 @@ pub struct TestHarness<'a> {
     java_harness_idx: usize,
 
     /// Current in-process harness file (classname, file)
-    latest_java_harness: Option<(String, JavaWriter<fs::File>)>,
+    latest_java_harness: Option<JavaHarness>,
 
     /// Java class name of latest module (this is in `foo/baz/Bar` format)
     latest_module: Option<String>,
 
     /// Defined Java classes
     translated_modules: HashMap<Id<'a>, String>,
+
+    /// Last seen span
+    pub latest_span: Span,
 }
 
 impl<'a> TestHarness<'a> {
@@ -59,6 +62,7 @@ impl<'a> TestHarness<'a> {
             java_harness_idx: 0,
             latest_java_harness: None,
             translated_modules: HashMap::new(),
+            latest_span: Span::from_offset(0),
         };
 
         for directive in directives {
@@ -70,7 +74,7 @@ impl<'a> TestHarness<'a> {
     }
 
     /// Pretty-print a span
-    fn pretty_span(&self, span: wast::Span) -> String {
+    fn pretty_span(&self, span: Span) -> String {
         let (line, col) = span.linecol_in(self.wast_source);
         format!("{}:{}:{}", &self.wast_path, line + 1, col + 1)
     }
@@ -100,18 +104,22 @@ impl<'a> TestHarness<'a> {
             }
 
             WastDirective::AssertMalformed {
-                module, message, ..
+                module,
+                message,
+                span,
             } => {
                 self.end_java_harness()?;
-                self.visit_module_expecting_error(module, message, "malformed")?;
+                self.visit_module_expecting_error(module, span, message, false)?;
             }
 
             WastDirective::AssertInvalid {
-                module, message, ..
+                module,
+                message,
+                span,
             } => {
                 self.end_java_harness()?;
                 let module = QuoteModule::Module(module);
-                self.visit_module_expecting_error(module, message, "invalid")?;
+                self.visit_module_expecting_error(module, span, message, true)?;
             }
 
             WastDirective::AssertReturn {
@@ -119,38 +127,49 @@ impl<'a> TestHarness<'a> {
                 exec,
                 results,
             } => {
-                assert_eq!(results.len(), 1, "assert_return still TODO in this case");
-                let result = &results[0];
                 let span_str = self.pretty_span(span);
 
-                let harness = self.get_java_harness()?;
+                let harness = self.get_java_writer()?;
                 harness.newline()?;
                 harness.inline_code("try")?;
                 harness.open_curly_block()?;
 
-                let typ = Self::java_assert_type(result);
-                harness.inline_code_fmt(format_args!("{} result = ", typ))?;
-                Self::java_execute(&exec, harness)?;
-                harness.inline_code(";")?;
-                harness.newline()?;
+                if results.len() == 1 {
+                    let result = &results[0];
 
-                // Check the arguments match
-                harness.inline_code("if (!(")?;
-                let closing = Self::java_assert_expr(result, harness)?;
-                harness.inline_code_fmt(format_args!("result{}))", closing))?;
-                harness.open_curly_block()?;
-                harness.inline_code_fmt(format_args!(
-                    "System.out.println(\"Incorrect return at {}: found \" + result);",
-                    &span_str
-                ))?;
-                harness.newline()?;
-                harness.inline_code("exitCode = 1;")?;
-                harness.close_curly_block()?;
+                    let typ = Self::java_assert_type(result);
+                    harness.inline_code_fmt(format_args!("{} result = ", typ))?;
+                    Self::java_execute(&exec, harness)?;
+                    harness.inline_code(";")?;
+                    harness.newline()?;
+
+                    // Check the arguments match
+                    harness.inline_code("if (!(")?;
+                    let closing = Self::java_assert_expr(result, harness)?;
+                    harness.inline_code_fmt(format_args!("result{}))", closing))?;
+                    harness.open_curly_block()?;
+                    harness.inline_code_fmt(format_args!(
+                        "System.out.println(\"Incorrect return at {}: found \" + result);",
+                        &span_str
+                    ))?;
+                    harness.newline()?;
+                    harness.inline_code_fmt(format_args!(
+                        "{} = true;",
+                        JavaHarness::FAILURE_VAR_NAME
+                    ))?;
+                    harness.close_curly_block()?;
+                } else if results.len() == 0 {
+                    Self::java_execute(&exec, harness)?;
+                    harness.inline_code(";")?;
+                } else {
+                    todo!("multiple returns")
+                }
 
                 harness.close_curly_block()?;
                 harness.inline_code("catch (Throwable e)")?;
                 harness.open_curly_block()?;
-                harness.inline_code("exitCode = 1;")?;
+                harness
+                    .inline_code_fmt(format_args!("{} = true;", JavaHarness::FAILURE_VAR_NAME))?;
                 harness.newline()?;
                 harness.inline_code_fmt(format_args!(
                     "System.out.println(\"Unexpected error at {}: \" + e.toString());",
@@ -189,7 +208,15 @@ impl<'a> TestHarness<'a> {
         let settings = translate::Settings::new(name, String::from(""));
         let wasm_bytes: Vec<u8> = match module {
             QuoteModule::Module(mut module) => module.encode()?,
-            QuoteModule::Quote(bytes) => bytes.into_iter().flatten().cloned().collect(),
+            QuoteModule::Quote(wat_bytes) => {
+                let mut wat_str = String::new();
+                for wat_byte_line in wat_bytes {
+                    wat_str.push_str(&String::from_utf8_lossy(wat_byte_line));
+                    wat_str.push('\n');
+                }
+                let wat_buf = ParseBuffer::new(&wat_str)?;
+                parser::parse::<Wat>(&wat_buf)?.module.encode()?
+            }
         };
 
         let translation_result = || -> Result<Vec<(String, jvm::ClassFile)>, translate::Error> {
@@ -218,15 +245,24 @@ impl<'a> TestHarness<'a> {
     fn visit_module_expecting_error(
         &mut self,
         module: QuoteModule<'a>,
+        span: Span,
         expecting_message: &str,
-        context: &'static str,
+        expecting_invalid: bool, // otherwise it` is expecting malformed
     ) -> Result<(), TestError> {
         match self.visit_module(module) {
-            Err(TestError::Translation(translate::Error::WasmParser(err))) => {
-                if expecting_message != err.message() {
-                    return Err(TestError::InvalidMessage(context, err.message().to_owned()));
+            Err(TestError::Translation(translate::Error::WasmParser(err))) if expecting_invalid => {
+                let message = err.message();
+                if !message.starts_with(expecting_message) {
+                    log::error!(
+                        "{}: Expected invalid message {:?} but got {:?}",
+                        self.pretty_span(span),
+                        expecting_message,
+                        message
+                    );
+                    return Err(TestError::InvalidMessage(message.to_owned()));
                 }
             }
+            Err(TestError::Wast(_)) if !expecting_invalid => (),
             other => {
                 let _ = other?;
             }
@@ -236,51 +272,37 @@ impl<'a> TestHarness<'a> {
     }
 
     /// Get (or create, insert, and return) the latest Java harness
-    fn get_java_harness(&mut self) -> Result<&mut JavaWriter<fs::File>, TestError> {
+    fn get_java_writer(&mut self) -> Result<&mut JavaWriter<fs::File>, TestError> {
         // Ensure `latest_java_harness` is populated
         if self.latest_java_harness.is_none() {
             let class_name = format!("JavaHarness{}", self.java_harness_idx);
             let java_harness_file = self.output_directory.join(format!("{}.java", class_name));
+
+            let mut modules_in_scope = vec![];
+            for name in self.translated_modules.values() {
+                modules_in_scope.push((name.to_owned(), format!("mod_{}", name)));
+            }
+            if let Some(name) = self.latest_module.as_ref() {
+                modules_in_scope.push((name.to_owned(), String::from("current")));
+            }
+
             self.java_harness_idx += 1;
             log::debug!("Starting fresh Java harness {:?}", &java_harness_file);
 
-            // Start setting up the harness
-            let mut java_writer = JavaWriter::new(fs::File::create(&java_harness_file)?);
-            java_writer.inline_code_fmt(format_args!("public class {}", &class_name))?;
-            java_writer.open_curly_block()?;
-            java_writer.inline_code("public static void main(String[] args)")?;
-            java_writer.open_curly_block()?;
-            java_writer.inline_code("int exitCode = 0;")?;
-            java_writer.newline()?;
-
-            // Make the module instances
-            for name in self.translated_modules.values() {
-                java_writer.inline_code_fmt(format_args!(
-                    "{name} mod_{name} = new {name}();",
-                    name = name
-                ))?;
-                java_writer.newline()?;
-            }
-            if let Some(name) = self.latest_module.as_ref() {
-                java_writer
-                    .inline_code_fmt(format_args!("{name} current = new {name}();", name = name))?;
-                java_writer.newline()?;
-            }
-
-            self.latest_java_harness = Some((class_name, java_writer))
+            self.latest_java_harness = Some(JavaHarness::new(
+                class_name,
+                java_harness_file,
+                modules_in_scope,
+            )?);
         }
 
-        Ok(&mut self.latest_java_harness.as_mut().unwrap().1)
+        Ok(self.latest_java_harness.as_mut().unwrap().writer()?)
     }
 
     /// Close off the latest Java harness (if there is one) and compile + run it
     fn end_java_harness(&mut self) -> Result<(), TestError> {
-        if let Some((harness_name, mut jw)) = self.latest_java_harness.take() {
-            jw.newline()?;
-            jw.inline_code("System.exit(exitCode);")?;
-            jw.close_curly_block()?;
-            jw.close_curly_block()?;
-            jw.close()?;
+        if let Some(harness) = self.latest_java_harness.take() {
+            let harness_name = harness.close()?;
 
             log::debug!("Compiling Java harness {:?}", &harness_name);
             let compile_output = Command::new("javac")
@@ -363,6 +385,7 @@ impl<'a> TestHarness<'a> {
         expr: &wast::Expression,
         java_writer: &mut JavaWriter<W>,
     ) -> io::Result<()> {
+        use std::num::FpCategory;
         use wast::Instruction;
 
         let instrs = &expr.instrs;
@@ -377,13 +400,37 @@ impl<'a> TestHarness<'a> {
                 java_writer.inline_code_fmt(format_args!("{}", integer))
             }
             Instruction::I64Const(long) => java_writer.inline_code_fmt(format_args!("{}L", long)),
-            Instruction::F32Const(float) => {
-                let float = f32::from_bits(float.bits);
-                java_writer.inline_code_fmt(format_args!("{}f", float))
+            Instruction::F32Const(Float32 { bits }) => {
+                let float = f32::from_bits(*bits);
+                match float.classify() {
+                    FpCategory::Normal => java_writer.inline_code_fmt(format_args!("{}f", float)),
+                    FpCategory::Zero => {
+                        let z = if float.is_sign_negative() {
+                            "-0.0f"
+                        } else {
+                            "0.0f"
+                        };
+                        java_writer.inline_code(z)
+                    }
+                    _ => java_writer
+                        .inline_code_fmt(format_args!("Float.intBitsToFloat({:#08x})", bits)),
+                }
             }
-            Instruction::F64Const(double) => {
-                let double = f64::from_bits(double.bits);
-                java_writer.inline_code_fmt(format_args!("{}d", double))
+            Instruction::F64Const(Float64 { bits }) => {
+                let double = f64::from_bits(*bits);
+                match double.classify() {
+                    FpCategory::Normal => java_writer.inline_code_fmt(format_args!("{}d", double)),
+                    FpCategory::Zero => {
+                        let z = if double.is_sign_negative() {
+                            "-0.0d"
+                        } else {
+                            "0.0d"
+                        };
+                        java_writer.inline_code(z)
+                    }
+                    _ => java_writer
+                        .inline_code_fmt(format_args!("Double.longBitsToDouble({:#016x}L)", bits)),
+                }
             }
             Instruction::RefNull(_) => java_writer.inline_code("null"),
             other => panic!("Unsupported WAST expression instruction {:?}", other),
@@ -407,7 +454,6 @@ impl<'a> TestHarness<'a> {
         assert_expr: &wast::AssertExpression,
         java_writer: &mut JavaWriter<W>,
     ) -> io::Result<&'static str> {
-        use std::num::FpCategory;
         use wast::{AssertExpression, NanPattern};
 
         match assert_expr {
@@ -424,24 +470,17 @@ impl<'a> TestHarness<'a> {
                 java_writer.inline_code("Float.isNaN(")?;
                 Ok(")")
             }
-            AssertExpression::F32(NanPattern::Value(float)) => {
-                let float = f32::from_bits(float.bits);
-                let is_pos = float.is_sign_positive();
-                match float.classify() {
-                    FpCategory::Normal => {
-                        java_writer.inline_code_fmt(format_args!("{}f == ", float))?;
-                        Ok("")
-                    }
-                    FpCategory::Infinite => {
-                        let pos = if is_pos {
-                            "POSITIVE_INFINITY"
-                        } else {
-                            "NEGATIVE_INFINITY"
-                        };
-                        java_writer.inline_code_fmt(format_args!("Float.{} == ", pos))?;
-                        Ok("")
-                    }
-                    _ => todo!(),
+            AssertExpression::F32(NanPattern::Value(Float32 { bits })) => {
+                let float = f32::from_bits(*bits);
+                if float.is_normal() {
+                    java_writer.inline_code_fmt(format_args!("{}f == ", float))?;
+                    Ok("")
+                } else {
+                    java_writer.inline_code_fmt(format_args!(
+                        "{:#08x} == Float.floatToRawIntBits(",
+                        bits
+                    ))?;
+                    Ok(")")
                 }
             }
             AssertExpression::F64(NanPattern::CanonicalNan)
@@ -449,24 +488,17 @@ impl<'a> TestHarness<'a> {
                 java_writer.inline_code("Double.isNaN(")?;
                 Ok(")")
             }
-            AssertExpression::F64(NanPattern::Value(double)) => {
-                let double = f64::from_bits(double.bits);
-                let is_pos = double.is_sign_positive();
-                match double.classify() {
-                    FpCategory::Normal => {
-                        java_writer.inline_code_fmt(format_args!("{}d == ", double))?;
-                        Ok("")
-                    }
-                    FpCategory::Infinite => {
-                        let pos = if is_pos {
-                            "POSITIVE_INFINITY"
-                        } else {
-                            "NEGATIVE_INFINITY"
-                        };
-                        java_writer.inline_code_fmt(format_args!("Double.{} == ", pos))?;
-                        Ok("")
-                    }
-                    _ => todo!(),
+            AssertExpression::F64(NanPattern::Value(Float64 { bits })) => {
+                let double = f64::from_bits(*bits);
+                if double.is_normal() {
+                    java_writer.inline_code_fmt(format_args!("{}d == ", double))?;
+                    Ok("")
+                } else {
+                    java_writer.inline_code_fmt(format_args!(
+                        "{:#016x}L == Double.doubleToRawLongBits(",
+                        bits
+                    ))?;
+                    Ok(")")
                 }
             }
             AssertExpression::RefNull(_) => {

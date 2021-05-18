@@ -1,5 +1,6 @@
 mod error;
 mod harness;
+mod java_harness;
 mod java_writer;
 
 use clap::{App, Arg};

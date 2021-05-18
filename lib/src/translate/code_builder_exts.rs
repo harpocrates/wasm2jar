@@ -188,7 +188,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
             f if f == 4.0 => (Instruction::IConst4, true),
             f if f == 5.0 => (Instruction::IConst5, true),
             _ => (
-                Instruction::Ldc(self.constants().get_double(double)?),
+                Instruction::Ldc2(self.constants().get_double(double)?),
                 false,
             ),
         };

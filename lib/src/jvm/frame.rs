@@ -1067,7 +1067,7 @@ fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
             }
         }
         LReturn => {
-            pop_offset_vec_expecting_type(stack, Integer)?;
+            pop_offset_vec_expecting_type(stack, Long)?;
             if *this_method_return_type != Some(FieldType::LONG) {
                 return Err(VerifierErrorKind::InvalidType);
             }

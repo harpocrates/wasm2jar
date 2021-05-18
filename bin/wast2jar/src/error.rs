@@ -9,7 +9,7 @@ pub enum TestError {
     Wast(wast::Error),
     Translation(translate::Error),
     TranslationPanic(String),
-    InvalidMessage(&'static str, String),
+    InvalidMessage(String),
     JavacFailed(process::Output),
     JavaFailed(process::Output),
 }
@@ -49,8 +49,8 @@ impl From<TestError> for TestOutcome {
             TestError::Io(io_err) => TestOutcome::Error(format!("IO - {:?}", io_err)),
             TestError::Wast(wast_err) => TestOutcome::Error(format!("WAST - {:?}", wast_err)),
             TestError::Translation(err) => TestOutcome::Fail(format!("Translation - {:?}", err)),
-            TestError::InvalidMessage(ctx, err) => {
-                TestOutcome::Fail(format!("Incorrect {} message - {:?}", ctx, err))
+            TestError::InvalidMessage(err) => {
+                TestOutcome::Fail(format!("Incorrect invalid message - {:?}", err))
             }
             TestError::TranslationPanic(err) => {
                 TestOutcome::Fail(format!("Translation panic - {:?}", err))

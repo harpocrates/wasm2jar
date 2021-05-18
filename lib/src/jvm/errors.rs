@@ -1,6 +1,6 @@
 use super::{
-    BasicBlock, BranchInstruction, Constant, ConstantIndex, Frame, Instruction, Offset, RefType,
-    SynLabel, VerificationType,
+    BranchInstruction, ClassConstantIndex, Constant, ConstantIndex, Frame, Instruction, Offset,
+    RefType, SynLabel, VerificationType,
 };
 
 #[derive(Debug)]
@@ -27,9 +27,6 @@ pub enum Error {
     /// This is fixable by making sure you place the block _after_ some jump to it.
     PlacingLabelBeforeReference(SynLabel),
 
-    /// A block that is empty cannot be placed (add in at least a `nop` to give it a length)
-    EmptyBlock(BasicBlock<SynLabel, SynLabel, SynLabel>),
-
     /// Error trying to verify
     VerifierError {
         instruction: Instruction,
@@ -45,6 +42,13 @@ pub enum Error {
         SynLabel,
         Frame<RefType, (RefType, Offset)>,
         Frame<RefType, (RefType, Offset)>,
+    ),
+
+    /// A particular offset has two conflicting frames
+    ConflictingFrames(
+        Offset,
+        Frame<ClassConstantIndex, u16>,
+        Frame<ClassConstantIndex, u16>,
     ),
 
     MissingClass(String),

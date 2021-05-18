@@ -388,7 +388,7 @@ impl ClassGraph {
                 .classes
                 .entry(Cow::Borrowed(RefType::MATH_NAME))
                 .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
-            for name in vec!["ceil", "floor"] {
+            for name in vec!["ceil", "floor", "sqrt", "rint"] {
                 java_lang_math.add_method(
                     true,
                     name,
@@ -408,6 +408,14 @@ impl ClassGraph {
                     },
                 );
             }
+            java_lang_math.add_method(
+                true,
+                "toIntExact",
+                MethodDescriptor {
+                    parameters: vec![FieldType::LONG],
+                    return_type: Some(FieldType::INT),
+                },
+            );
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::fmt::Arguments;
 use std::io;
+use wasm2jar::translate::JavaRenamer;
 
 /// Simplified utility to facilitate writing pretty-printed Java code with idiomatic block
 /// indentation around curly braces.
@@ -7,6 +8,7 @@ pub struct JavaWriter<W: io::Write> {
     open_blocks: usize,
     line_in_progress: bool,
     inner: W,
+    pub export_renamer: JavaRenamer,
 }
 
 impl<W: io::Write> JavaWriter<W> {
@@ -15,6 +17,7 @@ impl<W: io::Write> JavaWriter<W> {
             open_blocks: 0,
             line_in_progress: false,
             inner,
+            export_renamer: JavaRenamer::new(),
         }
     }
 

@@ -585,6 +585,21 @@ pub enum BranchInstruction<Lbl, LblWide, LblNext> {
     IfACmp(EqComparison, Lbl, LblNext),  // covers `if_acmpeq`, `if_acmpne`
     Goto(Lbl),
     GotoW(LblWide),
+    TableSwitch {
+        /// `default` must be at a multiple of four bytes from the start of the current method, so
+        /// there must be a 0-3 inclusive byte padding
+        padding: u8,
+
+        /// Jump target if the argument is less than `low` or greater than
+        /// `low + targets.len()`
+        default: LblWide,
+
+        /// Value associated with the first jump target
+        low: i32,
+
+        /// Jump targets
+        targets: Vec<LblWide>,
+    },
     IReturn,
     LReturn,
     FReturn,
@@ -606,6 +621,7 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
         match self {
             BranchInstruction::Goto(_)
             | BranchInstruction::GotoW(_)
+            | BranchInstruction::TableSwitch { .. }
             | BranchInstruction::IReturn
             | BranchInstruction::LReturn
             | BranchInstruction::FReturn
@@ -623,29 +639,36 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
     }
 
     /// If the instruction can jump to another block (non-fallthrough), get that block
-    pub fn jump_target(&self) -> Option<JumpTarget<Lbl, LblWide>> {
+    pub fn jump_targets(&self) -> JumpTargets<Lbl, LblWide> {
         match self {
-            BranchInstruction::If(_, lbl, _) => Some(JumpTarget::Regular(*lbl)),
-            BranchInstruction::IfICmp(_, lbl, _) => Some(JumpTarget::Regular(*lbl)),
-            BranchInstruction::IfACmp(_, lbl, _) => Some(JumpTarget::Regular(*lbl)),
-            BranchInstruction::Goto(lbl) => Some(JumpTarget::Regular(*lbl)),
-            BranchInstruction::GotoW(lbl_w) => Some(JumpTarget::Wide(*lbl_w)),
-            BranchInstruction::IReturn => None,
-            BranchInstruction::LReturn => None,
-            BranchInstruction::FReturn => None,
-            BranchInstruction::DReturn => None,
-            BranchInstruction::AReturn => None,
-            BranchInstruction::Return => None,
-            BranchInstruction::AThrow => None,
-            BranchInstruction::IfNull(_, lbl, _) => Some(JumpTarget::Regular(*lbl)),
-            BranchInstruction::FallThrough(_) => None,
+            BranchInstruction::If(_, lbl, _) => JumpTargets::Regular(*lbl),
+            BranchInstruction::IfICmp(_, lbl, _) => JumpTargets::Regular(*lbl),
+            BranchInstruction::IfACmp(_, lbl, _) => JumpTargets::Regular(*lbl),
+            BranchInstruction::Goto(lbl) => JumpTargets::Regular(*lbl),
+            BranchInstruction::GotoW(lbl_w) => JumpTargets::Wide(*lbl_w),
+            BranchInstruction::TableSwitch {
+                default, targets, ..
+            } => {
+                let mut ts = vec![*default];
+                ts.extend(targets.iter().copied());
+                JumpTargets::WideMany(ts)
+            }
+            BranchInstruction::IReturn => JumpTargets::None,
+            BranchInstruction::LReturn => JumpTargets::None,
+            BranchInstruction::FReturn => JumpTargets::None,
+            BranchInstruction::DReturn => JumpTargets::None,
+            BranchInstruction::AReturn => JumpTargets::None,
+            BranchInstruction::Return => JumpTargets::None,
+            BranchInstruction::AThrow => JumpTargets::None,
+            BranchInstruction::IfNull(_, lbl, _) => JumpTargets::Regular(*lbl),
+            BranchInstruction::FallThrough(_) => JumpTargets::None,
         }
     }
 
     pub fn map_labels<Lbl2, LblWide2, LblNext2>(
         &self,
         map_label: impl FnOnce(&Lbl) -> Lbl2,
-        map_wide_label: impl FnOnce(&LblWide) -> LblWide2,
+        map_wide_label: impl Fn(&LblWide) -> LblWide2,
         map_next_label: impl FnOnce(&LblNext) -> LblNext2,
     ) -> BranchInstruction<Lbl2, LblWide2, LblNext2> {
         use BranchInstruction::*;
@@ -656,6 +679,17 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
             IfACmp(op, lbl, next) => IfACmp(*op, map_label(lbl), map_next_label(next)),
             Goto(lbl) => Goto(map_label(lbl)),
             GotoW(wide) => GotoW(map_wide_label(wide)),
+            TableSwitch {
+                padding,
+                default,
+                low,
+                targets,
+            } => TableSwitch {
+                padding: *padding,
+                default: map_wide_label(default),
+                low: *low,
+                targets: targets.iter().map(map_wide_label).collect(),
+            },
             IReturn => IReturn,
             LReturn => LReturn,
             FReturn => FReturn,
@@ -689,6 +723,10 @@ impl<Lbl, LblWide, LblFall> Width for BranchInstruction<Lbl, LblWide, LblFall> {
             | BranchInstruction::IfNull(_, _, _) => 3,
 
             BranchInstruction::GotoW(_) => 5,
+
+            BranchInstruction::TableSwitch {
+                padding, targets, ..
+            } => 1 + *padding as usize + 4 * (3 + targets.len()),
         }
     }
 }
@@ -736,6 +774,23 @@ impl Serialize for BranchInstruction<i16, i32, ()> {
                 0xa8u8.serialize(writer)?;
                 lbl_ext.serialize(writer)?;
             }
+            BranchInstruction::TableSwitch {
+                padding,
+                default,
+                low,
+                targets,
+            } => {
+                0xaau8.serialize(writer)?;
+                for _ in 0..*padding {
+                    0x00u8.serialize(writer)?;
+                }
+                default.serialize(writer)?;
+                low.serialize(writer)?;
+                (low + targets.len() as i32 - 1).serialize(writer)?;
+                for target in targets {
+                    target.serialize(writer)?;
+                }
+            }
             BranchInstruction::IReturn => 0xacu8.serialize(writer)?,
             BranchInstruction::LReturn => 0xadu8.serialize(writer)?,
             BranchInstruction::FReturn => 0xaeu8.serialize(writer)?,
@@ -758,18 +813,21 @@ impl Serialize for BranchInstruction<i16, i32, ()> {
 }
 
 /// Non-fallthrough jump target of a `BranchInstruction`
-#[derive(Copy, Clone)]
-pub enum JumpTarget<Lbl, LblWide> {
+pub enum JumpTargets<Lbl, LblWide> {
+    None,
     Regular(Lbl),
     Wide(LblWide),
+    WideMany(Vec<LblWide>),
 }
 
-impl<A> JumpTarget<A, A> {
-    /// If both targets are the same, extract the target
-    pub fn merge(self) -> A {
+impl<A> JumpTargets<A, A> {
+    /// If all targets are the same type, extract them
+    pub fn targets(&self) -> &[A] {
         match self {
-            JumpTarget::Regular(a) => a,
-            JumpTarget::Wide(a) => a,
+            JumpTargets::None => &[],
+            JumpTargets::Regular(a) => std::slice::from_ref(a),
+            JumpTargets::Wide(a) => std::slice::from_ref(a),
+            JumpTargets::WideMany(a_many) => &a_many,
         }
     }
 }

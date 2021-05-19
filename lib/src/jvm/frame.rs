@@ -1060,6 +1060,7 @@ fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
             }
         }
         Goto(_) | GotoW(_) => (),
+        TableSwitch { .. } => pop_offset_vec_expecting_type(stack, Integer)?,
         IReturn => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             if *this_method_return_type != Some(FieldType::INT) {

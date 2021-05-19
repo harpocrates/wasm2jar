@@ -1,3 +1,5 @@
+use super::{JavaRenamer, Renamer};
+use std::panic::AssertUnwindSafe;
 use wasmparser::WasmFeatures;
 
 pub struct Settings {
@@ -46,7 +48,9 @@ pub struct Settings {
     pub export_strategy: ExportStrategy,
 
     /// Renaming strategy for exports
-    pub renamer: (),
+    ///
+    /// TODO: remove `AssertUnwindSafe` after we weed out panics that make catching necessary
+    pub renamer: AssertUnwindSafe<Box<dyn Renamer>>,
 }
 
 impl Settings {
@@ -79,7 +83,7 @@ impl Settings {
             externref_array_table_field_name: String::from("externref_tables"),
             wasm_features,
             export_strategy: ExportStrategy::Members,
-            renamer: (),
+            renamer: AssertUnwindSafe(Box::new(JavaRenamer::new())),
         }
     }
 }

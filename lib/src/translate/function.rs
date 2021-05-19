@@ -9,7 +9,7 @@ use crate::wasm::{
 use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::ops::Not;
-use wasmparser::{FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType};
+use wasmparser::{BrTable, FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType};
 
 /// Context for translating a WASM function into a JVM one
 pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
@@ -173,7 +173,7 @@ where
             Operator::BrIf { relative_depth } => {
                 self.visit_branch_if(relative_depth, BranchCond::If(OrdComparison::NE))?
             }
-            Operator::BrTable { .. } => todo!(),
+            Operator::BrTable { table } => self.visit_branch_table(table)?,
             Operator::Return => self.visit_return()?,
             Operator::Call { .. } => todo!(),
             Operator::CallIndirect { .. } => todo!(),
@@ -834,8 +834,17 @@ where
         })
     }
 
-    /// Visit a `br` to an outer block
-    fn visit_branch(&mut self, relative_depth: u32) -> Result<(), Error> {
+    /// Inspect the current state of the operand stack and control frames to figure out what a
+    /// branch to this relative depth entails. Return the:
+    ///
+    ///   - number of operand stack pops that will be needed
+    ///   - the return values
+    ///   - the label to jump to
+    ///
+    /// Most of the time, just calling `visit_branch` is enough. However, sometimes, we can
+    /// optimize some branches differently (eg. if we are in a `br_table` and there is no stack to
+    /// unwind, we'd prefer the `lookuptable` jump straight to the right label).
+    fn prepare_for_branch(&self, relative_depth: u32) -> (u32, Vec<StackType>, B::Lbl) {
         let target_frame = self
             .wasm_frames
             .iter()
@@ -852,6 +861,17 @@ where
             - return_values.len() as u32
             - target_frame.base_stack_height();
 
+        (required_pops, return_values, target_label)
+    }
+
+    /// If `prepare_for_branch` has already been called, feed its outputs here (instead of using
+    /// `visit_branch`).
+    fn visit_prepared_branch(
+        &mut self,
+        required_pops: u32,
+        return_values: Vec<StackType>,
+        target_label: B::Lbl,
+    ) -> Result<(), Error> {
         if required_pops > 0 {
             // Stash return values (so we can unwind the stack under them)
             for return_value in return_values.iter().rev() {
@@ -880,6 +900,12 @@ where
         Ok(())
     }
 
+    /// Visit a `br` to an outer block
+    fn visit_branch(&mut self, relative_depth: u32) -> Result<(), Error> {
+        let (required_pops, return_values, target_label) = self.prepare_for_branch(relative_depth);
+        self.visit_prepared_branch(required_pops, return_values, target_label)
+    }
+
     /// Visit a `br_if` to an outer block
     fn visit_branch_if(&mut self, relative_depth: u32, condition: BranchCond) -> Result<(), Error> {
         let skip_branch = self.jvm_code.fresh_label();
@@ -889,6 +915,51 @@ where
             .push_branch_instruction(condition.not().into_instruction(skip_branch, ()))?;
         self.visit_branch(relative_depth)?;
         self.jvm_code.place_label(skip_branch)?;
+
+        Ok(())
+    }
+
+    /// Visit a `br_table` to outer blocks
+    fn visit_branch_table(&mut self, table: BrTable) -> Result<(), Error> {
+        self.wasm_prev_operand_stack_height -= 1;
+
+        // Labels to go to for each entry in the branch table. The last label is the default.
+        let mut table_switch_targets = vec![];
+
+        /* Labels + blocks that will have to go after the `tableswitch`. Whenever a `br_table` has
+         * a target which first needs some stack unwinding, we must jump to an intermediate block
+         * to unwind the stack, and then branch out.
+         */
+        let mut pending_branch_blocks = vec![];
+
+        for target in table.targets() {
+            let (relative_depth, _is_default) = target?;
+            let (req_pops, ret_values, target_label) = self.prepare_for_branch(relative_depth);
+
+            // If there is no stack to unwind, go straight to the final target label
+            if req_pops == 0 {
+                table_switch_targets.push(target_label);
+            } else {
+                let block_lbl = self.jvm_code.fresh_label();
+                pending_branch_blocks.push((block_lbl, req_pops, ret_values, target_label));
+                table_switch_targets.push(block_lbl);
+            }
+        }
+
+        let default = table_switch_targets.pop().expect("no default target found");
+        self.jvm_code
+            .push_branch_instruction(BranchInstruction::TableSwitch {
+                padding: 0,
+                default,
+                low: 0,
+                targets: table_switch_targets,
+            })?;
+
+        // Now, place any extra blocks we may have accumulated
+        for (block_lbl, req_pops, ret_values, target_label) in pending_branch_blocks {
+            self.jvm_code.place_label(block_lbl)?;
+            self.visit_prepared_branch(req_pops, ret_values, target_label)?;
+        }
 
         Ok(())
     }

@@ -163,8 +163,8 @@ impl BytecodeBuilder {
         let mut label_offsets: HashMap<SynLabel, Offset> = HashMap::new();
         for (block_label, basic_block) in &self.blocks {
             label_offsets.insert(*block_label, basic_block.offset_from_start);
-            if let Some(jump_target) = basic_block.branch_end.jump_target() {
-                jump_targets.insert(jump_target.merge());
+            for jump_target in basic_block.branch_end.jump_targets().targets() {
+                jump_targets.insert(*jump_target);
             }
         }
         let jump_targets = jump_targets;
@@ -394,9 +394,9 @@ impl CodeBuilder<Error> for BytecodeBuilder {
                 .update_maximums(&mut self.max_locals, &mut self.max_stack);
 
             // Check that the jump target (if there is one) has a compatible frame
-            if let Some(jump_label) = insn.jump_target().map(|jump_target| jump_target.merge()) {
+            for jump_label in insn.jump_targets().targets() {
                 self.assert_frame_for_label(
-                    jump_label,
+                    *jump_label,
                     &current_block.latest_frame,
                     Some((current_block.label, &current_block.entry_frame)),
                 )?;
@@ -520,6 +520,29 @@ impl CurrentBlock {
         Error,
     > {
         let fallthrough_target: Option<SynLabel> = branch_end.fallthrough_target();
+
+        // Adjust padding
+        let branch_end = match branch_end {
+            BranchInstruction::TableSwitch {
+                default,
+                low,
+                targets,
+                ..
+            } => {
+                let off = offset_from_start.0 + self.instructions.offset_len().0 + 1;
+                let padding = match (off % 4) as u8 {
+                    0 => 0,
+                    x => 4 - x,
+                };
+                BranchInstruction::TableSwitch {
+                    padding,
+                    default,
+                    low,
+                    targets,
+                }
+            }
+            other => other,
+        };
 
         let basic_block = BasicBlock {
             offset_from_start,

@@ -217,7 +217,7 @@ impl<'a> ModuleTranslator<'a> {
 
                     let mut method_builder = self.class.start_method(
                         MethodAccessFlags::PUBLIC,
-                        export.field.to_string(), // TODO: renamer
+                        self.settings.renamer.rename_function(export.field),
                         export_descriptor.clone(),
                     )?;
 

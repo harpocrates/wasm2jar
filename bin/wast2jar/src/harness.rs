@@ -8,6 +8,7 @@ use std::io;
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::process::Command;
+use wasm2jar::translate::Renamer;
 use wasm2jar::{jvm, translate};
 use wast::parser::{self, ParseBuffer};
 use wast::{Float32, Float64, Id, Module, QuoteModule, Span, Wast, WastDirective, Wat};
@@ -361,10 +362,11 @@ impl<'a> TestHarness<'a> {
             Some(id) => format!("mod_{}", id.name()),
         };
 
+        let renamed_method = java_writer.export_renamer.rename_function(invoke.name);
         java_writer.inline_code_fmt(format_args!(
             "{name}.{method}(",
             name = name,
-            method = invoke.name,
+            method = renamed_method,
         ))?;
         let mut needs_comma = false;
         for arg in &invoke.args {

@@ -1,4 +1,4 @@
-use super::{BranchCond, CodeBuilderExts, Error};
+use super::{BranchCond, CodeBuilderExts, Error, Settings};
 use crate::jvm::{
     BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
     MethodDescriptor, OffsetVec, OrdComparison, RefType, Width,
@@ -16,9 +16,8 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
     /// WASM type of the function being translated
     function_typ: FunctionType,
 
-    /// Type of the module class
-    #[allow(dead_code)]
-    module_typ: RefType,
+    /// Translation settings
+    settings: &'b Settings,
 
     /// Code builder
     jvm_code: &'b mut B,
@@ -46,7 +45,7 @@ where
 {
     pub fn new(
         function_typ: FunctionType,
-        module_typ: RefType,
+        settings: &'b Settings,
         jvm_code: &'b mut B,
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<R>,
@@ -56,12 +55,12 @@ where
                 .inputs
                 .iter()
                 .map(|wasm_ty| wasm_ty.field_type()),
-            module_typ.clone(),
+            RefType::object(settings.output_full_class_name.clone()),
         );
 
         Ok(FunctionTranslator {
             function_typ,
-            module_typ,
+            settings,
             jvm_code,
             jvm_locals,
             wasm_validator,
@@ -391,7 +390,14 @@ where
             Operator::I32Add => self.jvm_code.push_instruction(IAdd)?,
             Operator::I32Sub => self.jvm_code.push_instruction(ISub)?,
             Operator::I32Mul => self.jvm_code.push_instruction(IMul)?,
-            Operator::I32DivS => self.jvm_code.push_instruction(IDiv)?,
+            Operator::I32DivS => {
+                if self.settings.trap_integer_division_overflow {
+                    // TODO: if we're dividing i32.min_value by -1, throw an exception
+                    self.jvm_code.push_instruction(IDiv)?;
+                } else {
+                    self.jvm_code.push_instruction(IDiv)?;
+                }
+            }
             Operator::I32DivU => self
                 .jvm_code
                 .invoke(RefType::INTEGER_NAME, "divideUnsigned")?,
@@ -425,7 +431,14 @@ where
             Operator::I64Add => self.jvm_code.push_instruction(LAdd)?,
             Operator::I64Sub => self.jvm_code.push_instruction(LSub)?,
             Operator::I64Mul => self.jvm_code.push_instruction(LMul)?,
-            Operator::I64DivS => self.jvm_code.push_instruction(LDiv)?,
+            Operator::I64DivS => {
+                if self.settings.trap_integer_division_overflow {
+                    // TODO: if we're dividing i64.min_value by -1, throw an exception
+                    self.jvm_code.push_instruction(LDiv)?;
+                } else {
+                    self.jvm_code.push_instruction(LDiv)?;
+                }
+            }
             Operator::I64RemS => self.jvm_code.push_instruction(LRem)?,
             Operator::I64DivU => self.jvm_code.invoke(RefType::LONG_NAME, "divideUnsigned")?,
             Operator::I64RemU => self
@@ -434,9 +447,18 @@ where
             Operator::I64And => self.jvm_code.push_instruction(LAnd)?,
             Operator::I64Or => self.jvm_code.push_instruction(LOr)?,
             Operator::I64Xor => self.jvm_code.push_instruction(LXor)?,
-            Operator::I64Shl => self.jvm_code.push_instruction(LSh(Left))?,
-            Operator::I64ShrS => self.jvm_code.push_instruction(LSh(ArithmeticRight))?,
-            Operator::I64ShrU => self.jvm_code.push_instruction(LSh(LogicalRight))?,
+            Operator::I64Shl => {
+                self.jvm_code.push_instruction(L2I)?;
+                self.jvm_code.push_instruction(LSh(Left))?;
+            }
+            Operator::I64ShrS => {
+                self.jvm_code.push_instruction(L2I)?;
+                self.jvm_code.push_instruction(LSh(ArithmeticRight))?;
+            }
+            Operator::I64ShrU => {
+                self.jvm_code.push_instruction(L2I)?;
+                self.jvm_code.push_instruction(LSh(LogicalRight))?;
+            }
             Operator::I64Rotl => {
                 self.jvm_code.push_instruction(L2I)?;
                 self.jvm_code.invoke(RefType::LONG_NAME, "rotateLeft")?;
@@ -574,13 +596,24 @@ where
             Operator::I32TruncF64S => todo!("utility method"),
             Operator::I32TruncF64U => todo!(),
             Operator::I64ExtendI32S => self.jvm_code.push_instruction(I2L)?,
-            Operator::I64ExtendI32U => todo!(),
+            Operator::I64ExtendI32U => {
+                // TODO: move this to a utility method
+                self.jvm_code.push_instruction(I2L)?;
+                self.jvm_code.const_long(0x0000_0000_ffff_ffff)?;
+                self.jvm_code.push_instruction(LAnd)?;
+            }
             Operator::I64TruncF32S => todo!("utility method"),
             Operator::I64TruncF32U => todo!(),
             Operator::I64TruncF64S => todo!("utility method"),
             Operator::I64TruncF64U => todo!(),
             Operator::F32ConvertI32S => self.jvm_code.push_instruction(I2F)?,
-            Operator::F32ConvertI32U => todo!(),
+            Operator::F32ConvertI32U => {
+                // TODO: move this to a utility method
+                self.jvm_code.push_instruction(I2L)?;
+                self.jvm_code.const_long(0x0000_0000_ffff_ffff)?;
+                self.jvm_code.push_instruction(LAnd)?;
+                self.jvm_code.push_instruction(L2F)?;
+            }
             Operator::F32ConvertI64S => self.jvm_code.push_instruction(L2F)?,
             Operator::F32ConvertI64U => todo!(),
             Operator::F32DemoteF64 => self.jvm_code.push_instruction(D2F)?,
@@ -980,6 +1013,9 @@ where
         let else_block = self.jvm_code.fresh_label();
         let end_block = self.jvm_code.fresh_label();
 
+        self.jvm_code
+            .push_branch_instruction(condition.not().into_instruction(else_block, ()))?;
+
         // Are we selecting between two wide values? (if not, it is two regular values)
         let select_is_wide = self
             .jvm_code
@@ -989,9 +1025,6 @@ where
             .iter()
             .last()
             .map_or(false, |(_, _, t)| t.width() == 2);
-
-        self.jvm_code
-            .push_branch_instruction(condition.not().into_instruction(else_block, ()))?;
 
         // Keep the bottom value
         if select_is_wide {
@@ -1012,7 +1045,7 @@ where
             self.jvm_code.push_instruction(Instruction::Pop2)?;
             self.jvm_code.push_instruction(Instruction::Pop2)?;
         } else {
-            self.jvm_code.push_instruction(Instruction::Dup2X1)?;
+            self.jvm_code.push_instruction(Instruction::DupX1)?;
             self.jvm_code.push_instruction(Instruction::Pop2)?;
         }
         if let Some(ref_ty) = ref_ty_hint {

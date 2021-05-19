@@ -143,6 +143,7 @@ fn main() -> io::Result<()> {
         s.set_color(ColorSpec::new().set_dimmed(true))?;
         s.write(b"]\n")?;
         s.reset()?;
+        s.flush()?;
     }
 
     // Exit code

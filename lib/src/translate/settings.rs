@@ -47,6 +47,12 @@ pub struct Settings {
     /// How should exports be handled
     pub export_strategy: ExportStrategy,
 
+    /// Trap on division of `i32` and `i64` minimum values by -1
+    ///
+    /// This is an edge case. WASM dictates a trap (since technically there has been an overflow)
+    /// while the `idiv` and `ldiv` instructions just return the overflowed value.
+    pub trap_integer_division_overflow: bool,
+
     /// Renaming strategy for exports
     ///
     /// TODO: remove `AssertUnwindSafe` after we weed out panics that make catching necessary
@@ -83,6 +89,7 @@ impl Settings {
             externref_array_table_field_name: String::from("externref_tables"),
             wasm_features,
             export_strategy: ExportStrategy::Members,
+            trap_integer_division_overflow: true,
             renamer: AssertUnwindSafe(Box::new(JavaRenamer::new())),
         }
     }

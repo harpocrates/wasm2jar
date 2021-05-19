@@ -172,7 +172,7 @@ impl<'a> ModuleTranslator<'a> {
 
         let mut function_translator = FunctionTranslator::new(
             typ,
-            RefType::object(self.settings.output_full_class_name.clone()),
+            &self.settings,
             &mut method_builder.code,
             function_body,
             validator,

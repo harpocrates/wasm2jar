@@ -180,6 +180,37 @@ impl<'a> TestHarness<'a> {
                 harness.close_curly_block()?;
             }
 
+            WastDirective::AssertTrap {
+                span,
+                exec,
+                message: _,
+            } => {
+                let span_str = self.pretty_span(span);
+
+                let harness = self.get_java_writer()?;
+                harness.newline()?;
+                harness.inline_code("try")?;
+                harness.open_curly_block()?;
+
+                Self::java_execute(&exec, harness)?;
+                harness.inline_code(";")?;
+                harness.newline()?;
+                harness
+                    .inline_code_fmt(format_args!("{} = true;", JavaHarness::FAILURE_VAR_NAME))?;
+                harness.newline()?;
+                harness.inline_code_fmt(format_args!(
+                    "System.out.println(\"Unexpected success at {}\");",
+                    &span_str
+                ))?;
+
+                harness.close_curly_block()?;
+
+                // TODO: check message?
+                harness.inline_code("catch (Throwable e)")?;
+                harness.open_curly_block()?;
+                harness.close_curly_block()?;
+            }
+
             _ => todo!(),
         }
 

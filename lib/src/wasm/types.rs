@@ -82,15 +82,15 @@ impl FunctionType {
 
     /// Into a method descriptor
     pub fn method_descriptor(&self) -> MethodDescriptor {
-        if self.outputs.len() > 1 {
-            todo!()
-        } else {
-            let parameters = self.inputs.iter().map(|input| input.field_type()).collect();
-            let return_type = self.outputs.iter().next().map(|output| output.field_type());
-            MethodDescriptor {
-                parameters,
-                return_type,
-            }
+        let return_type = match self.outputs.as_slice() {
+            [] => None,
+            [output_ty] => Some(output_ty.field_type()),
+            _ => Some(FieldType::array(FieldType::OBJECT)),
+        };
+        let parameters = self.inputs.iter().map(|input| input.field_type()).collect();
+        MethodDescriptor {
+            parameters,
+            return_type,
         }
     }
 }

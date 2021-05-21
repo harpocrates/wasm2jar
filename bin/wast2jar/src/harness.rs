@@ -135,35 +135,69 @@ impl<'a> TestHarness<'a> {
                 harness.inline_code("try")?;
                 harness.open_curly_block()?;
 
-                if results.len() == 1 {
-                    let result = &results[0];
+                match results.as_slice() {
+                    [] => {
+                        Self::java_execute(&exec, harness)?;
+                        harness.inline_code(";")?;
+                    }
+                    [result] => {
+                        let (typ, _boxed_ty, _unbox) = Self::java_assert_type(result);
+                        harness.inline_code_fmt(format_args!("{} result = ", typ))?;
+                        Self::java_execute(&exec, harness)?;
+                        harness.inline_code(";")?;
+                        harness.newline()?;
 
-                    let typ = Self::java_assert_type(result);
-                    harness.inline_code_fmt(format_args!("{} result = ", typ))?;
-                    Self::java_execute(&exec, harness)?;
-                    harness.inline_code(";")?;
-                    harness.newline()?;
+                        // Check the arguments match
+                        harness.inline_code("if (!(")?;
+                        let closing = Self::java_assert_expr(result, harness)?;
+                        harness.inline_code_fmt(format_args!("result{}))", closing))?;
+                        harness.open_curly_block()?;
+                        harness.inline_code_fmt(format_args!(
+                            "System.out.println(\"Incorrect return at {}: found \" + result);",
+                            &span_str
+                        ))?;
+                        harness.newline()?;
+                        harness.inline_code_fmt(format_args!(
+                            "{} = true;",
+                            JavaHarness::FAILURE_VAR_NAME
+                        ))?;
+                        harness.close_curly_block()?;
+                    }
+                    _ => {
+                        harness.inline_code("Object[] result = ")?;
+                        Self::java_execute(&exec, harness)?;
+                        harness.inline_code(";")?;
+                        harness.newline()?;
 
-                    // Check the arguments match
-                    harness.inline_code("if (!(")?;
-                    let closing = Self::java_assert_expr(result, harness)?;
-                    harness.inline_code_fmt(format_args!("result{}))", closing))?;
-                    harness.open_curly_block()?;
-                    harness.inline_code_fmt(format_args!(
-                        "System.out.println(\"Incorrect return at {}: found \" + result);",
-                        &span_str
-                    ))?;
-                    harness.newline()?;
-                    harness.inline_code_fmt(format_args!(
-                        "{} = true;",
-                        JavaHarness::FAILURE_VAR_NAME
-                    ))?;
-                    harness.close_curly_block()?;
-                } else if results.len() == 0 {
-                    Self::java_execute(&exec, harness)?;
-                    harness.inline_code(";")?;
-                } else {
-                    todo!("multiple returns")
+                        // Check the arguments match
+                        for (i, result) in results.iter().enumerate() {
+                            let (typ, boxed_ty, unbox) = Self::java_assert_type(result);
+
+                            // Define a temp variable
+                            harness.inline_code_fmt(format_args!(
+                                "{} result{} = (({}) result[{}]){};",
+                                typ, i, boxed_ty, i, unbox,
+                            ))?;
+                            harness.newline()?;
+
+                            harness.inline_code("if (!(")?;
+                            let closing = Self::java_assert_expr(result, harness)?;
+                            harness.inline_code_fmt(format_args!("result{}{}))", i, closing))?;
+                            harness.open_curly_block()?;
+                            harness.inline_code_fmt(format_args!(
+                                "System.out.println(\"Incorrect return #{} at {}: found \" + result{});",
+                                i,
+                                &span_str,
+                                i,
+                            ))?;
+                            harness.newline()?;
+                            harness.inline_code_fmt(format_args!(
+                                "{} = true;",
+                                JavaHarness::FAILURE_VAR_NAME
+                            ))?;
+                            harness.close_curly_block()?;
+                        }
+                    }
                 }
 
                 harness.close_curly_block()?;
@@ -208,6 +242,49 @@ impl<'a> TestHarness<'a> {
                 // TODO: check message?
                 harness.inline_code("catch (Throwable e)")?;
                 harness.open_curly_block()?;
+                harness.close_curly_block()?;
+            }
+
+            WastDirective::AssertExhaustion {
+                span,
+                call,
+                message: _,
+            } => {
+                let span_str = self.pretty_span(span);
+
+                let harness = self.get_java_writer()?;
+                harness.newline()?;
+                harness.inline_code("try")?;
+                harness.open_curly_block()?;
+
+                Self::java_invoke(&call, harness)?;
+                harness.inline_code(";")?;
+                harness.newline()?;
+                harness
+                    .inline_code_fmt(format_args!("{} = true;", JavaHarness::FAILURE_VAR_NAME))?;
+                harness.newline()?;
+                harness.inline_code_fmt(format_args!(
+                    "System.out.println(\"Unexpected success at {}\");",
+                    &span_str
+                ))?;
+
+                harness.close_curly_block()?;
+
+                // TODO: check message?
+                harness.inline_code("catch (StackOverflowError e)")?;
+                harness.open_curly_block()?;
+                harness.close_curly_block()?;
+
+                harness.inline_code("catch (Throwable e)")?;
+                harness.open_curly_block()?;
+                harness
+                    .inline_code_fmt(format_args!("{} = true;", JavaHarness::FAILURE_VAR_NAME))?;
+                harness.newline()?;
+                harness.inline_code_fmt(format_args!(
+                    "System.out.println(\"Unexpected error at {}: \" + e.toString());",
+                    &span_str
+                ))?;
+                harness.newline()?;
                 harness.close_curly_block()?;
             }
 
@@ -470,14 +547,21 @@ impl<'a> TestHarness<'a> {
         }
     }
 
-    /// Infer the Java type of the expression being checked
-    pub fn java_assert_type(assert_expr: &wast::AssertExpression) -> &'static str {
+    /// Infer from the assertion expression the
+    ///
+    ///   * expected Java type
+    ///   * expected boxed variant of the type
+    ///   * method to go from the boxed variant to the unboxed one
+    ///
+    pub fn java_assert_type(
+        assert_expr: &wast::AssertExpression,
+    ) -> (&'static str, &'static str, &'static str) {
         match assert_expr {
-            wast::AssertExpression::I32(_) => "int",
-            wast::AssertExpression::I64(_) => "long",
-            wast::AssertExpression::F32(_) => "float",
-            wast::AssertExpression::F64(_) => "double",
-            wast::AssertExpression::RefNull(_) => "Object",
+            wast::AssertExpression::I32(_) => ("int", "Integer", ".intValue()"),
+            wast::AssertExpression::I64(_) => ("long", "Long", ".longValue()"),
+            wast::AssertExpression::F32(_) => ("float", "Float", ".floatValue()"),
+            wast::AssertExpression::F64(_) => ("double", "Double", ".doubleValue()"),
+            wast::AssertExpression::RefNull(_) => ("Object", "Object", ""),
             _ => unimplemented!(),
         }
     }

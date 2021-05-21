@@ -8,6 +8,7 @@ use super::StackType;
 /// in their own stack and to track more state along with each label. `ControlFrame` is that
 /// information (and the "label" itself turns out to be implicit: it is the index of the frame into
 /// the stack of active frames).
+#[derive(Debug)]
 pub enum ControlFrame<Lbl> {
     If {
         /// Label for the else block
@@ -39,6 +40,9 @@ pub enum ControlFrame<Lbl> {
         /// Label for after the end of the loop
         after_block: Lbl,
 
+        /// What arguments come to this block
+        input_values: Vec<StackType>,
+
         /// What to return from the block
         return_values: Vec<StackType>,
 
@@ -68,6 +72,19 @@ impl<Lbl: Copy> ControlFrame<Lbl> {
         }
     }
 
+    /// How many values should be on the stack before branching to this frame?
+    ///
+    /// Note: this is subtly different than `return_values` for loops, since in those the branch
+    /// jumps to the beginning of the loop, not the end!
+    pub fn branch_values(&self) -> &[StackType] {
+        match self {
+            ControlFrame::If { return_values, .. } => return_values,
+            ControlFrame::Else { return_values, .. } => return_values,
+            ControlFrame::Loop { input_values, .. } => input_values,
+            ControlFrame::Block { return_values, .. } => return_values,
+        }
+    }
+
     /// Get the label that should be placed at the end of the block
     pub fn end_label(&self) -> Lbl {
         match self {
@@ -78,7 +95,7 @@ impl<Lbl: Copy> ControlFrame<Lbl> {
         }
     }
 
-    /// How many return values does this frame have? Does the frame have a return value
+    /// How many return values should be on the stack when naturally ending this frame?
     pub fn return_values(&self) -> &[StackType] {
         match self {
             ControlFrame::If { return_values, .. } => return_values,

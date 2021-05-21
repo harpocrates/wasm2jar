@@ -208,6 +208,10 @@ impl RefType {
     pub const METHOD_TYPE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_TYPE_NAME));
 
     pub const THROWABLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::THROWABLE_NAME));
+    pub const INTEGER_CLASS: RefType = Self::Object(Cow::Borrowed(Self::INTEGER_NAME));
+    pub const FLOAT_CLASS: RefType = Self::Object(Cow::Borrowed(Self::FLOAT_NAME));
+    pub const LONG_CLASS: RefType = Self::Object(Cow::Borrowed(Self::LONG_NAME));
+    pub const DOUBLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::DOUBLE_NAME));
 }
 
 /// Type of a class, instance, or local variable
@@ -235,6 +239,7 @@ impl FieldType {
     pub const SHORT: FieldType = FieldType::Base(BaseType::Short);
     pub const BYTE: FieldType = FieldType::Base(BaseType::Byte);
     pub const BOOLEAN: FieldType = FieldType::Base(BaseType::Boolean);
+    pub const OBJECT: FieldType = FieldType::Ref(RefType::OBJECT_CLASS);
 
     pub fn array(field_type: FieldType) -> FieldType {
         FieldType::Ref(RefType::array(field_type))

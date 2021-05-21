@@ -263,24 +263,24 @@ impl Width for Instruction {
           => 1,
 
           Instruction::BiPush(_)
-          | Instruction::ILoad(5..=255)
-          | Instruction::LLoad(5..=255)
-          | Instruction::FLoad(5..=255)
-          | Instruction::DLoad(5..=255)
-          | Instruction::ALoad(5..=255)
-          | Instruction::IStore(5..=255)
-          | Instruction::LStore(5..=255)
-          | Instruction::FStore(5..=255)
-          | Instruction::DStore(5..=255)
-          | Instruction::AStore(5..=255)
+          | Instruction::ILoad(4..=255)
+          | Instruction::LLoad(4..=255)
+          | Instruction::FLoad(4..=255)
+          | Instruction::DLoad(4..=255)
+          | Instruction::ALoad(4..=255)
+          | Instruction::IStore(4..=255)
+          | Instruction::LStore(4..=255)
+          | Instruction::FStore(4..=255)
+          | Instruction::DStore(4..=255)
+          | Instruction::AStore(4..=255)
           | Instruction::Ldc(ConstantIndex(0..=256))
-          | Instruction::IInc(0..=255,  -128..=127)
           | Instruction::NewArray(_)
           => 2,
 
           Instruction::SiPush(_)
           | Instruction::Ldc(_)
           | Instruction::Ldc2(_) // always wide, unlike `ldc` vs. `ldc_w`
+          | Instruction::IInc(0..=255, -128..=127)
           | Instruction::GetStatic(_)
           | Instruction::PutStatic(_)
           | Instruction::GetField(_)
@@ -306,10 +306,12 @@ impl Width for Instruction {
           | Instruction::AStore(_)
           => 4,
 
-          Instruction::IInc(_, _)
-          | Instruction::Invoke(InvokeType::Interface(_), _)
+          Instruction::Invoke(InvokeType::Interface(_), _)
           | Instruction::InvokeDynamic(_)
           => 5,
+
+          Instruction::IInc(_, _)
+          => 6,
         }
     }
 }

@@ -1,6 +1,6 @@
 use crate::jvm::{
-    BranchInstruction, CodeBuilder, Descriptor, EqComparison, Error, FieldType, Instruction,
-    InvokeType, MethodDescriptor, OrdComparison, RefType, Width,
+    BranchInstruction, ClassConstantIndex, CodeBuilder, Descriptor, EqComparison, Error, FieldType,
+    Instruction, InvokeType, MethodDescriptor, OrdComparison, RefType, Width,
 };
 use std::borrow::Cow;
 use std::ops::Not;
@@ -287,17 +287,29 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
                         InvokeType::Virtual
                     };
                     (typ, desc.clone())
-                });
+                })
+                .collect::<Vec<_>>();
 
-            let first_overload_opt = method_overloads.next();
-            match first_overload_opt {
-                Some(first_overload) if method_overloads.next().is_none() => first_overload,
-                _ => {
-                    return Err(Error::AmbiguousMethod(
-                        class_name.to_string(),
-                        method_name.to_string(),
-                    ))
+            if method_overloads.len() == 1 {
+                method_overloads.pop().unwrap()
+            } else {
+                let mut alts = String::new();
+                for (_, alt) in &method_overloads {
+                    if !alts.is_empty() {
+                        alts.push_str(", ");
+                    }
+                    alts.push_str(&alt.render());
                 }
+                log::error!(
+                    "Ambiguous overloads for {}.{}: {}",
+                    class_name,
+                    method_name,
+                    alts
+                );
+                return Err(Error::AmbiguousMethod(
+                    class_name.to_string(),
+                    method_name.to_string(),
+                ));
             }
         };
 
@@ -332,6 +344,14 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         };
 
         self.push_instruction(Instruction::Invoke(invoke_typ, method_ref))
+    }
+
+    /// Get a class index from a name
+    fn get_class_idx(&mut self, class_name: &RefType) -> Result<ClassConstantIndex, Error> {
+        let rendered = class_name.render_class_info();
+        let mut constants = self.constants();
+        let object_name = constants.get_utf8(rendered)?;
+        Ok(constants.get_class(object_name)?)
     }
 }
 

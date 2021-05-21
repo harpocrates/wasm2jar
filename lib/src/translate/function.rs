@@ -6,6 +6,8 @@ use crate::jvm::{
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
 };
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::ops::Not;
@@ -36,6 +38,9 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
 
     /// Stack of WASM structured control flow frames
     wasm_frames: Vec<ControlFrame<B::Lbl>>,
+
+    /// Count of WASM control frames which are unreachable
+    wasm_unreachable_frame_count: usize,
 }
 
 impl<'a, 'b, B, R> FunctionTranslator<'a, 'b, B, R>
@@ -67,6 +72,7 @@ where
             wasm_prev_operand_stack_height: 0,
             wasm_function,
             wasm_frames: vec![],
+            wasm_unreachable_frame_count: 0,
         })
     }
 
@@ -159,6 +165,29 @@ where
         let next_op = next_operator_offset;
         self.wasm_validator.op(offset, &operator)?;
 
+        // Detect if the current frame is unreachable and handle things differently
+        if self.jvm_code.current_frame().is_none() {
+            match operator {
+                // Increment the unreachable frame count and skip the operator
+                Operator::Block { .. } | Operator::Loop { .. } | Operator::If { .. } => {
+                    self.wasm_unreachable_frame_count += 1;
+                    return Ok(());
+                }
+
+                // Process the operator as normal (don't do an early return)
+                Operator::End | Operator::Else if 0 == self.wasm_unreachable_frame_count => (),
+
+                // Decrement the unreachable frame count and skip the operator
+                Operator::End => {
+                    self.wasm_unreachable_frame_count -= 1;
+                    return Ok(());
+                }
+
+                // Skip the operator
+                _ => return Ok(()),
+            }
+        }
+
         match operator {
             // Control Instructions
             Operator::Unreachable => todo!(),
@@ -174,7 +203,7 @@ where
             }
             Operator::BrTable { table } => self.visit_branch_table(table)?,
             Operator::Return => self.visit_return()?,
-            Operator::Call { .. } => todo!(),
+            Operator::Call { function_index } => self.visit_call(function_index)?,
             Operator::CallIndirect { .. } => todo!(),
 
             // Parametric Instructions
@@ -747,23 +776,22 @@ where
     /// Visit the start of an `if` block
     fn visit_if(&mut self, ty: TypeOrFuncType, condition: BranchCond) -> Result<(), Error> {
         let ty = self.wasm_validator.resources().block_type(ty)?;
+        let else_block = self.jvm_code.fresh_label();
+        let end_block = self.jvm_code.fresh_label();
+
+        self.jvm_code
+            .push_branch_instruction(condition.not().into_instruction(else_block, ()))?;
 
         #[cfg(debug_assertions)]
         self.assert_top_stack(&ty.inputs);
 
         let base_stack_height = self.wasm_validator.operand_stack_height() - ty.inputs.len() as u32;
-        let else_block = self.jvm_code.fresh_label();
-        let end_block = self.jvm_code.fresh_label();
-        let return_values = ty.outputs;
-
         self.wasm_frames.push(ControlFrame::If {
             else_block,
             end_block,
-            return_values,
+            return_values: ty.outputs,
             base_stack_height,
         });
-        self.jvm_code
-            .push_branch_instruction(condition.not().into_instruction(else_block, ()))?;
 
         Ok(())
     }
@@ -796,17 +824,15 @@ where
     /// Visit a `block` block
     fn visit_block(&mut self, ty: TypeOrFuncType) -> Result<(), Error> {
         let ty = self.wasm_validator.resources().block_type(ty)?;
+        let end_block = self.jvm_code.fresh_label();
 
         #[cfg(debug_assertions)]
         self.assert_top_stack(&ty.inputs);
 
         let base_stack_height = self.wasm_validator.operand_stack_height() - ty.inputs.len() as u32;
-        let end_block = self.jvm_code.fresh_label();
-        let return_values = ty.outputs;
-
         self.wasm_frames.push(ControlFrame::Block {
             end_block,
-            return_values,
+            return_values: ty.outputs,
             base_stack_height,
         });
 
@@ -816,19 +842,18 @@ where
     /// Visit a `loop` block
     fn visit_loop(&mut self, ty: TypeOrFuncType) -> Result<(), Error> {
         let ty = self.wasm_validator.resources().block_type(ty)?;
+        let start_loop = self.jvm_code.fresh_label();
+        let after_block = self.jvm_code.fresh_label();
 
         #[cfg(debug_assertions)]
         self.assert_top_stack(&ty.inputs);
 
         let base_stack_height = self.wasm_validator.operand_stack_height() - ty.inputs.len() as u32;
-        let start_loop = self.jvm_code.fresh_label();
-        let after_block = self.jvm_code.fresh_label();
-        let return_values = ty.outputs;
-
         self.wasm_frames.push(ControlFrame::Loop {
             start_loop,
             after_block,
-            return_values,
+            input_values: ty.inputs,
+            return_values: ty.outputs,
             base_stack_height,
         });
         self.jvm_code.place_label(start_loop)?;
@@ -846,15 +871,29 @@ where
     ///     the block was entered (and also under the argument values)
     ///
     fn visit_end(&mut self) -> Result<(), Error> {
-        Ok(match self.wasm_frames.pop() {
+        let control_frame = if let Some(frame) = self.wasm_frames.pop() {
+            frame
+        } else {
             // all functions end with one final `End`
             // TODO: review this
-            None => (),
+            return Ok(());
+        };
 
-            // at the end of all control flow blocks, we just fallthrough
-            Some(control_frame) => {
-                self.jvm_code.place_label(control_frame.end_label())?;
+        use crate::jvm::Error::PlacingLabelBeforeReference;
 
+        /* At the end of all control flow blocks, we attempt to just fallthrough to the end label.
+         * However, this can fail in one important case: if the label has never been referenced
+         * before and there is no currently active block. As it happens, this is exactly the case
+         * that represents an unreachable end in WASM (since there are no other future jumps that
+         * can jump to the end of a prior block).
+         *
+         * In exactly that one case, we can recover and just continue: the label won't have been
+         * placed anywhere, and there won't be an active current block.
+         */
+        match self.jvm_code.place_label(control_frame.end_label()) {
+            Err(PlacingLabelBeforeReference(_)) => (),
+            Err(err) => return Err(err.into()),
+            Ok(()) => {
                 #[cfg(debug_assertions)]
                 self.assert_top_stack(control_frame.return_values());
 
@@ -863,8 +902,12 @@ where
                     self.wasm_validator.operand_stack_height(),
                     "Stack does not have the expected height",
                 );
+
+                ()
             }
-        })
+        }
+
+        Ok(())
     }
 
     /// Inspect the current state of the operand stack and control frames to figure out what a
@@ -872,29 +915,33 @@ where
     ///
     ///   - number of operand stack pops that will be needed
     ///   - the return values
-    ///   - the label to jump to
+    ///   - the label to jump to or `None` if the branch is really a return
     ///
     /// Most of the time, just calling `visit_branch` is enough. However, sometimes, we can
     /// optimize some branches differently (eg. if we are in a `br_table` and there is no stack to
     /// unwind, we'd prefer the `lookuptable` jump straight to the right label).
-    fn prepare_for_branch(&self, relative_depth: u32) -> (u32, Vec<StackType>, B::Lbl) {
+    fn prepare_for_branch(&self, relative_depth: u32) -> (u32, Vec<StackType>, Option<B::Lbl>) {
+        let relative_depth = relative_depth as usize;
+
+        // Detect the case where the branch is really a return
+        if self.wasm_frames.len() == relative_depth {
+            return (0, self.function_typ.outputs.clone(), None);
+        }
+
         let target_frame = self
             .wasm_frames
             .iter()
-            .nth_back(relative_depth as usize)
+            .nth_back(relative_depth)
             .expect("No frame found for branch");
-        let return_values = target_frame.return_values().to_vec();
+        let branch_values = target_frame.branch_values().to_vec();
         let target_label = target_frame.branch_label();
-
-        #[cfg(debug_assertions)]
-        self.assert_top_stack(&return_values);
 
         // A `br` may involve unwinding the stack to the proper height
         let required_pops = self.wasm_prev_operand_stack_height
-            - return_values.len() as u32
+            - branch_values.len() as u32
             - target_frame.base_stack_height();
 
-        (required_pops, return_values, target_label)
+        (required_pops, branch_values, Some(target_label))
     }
 
     /// If `prepare_for_branch` has already been called, feed its outputs here (instead of using
@@ -902,13 +949,16 @@ where
     fn visit_prepared_branch(
         &mut self,
         required_pops: u32,
-        return_values: Vec<StackType>,
+        branch_values: Vec<StackType>,
         target_label: B::Lbl,
     ) -> Result<(), Error> {
+        #[cfg(debug_assertions)]
+        self.assert_top_stack(&branch_values);
+
         if required_pops > 0 {
-            // Stash return values (so we can unwind the stack under them)
-            for return_value in return_values.iter().rev() {
-                let field_type = return_value.field_type();
+            // Stash branch values (so we can unwind the stack under them)
+            for branch_value in branch_values.iter().rev() {
+                let field_type = branch_value.field_type();
                 let local_idx = self.jvm_locals.push_local(field_type.clone())?;
                 self.jvm_code.set_local(local_idx, &field_type)?;
             }
@@ -919,8 +969,8 @@ where
                 self.jvm_code.pop()?;
             }
 
-            // Unstash return values
-            for _ in 0..return_values.len() {
+            // Unstash branch values
+            for _ in 0..branch_values.len() {
                 let (local_idx, field_type) = self.jvm_locals.pop_local()?;
                 self.jvm_code.get_local(local_idx, &field_type)?;
                 self.jvm_code.kill_local(local_idx, field_type)?;
@@ -935,8 +985,11 @@ where
 
     /// Visit a `br` to an outer block
     fn visit_branch(&mut self, relative_depth: u32) -> Result<(), Error> {
-        let (required_pops, return_values, target_label) = self.prepare_for_branch(relative_depth);
-        self.visit_prepared_branch(required_pops, return_values, target_label)
+        let (req_pops, branch_values, target_lbl_opt) = self.prepare_for_branch(relative_depth);
+        match target_lbl_opt {
+            Some(target_lbl) => self.visit_prepared_branch(req_pops, branch_values, target_lbl),
+            None => self.visit_return(),
+        }
     }
 
     /// Visit a `br_if` to an outer block
@@ -962,20 +1015,29 @@ where
         /* Labels + blocks that will have to go after the `tableswitch`. Whenever a `br_table` has
          * a target which first needs some stack unwinding, we must jump to an intermediate block
          * to unwind the stack, and then branch out.
+         *
+         * These blocks can sometimes have a lot of duplication (eg. when multiple cases are
+         * breaking out to the same target). For this reason, we emit only one intermediate block
+         * per relative branch target.
          */
-        let mut pending_branch_blocks = vec![];
+        let mut pending_branch_blocks = HashMap::new();
 
         for target in table.targets() {
             let (relative_depth, _is_default) = target?;
-            let (req_pops, ret_values, target_label) = self.prepare_for_branch(relative_depth);
+            let (req_pops, ret_values, target_lbl_opt) = self.prepare_for_branch(relative_depth);
 
             // If there is no stack to unwind, go straight to the final target label
-            if req_pops == 0 {
-                table_switch_targets.push(target_label);
-            } else {
-                let block_lbl = self.jvm_code.fresh_label();
-                pending_branch_blocks.push((block_lbl, req_pops, ret_values, target_label));
-                table_switch_targets.push(block_lbl);
+            match target_lbl_opt {
+                Some(target_lbl) if req_pops == 0 => table_switch_targets.push(target_lbl),
+                _ => {
+                    let entry = pending_branch_blocks
+                        .entry(relative_depth)
+                        .or_insert_with(|| {
+                            let block_lbl = self.jvm_code.fresh_label();
+                            (block_lbl, req_pops, ret_values, target_lbl_opt)
+                        });
+                    table_switch_targets.push(entry.0);
+                }
             }
         }
 
@@ -989,9 +1051,12 @@ where
             })?;
 
         // Now, place any extra blocks we may have accumulated
-        for (block_lbl, req_pops, ret_values, target_label) in pending_branch_blocks {
+        for (_, (block_lbl, req_pops, ret_values, target_lbl_opt)) in pending_branch_blocks {
             self.jvm_code.place_label(block_lbl)?;
-            self.visit_prepared_branch(req_pops, ret_values, target_label)?;
+            match target_lbl_opt {
+                Some(target_lbl) => self.visit_prepared_branch(req_pops, ret_values, target_lbl)?,
+                None => self.visit_return()?,
+            }
         }
 
         Ok(())
@@ -1057,14 +1122,207 @@ where
         Ok(())
     }
 
+    /// Visit a return
     fn visit_return(&mut self) -> Result<(), Error> {
-        match self.function_typ.outputs.len() {
-            0 => self.jvm_code.return_(None)?,
-            1 => self
-                .jvm_code
-                .return_(Some(self.function_typ.outputs[0].field_type()))?,
-            _ => todo!(),
+        if self.function_typ.outputs.len() > 1 {
+            // TODO: this clone is spurious, but to satiate the borrow checker which doesn't
+            // know that `pack_stack_into_array` doesn't touch `self.function_typ.outputs`
+            // Consider pulling `pack_stack_into_array` out of this class to avoid this.
+            self.pack_stack_into_array(&self.function_typ.outputs.clone())?
         }
+
+        self.jvm_code
+            .return_(self.function_typ.method_descriptor().return_type)?;
+        Ok(())
+    }
+
+    /// Visit a call
+    fn visit_call(&mut self, func_idx: u32) -> Result<(), Error> {
+        let func_typ = self
+            .wasm_validator
+            .resources()
+            .function_idx_type(func_idx)?;
+
+        // Load the module reference onto the stack (it is always the last argument)
+        let (off, field_type) = self.jvm_locals.lookup_this()?;
+        self.jvm_code.get_local(off, field_type)?;
+
+        // TODO: this is a terrible, no good hack:
+        //
+        //   - we shouldn't be modifying the class graph in the function translation (worse even:
+        //     the addition we make here might be redundant!)
+        //   - we shouldn't assume that the function is in `Part0`
+        //   - we shouldn't assume that the function index is directly into functions defined in
+        //     this module (imported functions come first!)
+        //
+        let class_name = format!(
+            "{}${}0",
+            self.settings.output_full_class_name, self.settings.part_short_class_name,
+        );
+        let method_name = format!("{}{}", self.settings.wasm_function_name_prefix, func_idx);
+        {
+            let mut class_graph = self.jvm_code.class_graph();
+            let mut desc = func_typ.method_descriptor();
+            desc.parameters.push(FieldType::object(
+                self.settings.output_full_class_name.clone(),
+            ));
+            class_graph
+                .classes
+                .get_mut(&Cow::Owned(class_name.clone()))
+                .expect("part class not in class graph")
+                .add_method(true, method_name.clone(), desc);
+        }
+
+        self.jvm_code.invoke(class_name, method_name)?;
+        if func_typ.outputs.len() > 1 {
+            self.unpack_stack_from_array(&func_typ.outputs)?;
+        }
+
+        Ok(())
+    }
+
+    /// Pack the top stack elements into an array
+    ///
+    /// This is used when returning out of functions that return multiple values.
+    /// TODO: this could be made into a powerful `invokedynamic` packer (since the `MethodType` is
+    /// enough to figure out what to do).
+    fn pack_stack_into_array(&mut self, expected: &[StackType]) -> Result<(), Error> {
+        // Initialize the variable containing the array for packing values
+        let arr_offset = self
+            .jvm_locals
+            .push_local(FieldType::array(FieldType::OBJECT))?;
+        let object_cls = self.jvm_code.get_class_idx(&RefType::OBJECT_CLASS)?;
+        self.jvm_code.const_int(expected.len() as i32)?;
+        self.jvm_code
+            .push_instruction(Instruction::ANewArray(object_cls))?;
+        self.jvm_code
+            .set_local(arr_offset, &FieldType::array(FieldType::OBJECT))?;
+
+        // Initialize the variable containing the index
+        let idx_offset = self.jvm_locals.push_local(FieldType::INT)?;
+        self.jvm_code.const_int(expected.len() as i32 - 1)?;
+        self.jvm_code.set_local(idx_offset, &FieldType::INT)?;
+
+        // Initialize the a temporary variable for stashing boxed values
+        let tmp_offset = self.jvm_locals.push_local(FieldType::OBJECT)?;
+        self.jvm_code.zero_local(tmp_offset, FieldType::OBJECT)?;
+
+        for stack_value in expected.iter().rev() {
+            // Turn the top value into an object and stack it in the temp variable
+            match stack_value {
+                StackType::I32 => self.jvm_code.invoke(RefType::INTEGER_NAME, "valueOf")?,
+                StackType::I64 => self.jvm_code.invoke(RefType::LONG_NAME, "valueOf")?,
+                StackType::F32 => self.jvm_code.invoke(RefType::FLOAT_NAME, "valueOf")?,
+                StackType::F64 => self.jvm_code.invoke(RefType::DOUBLE_NAME, "valueOf")?,
+                StackType::FuncRef | StackType::ExternRef => (), // already reference types
+            }
+            self.jvm_code
+                .push_instruction(Instruction::AStore(tmp_offset))?;
+
+            // Put the top of the stack in the array
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(arr_offset))?;
+            self.jvm_code
+                .push_instruction(Instruction::ILoad(idx_offset))?;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(tmp_offset))?;
+            self.jvm_code.push_instruction(Instruction::AAStore)?;
+
+            // Update the index
+            self.jvm_code
+                .push_instruction(Instruction::IInc(idx_offset, -1))?;
+        }
+
+        // Put the array back on the stack
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(arr_offset))?;
+
+        // Kill the locals
+        let _ = self.jvm_locals.pop_local()?;
+        let _ = self.jvm_locals.pop_local()?;
+        let _ = self.jvm_locals.pop_local()?;
+        self.jvm_code
+            .push_instruction(Instruction::AKill(tmp_offset))?;
+        self.jvm_code
+            .push_instruction(Instruction::IKill(idx_offset))?;
+        self.jvm_code
+            .push_instruction(Instruction::AKill(arr_offset))?;
+
+        Ok(())
+    }
+
+    /// Unpack the top stack elements from an array
+    ///
+    /// This is used when calling functions that return multiple values.
+    fn unpack_stack_from_array(&mut self, expected: &[StackType]) -> Result<(), Error> {
+        // Initialize the variable containing the array for packing values
+        let arr_offset = self
+            .jvm_locals
+            .push_local(FieldType::array(FieldType::OBJECT))?;
+        self.jvm_code
+            .push_instruction(Instruction::AStore(arr_offset))?;
+
+        // Initialize the variable containing the index
+        let idx_offset = self.jvm_locals.push_local(FieldType::INT)?;
+        self.jvm_code.push_instruction(Instruction::IConst0)?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(idx_offset))?;
+
+        for stack_value in expected.iter().rev() {
+            // Put onto the top of stack the next element in the array
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(arr_offset))?;
+            self.jvm_code
+                .push_instruction(Instruction::ILoad(idx_offset))?;
+            self.jvm_code.push_instruction(Instruction::AALoad)?;
+
+            // Unbox the top of the stack
+            match stack_value {
+                StackType::I32 => {
+                    let integer_cls = self.jvm_code.get_class_idx(&RefType::INTEGER_CLASS)?;
+                    self.jvm_code
+                        .push_instruction(Instruction::CheckCast(integer_cls))?;
+                    self.jvm_code.invoke(RefType::NUMBER_NAME, "intValue")?;
+                }
+                StackType::I64 => {
+                    let long_cls = self.jvm_code.get_class_idx(&RefType::LONG_CLASS)?;
+                    self.jvm_code
+                        .push_instruction(Instruction::CheckCast(long_cls))?;
+                    self.jvm_code.invoke(RefType::NUMBER_NAME, "longValue")?;
+                }
+                StackType::F32 => {
+                    let float_cls = self.jvm_code.get_class_idx(&RefType::FLOAT_CLASS)?;
+                    self.jvm_code
+                        .push_instruction(Instruction::CheckCast(float_cls))?;
+                    self.jvm_code.invoke(RefType::NUMBER_NAME, "floatValue")?;
+                }
+                StackType::F64 => {
+                    let double_cls = self.jvm_code.get_class_idx(&RefType::DOUBLE_CLASS)?;
+                    self.jvm_code
+                        .push_instruction(Instruction::CheckCast(double_cls))?;
+                    self.jvm_code.invoke(RefType::NUMBER_NAME, "doubleValue")?;
+                }
+                StackType::FuncRef => {
+                    let handle_cls = self.jvm_code.get_class_idx(&RefType::METHOD_HANDLE_CLASS)?;
+                    self.jvm_code
+                        .push_instruction(Instruction::CheckCast(handle_cls))?;
+                }
+                StackType::ExternRef => (), // already supposed to be `java/lang/Object`
+            }
+
+            // Update the index
+            self.jvm_code
+                .push_instruction(Instruction::IInc(idx_offset, 1))?;
+        }
+
+        // Kill the locals
+        let _ = self.jvm_locals.pop_local()?;
+        let _ = self.jvm_locals.pop_local()?;
+        self.jvm_code
+            .push_instruction(Instruction::IKill(idx_offset))?;
+        self.jvm_code
+            .push_instruction(Instruction::AKill(arr_offset))?;
+
         Ok(())
     }
 
@@ -1094,6 +1352,7 @@ where
     const BAD_OFFSET: usize = 0;
 }
 
+#[derive(Debug)]
 struct LocalsLayout {
     /// Stack of locals, built up of
     ///
@@ -1116,6 +1375,15 @@ impl LocalsLayout {
             jvm_locals,
             jvm_module_idx,
         }
+    }
+
+    /// Lookup the JVM local and index associated with the "this" argument
+    fn lookup_this(&self) -> Result<(u16, &FieldType), Error> {
+        let (off, field_type) = self
+            .jvm_locals
+            .get_index(self.jvm_module_idx)
+            .expect("missing this local");
+        Ok((off.0 as u16, &field_type))
     }
 
     /// Lookup the JVM local and type associated with a WASM local index

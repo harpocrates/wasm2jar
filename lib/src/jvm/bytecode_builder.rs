@@ -144,6 +144,7 @@ impl BytecodeBuilder {
                 unplaced_labels: self.unplaced_labels.keys().cloned().collect(),
             });
         }
+
         if let Err(_) = u16::try_from(self.blocks_end_offset.0) {
             return Err(Error::MethodCodeOverflow(self.blocks_end_offset));
         }
@@ -464,6 +465,15 @@ impl CodeBuilder<Error> for BytecodeBuilder {
         }
 
         Ok(())
+    }
+
+    fn place_label_with_frame(
+        &mut self,
+        label: SynLabel,
+        frame: &Frame<RefType, (RefType, Offset)>,
+    ) -> Result<(), Error> {
+        self.assert_frame_for_label(label, frame, None)?;
+        self.place_label(label)
     }
 
     fn constants(&self) -> RefMut<ConstantsPool> {

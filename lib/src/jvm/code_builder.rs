@@ -22,6 +22,16 @@ pub trait CodeBuilder<E: Debug = Error> {
     ///
     fn place_label(&mut self, label: Self::Lbl) -> Result<(), E>;
 
+    /// Like `place_label`, but specifies an explicit frame. This rules out the failure mode of
+    /// `place_label` for when there is no way of inferring the expected frame.
+    ///
+    /// TODO: switch `frame` to take a `Cow` (we often have the frame owned)
+    fn place_label_with_frame(
+        &mut self,
+        label: Self::Lbl,
+        frame: &Frame<RefType, (RefType, Offset)>,
+    ) -> Result<(), E>;
+
     /// Push a new instruction to the current block
     fn push_instruction(&mut self, insn: Instruction) -> Result<(), E>;
 

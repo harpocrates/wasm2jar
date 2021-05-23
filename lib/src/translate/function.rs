@@ -1,4 +1,4 @@
-use super::{BranchCond, CodeBuilderExts, Error, Settings};
+use super::{BranchCond, CodeBuilderExts, Error, Settings, UtilityClass, UtilityMethod};
 use crate::jvm::{
     BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
     MethodDescriptor, OffsetVec, OrdComparison, RefType, Width,
@@ -20,6 +20,9 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
 
     /// Translation settings
     settings: &'b Settings,
+
+    /// Utilities
+    utilities: &'b mut UtilityClass,
 
     /// Code builder
     jvm_code: &'b mut B,
@@ -51,6 +54,7 @@ where
     pub fn new(
         function_typ: FunctionType,
         settings: &'b Settings,
+        utilities: &'b mut UtilityClass,
         jvm_code: &'b mut B,
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<R>,
@@ -66,6 +70,7 @@ where
         Ok(FunctionTranslator {
             function_typ,
             settings,
+            utilities,
             jvm_code,
             jvm_locals,
             wasm_validator,
@@ -190,7 +195,12 @@ where
 
         match operator {
             // Control Instructions
-            Operator::Unreachable => todo!(),
+            Operator::Unreachable => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::Unreachable, self.jvm_code)?;
+                self.jvm_code
+                    .push_branch_instruction(BranchInstruction::AThrow)?;
+            }
             Operator::Nop => self.jvm_code.push_instruction(Instruction::Nop)?,
             Operator::Block { ty } => self.visit_block(ty)?,
             Operator::Loop { ty } => self.visit_loop(ty)?,
@@ -421,8 +431,8 @@ where
             Operator::I32Mul => self.jvm_code.push_instruction(IMul)?,
             Operator::I32DivS => {
                 if self.settings.trap_integer_division_overflow {
-                    // TODO: if we're dividing i32.min_value by -1, throw an exception
-                    self.jvm_code.push_instruction(IDiv)?;
+                    self.utilities
+                        .invoke_utility(UtilityMethod::I32DivS, self.jvm_code)?;
                 } else {
                     self.jvm_code.push_instruction(IDiv)?;
                 }
@@ -462,8 +472,8 @@ where
             Operator::I64Mul => self.jvm_code.push_instruction(LMul)?,
             Operator::I64DivS => {
                 if self.settings.trap_integer_division_overflow {
-                    // TODO: if we're dividing i64.min_value by -1, throw an exception
-                    self.jvm_code.push_instruction(LDiv)?;
+                    self.utilities
+                        .invoke_utility(UtilityMethod::I64DivS, self.jvm_code)?;
                 } else {
                     self.jvm_code.push_instruction(LDiv)?;
                 }

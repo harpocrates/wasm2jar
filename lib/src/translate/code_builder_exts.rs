@@ -45,6 +45,17 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         Ok(())
     }
 
+    /// Push a constant string to the stack
+    fn const_string(&mut self, string: &'static str) -> Result<(), Error> {
+        let str_idx = {
+            let mut constants = self.constants();
+            let utf8_idx = constants.get_utf8(string)?;
+            constants.get_string(utf8_idx)?
+        };
+        self.push_instruction(Instruction::Ldc(str_idx.into()))?;
+        Ok(())
+    }
+
     /// Get a local at a particular offset
     fn get_local(&mut self, offset: u16, field_type: &FieldType) -> Result<(), Error> {
         let insn = match *field_type {
@@ -344,6 +355,63 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         };
 
         self.push_instruction(Instruction::Invoke(invoke_typ, method_ref))
+    }
+
+    /// Get/put a field
+    fn access_field(
+        &mut self,
+        class_name: impl Into<Cow<'static, str>>,
+        field_name: impl Into<Cow<'static, str>>,
+        is_read: bool, // else is write
+    ) -> Result<(), Error> {
+        let class_name = class_name.into();
+        let field_name = field_name.into();
+
+        // Query the class graph for the descriptor
+        let (is_static, descriptor): (bool, FieldType) = {
+            let class_graph = self.class_graph();
+            class_graph
+                .classes
+                .get(&class_name)
+                .ok_or_else(|| Error::MissingClass(class_name.to_string()))?
+                .fields
+                .get(&field_name)
+                .ok_or_else(|| Error::MissingMember(field_name.to_string()))?
+                .clone()
+        };
+
+        self.access_field_explicit(is_static, is_read, class_name, field_name, &descriptor)
+    }
+
+    /// Get a field explicitly specifying the descriptor
+    fn access_field_explicit(
+        &mut self,
+        is_static: bool,
+        is_read: bool,
+        class_name: impl Into<Cow<'static, str>>,
+        field_name: impl Into<Cow<'static, str>>,
+        descriptor: &FieldType,
+    ) -> Result<(), Error> {
+        let class_name = class_name.into();
+        let field_name = field_name.into();
+        let descriptor = descriptor.render();
+
+        let field_ref = {
+            let mut constants = self.constants();
+            let class_utf8 = constants.get_utf8(class_name)?;
+            let class_idx = constants.get_class(class_utf8)?;
+            let field_utf8 = constants.get_utf8(field_name)?;
+            let desc_utf8 = constants.get_utf8(descriptor)?;
+            let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
+            constants.get_field_ref(class_idx, name_and_type_idx)?
+        };
+
+        self.push_instruction(match (is_static, is_read) {
+            (true, true) => Instruction::GetStatic(field_ref),
+            (true, false) => Instruction::PutStatic(field_ref),
+            (false, true) => Instruction::GetField(field_ref),
+            (false, false) => Instruction::PutField(field_ref),
+        })
     }
 
     /// Get a class index from a name

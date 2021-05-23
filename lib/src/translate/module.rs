@@ -1,4 +1,4 @@
-use super::{CodeBuilderExts, Error, FunctionTranslator, Settings};
+use super::{CodeBuilderExts, Error, FunctionTranslator, Settings, UtilityClass};
 use crate::jvm::{
     BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile, ClassGraph, CodeBuilder,
     FieldType, InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType,
@@ -20,6 +20,9 @@ pub struct ModuleTranslator<'a> {
     previous_parts: Vec<ClassBuilder>,
     current_part: ClassBuilder,
 
+    /// Utility class (just a carrier for whatever helper methods we may want)
+    utilities: UtilityClass,
+
     /// Populated when we visit exports
     exports: Vec<Export<'a>>,
 
@@ -34,6 +37,7 @@ impl<'a> ModuleTranslator<'a> {
 
         let mut class_graph = ClassGraph::new();
         class_graph.insert_lang_types();
+        class_graph.insert_error_types();
         let class_graph = Rc::new(RefCell::new(class_graph));
 
         let class = ClassBuilder::new(
@@ -45,6 +49,7 @@ impl<'a> ModuleTranslator<'a> {
             class_graph.clone(),
         )?;
         let current_part = Self::new_part(&settings, class_graph.clone(), 0)?;
+        let utilities = UtilityClass::new(&settings, class_graph.clone())?;
 
         Ok(ModuleTranslator {
             settings,
@@ -53,6 +58,7 @@ impl<'a> ModuleTranslator<'a> {
             class,
             previous_parts: vec![],
             current_part,
+            utilities,
             exports: vec![],
             current_func_idx: 0,
         })
@@ -75,7 +81,7 @@ impl<'a> ModuleTranslator<'a> {
         part_idx: usize,
     ) -> Result<ClassBuilder, Error> {
         let mut part = ClassBuilder::new(
-            ClassAccessFlags::PUBLIC,
+            ClassAccessFlags::SYNTHETIC,
             format!(
                 "{}${}{}",
                 settings.output_full_class_name, settings.part_short_class_name, part_idx
@@ -173,6 +179,7 @@ impl<'a> ModuleTranslator<'a> {
         let mut function_translator = FunctionTranslator::new(
             typ,
             &self.settings,
+            &mut self.utilities,
             &mut method_builder.code,
             function_body,
             validator,
@@ -295,6 +302,18 @@ impl<'a> ModuleTranslator<'a> {
             let outer_class_name = constants.get_utf8(&self.settings.output_full_class_name)?;
             let outer_class = constants.get_class(outer_class_name)?;
 
+            // Utilities inner class
+            let utilities_class_name = constants.get_utf8(self.utilities.class.class_name())?;
+            let utilities_class = constants.get_class(utilities_class_name)?;
+            let utilities_name = constants.get_utf8(self.settings.utilities_short_class_name)?;
+            inner_class_attrs.push(InnerClass {
+                inner_class: utilities_class,
+                outer_class,
+                inner_name: utilities_name,
+                access_flags: InnerClassAccessFlags::STATIC,
+            });
+
+            // Part inner classes
             for (part_idx, part) in parts.iter().enumerate() {
                 let inner_class_name = constants.get_utf8(part.class_name())?;
                 let inner_class = constants.get_class(inner_class_name)?;
@@ -314,7 +333,13 @@ impl<'a> ModuleTranslator<'a> {
         self.class.add_attribute(inner_classes)?;
 
         // Final results
-        let mut results = vec![(self.class.class_name().to_owned(), self.class.result())];
+        let mut results = vec![
+            (self.class.class_name().to_owned(), self.class.result()),
+            (
+                self.utilities.class.class_name().to_owned(),
+                self.utilities.class.result(),
+            ),
+        ];
         results.extend(
             parts
                 .into_iter()

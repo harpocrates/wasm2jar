@@ -244,6 +244,9 @@ impl ClassGraph {
                     },
                 );
             }
+            for name in vec!["MAX_VALUE", "MIN_VALUE"] {
+                java_lang_integer.add_field(true, name, FieldType::INT)
+            }
         }
 
         // java.lang.Float
@@ -279,6 +282,15 @@ impl ClassGraph {
                         return_type: Some(FieldType::FLOAT),
                     },
                 );
+            }
+            for name in vec![
+                "MAX_VALUE",
+                "MIN_VALUE",
+                "NaN",
+                "NEGATIVE_INFINITY",
+                "POSITIVE_INFINITY",
+            ] {
+                java_lang_float.add_field(true, name, FieldType::FLOAT)
             }
         }
 
@@ -344,6 +356,9 @@ impl ClassGraph {
                     },
                 );
             }
+            for name in vec!["MAX_VALUE", "MIN_VALUE"] {
+                java_lang_long.add_field(true, name, FieldType::LONG)
+            }
         }
 
         // java.lang.Double
@@ -380,6 +395,15 @@ impl ClassGraph {
                     },
                 );
             }
+            for name in vec![
+                "MAX_VALUE",
+                "MIN_VALUE",
+                "NaN",
+                "NEGATIVE_INFINITY",
+                "POSITIVE_INFINITY",
+            ] {
+                java_lang_double.add_field(true, name, FieldType::FLOAT)
+            }
         }
 
         // java.lang.Math
@@ -414,6 +438,105 @@ impl ClassGraph {
                 MethodDescriptor {
                     parameters: vec![FieldType::LONG],
                     return_type: Some(FieldType::INT),
+                },
+            );
+        }
+    }
+
+    /// Add standard exception/error types to the class graph
+    pub fn insert_error_types(&mut self) {
+        // java.lang.Throwable
+        {
+            let java_lang_throwable = self
+                .classes
+                .entry(Cow::Borrowed(RefType::THROWABLE_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+            java_lang_throwable.add_method(
+                false,
+                "<init>",
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    return_type: None,
+                },
+            );
+        }
+
+        // java.lang.Error
+        {
+            let java_lang_error = self
+                .classes
+                .entry(Cow::Borrowed(RefType::ERROR_NAME))
+                .or_insert(ClassData::new(RefType::THROWABLE_NAME, false));
+            java_lang_error.add_method(
+                false,
+                "<init>",
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    return_type: None,
+                },
+            );
+        }
+
+        // java.lang.AssertionError
+        {
+            let java_lang_assertionerror = self
+                .classes
+                .entry(Cow::Borrowed(RefType::ASSERTION_NAME))
+                .or_insert(ClassData::new(RefType::ERROR_NAME, false));
+            java_lang_assertionerror.add_method(
+                false,
+                "<init>",
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    return_type: None,
+                },
+            );
+        }
+
+        // java.lang.Exception
+        {
+            let java_lang_error = self
+                .classes
+                .entry(Cow::Borrowed(RefType::EXCEPTION_NAME))
+                .or_insert(ClassData::new(RefType::THROWABLE_NAME, false));
+            java_lang_error.add_method(
+                false,
+                "<init>",
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    return_type: None,
+                },
+            );
+        }
+
+        // java.lang.RuntimeException
+        {
+            let java_lang_error = self
+                .classes
+                .entry(Cow::Borrowed(RefType::RUNTIMEEXCEPTION_NAME))
+                .or_insert(ClassData::new(RefType::EXCEPTION_NAME, false));
+            java_lang_error.add_method(
+                false,
+                "<init>",
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    return_type: None,
+                },
+            );
+        }
+
+        // java.lang.ArithmeticException
+        {
+            let java_lang_error = self
+                .classes
+                .entry(Cow::Borrowed(RefType::ARITHMETIC_NAME))
+                .or_insert(ClassData::new(RefType::RUNTIMEEXCEPTION_NAME, false));
+            java_lang_error.add_method(
+                false,
+                "<init>",
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    return_type: None,
                 },
             );
         }

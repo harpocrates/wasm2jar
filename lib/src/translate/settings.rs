@@ -12,8 +12,8 @@ pub struct Settings {
     /// Function name prefix (eg. `func`)
     pub wasm_function_name_prefix: String,
 
-    /// Utilities class name (external for now, possibly generated in the future)
-    pub utilities_full_class_name: String,
+    /// Inner utilities class name
+    pub utilities_short_class_name: String,
 
     /// Inner part class name
     ///
@@ -59,6 +59,8 @@ pub struct Settings {
     pub renamer: AssertUnwindSafe<Box<dyn Renamer>>,
 }
 
+// TODO: add a method to validadte that the settings are all possible (eg. the names are valid in
+// the JVM)
 impl Settings {
     /// Supported WASM features
     pub const SUPPORTED_WASM_FEATURES: WasmFeatures = WasmFeatures {
@@ -75,7 +77,7 @@ impl Settings {
         memory64: false,
     };
 
-    pub fn new(output_full_class_name: String, utilities_full_class_name: String) -> Settings {
+    pub fn new(output_full_class_name: String) -> Settings {
         let mut wasm_features = Self::SUPPORTED_WASM_FEATURES;
         wasm_features.deterministic_only = false;
 
@@ -83,7 +85,7 @@ impl Settings {
             output_full_class_name,
             start_function_name: String::from("initialize"),
             wasm_function_name_prefix: String::from("func"),
-            utilities_full_class_name,
+            utilities_short_class_name: String::from("func"),
             part_short_class_name: String::from("Part"),
             funcref_array_table_field_name: String::from("funcref_tables"),
             externref_array_table_field_name: String::from("externref_tables"),

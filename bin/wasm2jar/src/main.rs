@@ -34,10 +34,7 @@ fn main() -> Result<(), translate::Error> {
         )
         .get_matches();
 
-    let settings = translate::Settings::new(
-        matches.value_of("class").unwrap().to_owned(),
-        String::from(""),
-    );
+    let settings = translate::Settings::new(matches.value_of("class").unwrap().to_owned());
 
     let wasm_file = matches.value_of("INPUT").unwrap();
     log::info!("Reading and translating '{}'", &wasm_file);

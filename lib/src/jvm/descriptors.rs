@@ -191,7 +191,12 @@ impl RefType {
 
     pub const CLONEABLE_NAME: &'static str = "java/lang/Cloneable";
     pub const SERIALIZABLE_NAME: &'static str = "java/io/Serializable";
+    pub const ERROR_NAME: &'static str = "java/lang/Error";
     pub const THROWABLE_NAME: &'static str = "java/lang/Throwable";
+    pub const EXCEPTION_NAME: &'static str = "java/lang/Exception";
+    pub const RUNTIMEEXCEPTION_NAME: &'static str = "java/lang/RuntimeException";
+    pub const ARITHMETIC_NAME: &'static str = "java/lang/ArithmeticException";
+    pub const ASSERTION_NAME: &'static str = "java/lang/AssertionError";
     pub const CHARSEQUENCE_NAME: &'static str = "java/lang/CharSequence";
     pub const NUMBER_NAME: &'static str = "java/lang/Number";
     pub const INTEGER_NAME: &'static str = "java/lang/Integer";
@@ -207,7 +212,13 @@ impl RefType {
     pub const METHOD_HANDLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_HANDLE_NAME));
     pub const METHOD_TYPE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_TYPE_NAME));
 
+    pub const ERROR_CLASS: RefType = Self::Object(Cow::Borrowed(Self::ERROR_NAME));
     pub const THROWABLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::THROWABLE_NAME));
+    pub const EXCEPTION_CLASS: RefType = Self::Object(Cow::Borrowed(Self::EXCEPTION_NAME));
+    pub const RUNTIMEEXCEPTION_CLASS: RefType =
+        Self::Object(Cow::Borrowed(Self::RUNTIMEEXCEPTION_NAME));
+    pub const ARITHMETIC_CLASS: RefType = Self::Object(Cow::Borrowed(Self::ARITHMETIC_NAME));
+    pub const ASSERTION_CLASS: RefType = Self::Object(Cow::Borrowed(Self::ASSERTION_NAME));
     pub const INTEGER_CLASS: RefType = Self::Object(Cow::Borrowed(Self::INTEGER_NAME));
     pub const FLOAT_CLASS: RefType = Self::Object(Cow::Borrowed(Self::FLOAT_NAME));
     pub const LONG_CLASS: RefType = Self::Object(Cow::Borrowed(Self::LONG_NAME));

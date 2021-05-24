@@ -53,6 +53,12 @@ pub struct Settings {
     /// while the `idiv` and `ldiv` instructions just return the overflowed value.
     pub trap_integer_division_overflow: bool,
 
+    /// Make absolute value bitwise on NaN
+    ///
+    /// This is an edge case. WASM dictates that `f32.abs` and `f64.abs` should negate event the
+    /// sign of NaN, contrary to the behaviour of Java's `Math.abs`.
+    pub bitwise_floating_abs: bool,
+
     /// Renaming strategy for exports
     ///
     /// TODO: remove `AssertUnwindSafe` after we weed out panics that make catching necessary
@@ -92,6 +98,7 @@ impl Settings {
             wasm_features,
             export_strategy: ExportStrategy::Members,
             trap_integer_division_overflow: true,
+            bitwise_floating_abs: true,
             renamer: AssertUnwindSafe(Box::new(JavaRenamer::new())),
         }
     }

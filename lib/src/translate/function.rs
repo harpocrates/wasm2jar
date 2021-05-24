@@ -161,7 +161,6 @@ where
         operator_offset: (Operator, usize),
         next_operator_offset: &mut Option<(Operator, usize)>,
     ) -> Result<(), Error> {
-        use crate::jvm::BranchInstruction::*;
         use crate::jvm::CompareMode::*;
         use crate::jvm::Instruction::*;
         use crate::jvm::ShiftType::*;
@@ -507,20 +506,22 @@ where
                 self.jvm_code.invoke(RefType::LONG_NAME, "rotateRight")?;
             }
 
-            // Note: we don't use `abs(F)F` because that does not flip the NaN bit
             Operator::F32Abs => {
-                self.jvm_code.push_instruction(F2D)?;
-                let desc = MethodDescriptor {
-                    parameters: vec![FieldType::DOUBLE],
-                    return_type: Some(FieldType::DOUBLE),
-                };
-                self.jvm_code.invoke_explicit(
-                    InvokeType::Static,
-                    RefType::MATH_NAME,
-                    "abs",
-                    &desc,
-                )?;
-                self.jvm_code.push_instruction(D2F)?;
+                if self.settings.bitwise_floating_abs {
+                    self.utilities
+                        .invoke_utility(UtilityMethod::F32Abs, self.jvm_code)?;
+                } else {
+                    let desc = MethodDescriptor {
+                        parameters: vec![FieldType::FLOAT],
+                        return_type: Some(FieldType::FLOAT),
+                    };
+                    self.jvm_code.invoke_explicit(
+                        InvokeType::Static,
+                        RefType::MATH_NAME,
+                        "abs",
+                        &desc,
+                    )?;
+                }
             }
             Operator::F32Neg => self.jvm_code.push_instruction(FNeg)?,
             Operator::F32Ceil => {
@@ -534,21 +535,8 @@ where
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Trunc => {
-                // TODO: move this to a utility method
-                let negative = self.jvm_code.fresh_label();
-                let end = self.jvm_code.fresh_label();
-                self.jvm_code.push_instruction(F2D)?;
-                self.jvm_code.push_instruction(Dup2)?;
-                self.jvm_code.push_instruction(DConst0)?;
-                self.jvm_code.push_instruction(DCmp(G))?;
-                self.jvm_code
-                    .push_branch_instruction(If(OrdComparison::LT, negative, ()))?;
-                self.jvm_code.invoke(RefType::MATH_NAME, "floor")?;
-                self.jvm_code.push_branch_instruction(Goto(end))?;
-                self.jvm_code.place_label(negative)?;
-                self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?;
-                self.jvm_code.place_label(end)?;
-                self.jvm_code.push_instruction(D2F)?;
+                self.utilities
+                    .invoke_utility(UtilityMethod::F32Trunc, self.jvm_code)?;
             }
             Operator::F32Nearest => {
                 self.jvm_code.push_instruction(F2D)?;
@@ -579,34 +567,28 @@ where
                 )?;
             }
             Operator::F64Abs => {
-                let desc = MethodDescriptor {
-                    parameters: vec![FieldType::DOUBLE],
-                    return_type: Some(FieldType::DOUBLE),
-                };
-                self.jvm_code.invoke_explicit(
-                    InvokeType::Static,
-                    RefType::MATH_NAME,
-                    "abs",
-                    &desc,
-                )?;
+                if self.settings.bitwise_floating_abs {
+                    self.utilities
+                        .invoke_utility(UtilityMethod::F64Abs, self.jvm_code)?;
+                } else {
+                    let desc = MethodDescriptor {
+                        parameters: vec![FieldType::DOUBLE],
+                        return_type: Some(FieldType::DOUBLE),
+                    };
+                    self.jvm_code.invoke_explicit(
+                        InvokeType::Static,
+                        RefType::MATH_NAME,
+                        "abs",
+                        &desc,
+                    )?;
+                }
             }
             Operator::F64Neg => self.jvm_code.push_instruction(DNeg)?,
             Operator::F64Ceil => self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?,
             Operator::F64Floor => self.jvm_code.invoke(RefType::MATH_NAME, "floor")?,
             Operator::F64Trunc => {
-                // TODO: move this to a utility method
-                let negative = self.jvm_code.fresh_label();
-                let end = self.jvm_code.fresh_label();
-                self.jvm_code.push_instruction(Dup2)?;
-                self.jvm_code.push_instruction(DConst0)?;
-                self.jvm_code.push_instruction(DCmp(G))?;
-                self.jvm_code
-                    .push_branch_instruction(If(OrdComparison::LT, negative, ()))?;
-                self.jvm_code.invoke(RefType::MATH_NAME, "floor")?;
-                self.jvm_code.push_branch_instruction(Goto(end))?;
-                self.jvm_code.place_label(negative)?;
-                self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?;
-                self.jvm_code.place_label(end)?;
+                self.utilities
+                    .invoke_utility(UtilityMethod::F64Trunc, self.jvm_code)?;
             }
             Operator::F64Nearest => self.jvm_code.invoke(RefType::MATH_NAME, "rint")?,
             Operator::F64Sqrt => self.jvm_code.invoke(RefType::MATH_NAME, "sqrt")?,
@@ -630,66 +612,63 @@ where
             }
 
             Operator::I32WrapI64 => self.jvm_code.push_instruction(L2I)?,
-            Operator::I32TruncF32S => todo!("utility method"),
-            Operator::I32TruncF32U => todo!(),
-            Operator::I32TruncF64S => todo!("utility method"),
-            Operator::I32TruncF64U => todo!(),
+            Operator::I32TruncF32S => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::I32TruncF32S, self.jvm_code)?;
+            }
+            Operator::I32TruncF32U => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::I32TruncF32U, self.jvm_code)?;
+            }
+            Operator::I32TruncF64S => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::I32TruncF64S, self.jvm_code)?;
+            }
+            Operator::I32TruncF64U => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::I32TruncF64U, self.jvm_code)?;
+            }
             Operator::I64ExtendI32S => self.jvm_code.push_instruction(I2L)?,
             Operator::I64ExtendI32U => {
-                // TODO: move this to a utility method
-                self.jvm_code.push_instruction(I2L)?;
-                self.jvm_code.const_long(0x0000_0000_ffff_ffff)?;
-                self.jvm_code.push_instruction(LAnd)?;
+                self.utilities
+                    .invoke_utility(UtilityMethod::I64ExtendI32U, self.jvm_code)?;
             }
-            Operator::I64TruncF32S => todo!("utility method"),
-            Operator::I64TruncF32U => todo!(),
-            Operator::I64TruncF64S => todo!("utility method"),
-            Operator::I64TruncF64U => todo!(),
+            Operator::I64TruncF32S => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::I64TruncF32S, self.jvm_code)?;
+            }
+            Operator::I64TruncF32U => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::I64TruncF32U, self.jvm_code)?;
+            }
+            Operator::I64TruncF64S => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::I64TruncF64S, self.jvm_code)?;
+            }
+            Operator::I64TruncF64U => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::I64TruncF64U, self.jvm_code)?;
+            }
             Operator::F32ConvertI32S => self.jvm_code.push_instruction(I2F)?,
             Operator::F32ConvertI32U => {
-                // TODO: move this to a utility method
-                self.jvm_code.push_instruction(I2L)?;
-                self.jvm_code.const_long(0x0000_0000_ffff_ffff)?;
-                self.jvm_code.push_instruction(LAnd)?;
-                self.jvm_code.push_instruction(L2F)?;
+                self.utilities
+                    .invoke_utility(UtilityMethod::F32ConvertI32U, self.jvm_code)?;
             }
             Operator::F32ConvertI64S => self.jvm_code.push_instruction(L2F)?,
-            Operator::F32ConvertI64U => todo!(),
+            Operator::F32ConvertI64U => {
+                self.utilities
+                    .invoke_utility(UtilityMethod::F32ConvertI64U, self.jvm_code)?;
+            }
             Operator::F32DemoteF64 => self.jvm_code.push_instruction(D2F)?,
             Operator::F64ConvertI32S => self.jvm_code.push_instruction(I2D)?,
             Operator::F64ConvertI32U => {
-                // TODO: move this to a utility method
-                self.jvm_code.push_instruction(I2L)?;
-                self.jvm_code.const_long(0x0000_0000_ffff_ffff)?;
-                self.jvm_code.push_instruction(LAnd)?;
-                self.jvm_code.push_instruction(L2D)?;
+                self.utilities
+                    .invoke_utility(UtilityMethod::F64ConvertI32U, self.jvm_code)?;
             }
             Operator::F64ConvertI64S => self.jvm_code.push_instruction(L2D)?,
             Operator::F64ConvertI64U => {
-                // TODO: move this to a utility method
-                let first_bit_one = self.jvm_code.fresh_label();
-                let end = self.jvm_code.fresh_label();
-                self.jvm_code.push_instruction(Dup2)?;
-                self.jvm_code.push_instruction(LConst0)?;
-                self.jvm_code.push_instruction(LCmp)?;
-                self.jvm_code
-                    .push_branch_instruction(If(OrdComparison::LT, first_bit_one, ()))?;
-                self.jvm_code.push_instruction(L2D)?;
-                self.jvm_code.push_branch_instruction(Goto(end))?;
-                self.jvm_code.place_label(first_bit_one)?;
-                self.jvm_code.push_instruction(Dup2)?;
-                self.jvm_code.push_instruction(IConst1)?;
-                self.jvm_code.push_instruction(LSh(LogicalRight))?;
-                self.jvm_code.push_instruction(Dup2X2)?;
-                self.jvm_code.push_instruction(Pop2)?;
-                self.jvm_code.push_instruction(LConst1)?;
-                self.jvm_code.push_instruction(LAnd)?;
-                self.jvm_code.push_instruction(LOr)?;
-                self.jvm_code.push_instruction(L2D)?;
-                self.jvm_code.push_instruction(IConst2)?;
-                self.jvm_code.push_instruction(I2D)?;
-                self.jvm_code.push_instruction(DMul)?;
-                self.jvm_code.place_label(end)?;
+                self.utilities
+                    .invoke_utility(UtilityMethod::F64ConvertI64U, self.jvm_code)?;
             }
             Operator::F64PromoteF32 => self.jvm_code.push_instruction(F2D)?,
 
@@ -724,13 +703,21 @@ where
             }
 
             Operator::I32TruncSatF32S => self.jvm_code.push_instruction(F2I)?,
-            Operator::I32TruncSatF32U => todo!(),
+            Operator::I32TruncSatF32U => self
+                .utilities
+                .invoke_utility(UtilityMethod::I32TruncSatF32U, self.jvm_code)?,
             Operator::I32TruncSatF64S => self.jvm_code.push_instruction(D2I)?,
-            Operator::I32TruncSatF64U => todo!(),
+            Operator::I32TruncSatF64U => self
+                .utilities
+                .invoke_utility(UtilityMethod::I32TruncSatF64U, self.jvm_code)?,
             Operator::I64TruncSatF32S => self.jvm_code.push_instruction(F2L)?,
-            Operator::I64TruncSatF32U => todo!(),
+            Operator::I64TruncSatF32U => self
+                .utilities
+                .invoke_utility(UtilityMethod::I64TruncSatF32U, self.jvm_code)?,
             Operator::I64TruncSatF64S => self.jvm_code.push_instruction(D2L)?,
-            Operator::I64TruncSatF64U => todo!(),
+            Operator::I64TruncSatF64U => self
+                .utilities
+                .invoke_utility(UtilityMethod::I64TruncSatF64U, self.jvm_code)?,
 
             // Reference Instructions
             Operator::RefNull { ty } => {
@@ -888,6 +875,11 @@ where
             // TODO: review this
             return Ok(());
         };
+
+        // In the case of a single-arm `if`, we must place the else label
+        if let ControlFrame::If { else_block, .. } = &control_frame {
+            self.jvm_code.place_label(*else_block)?;
+        }
 
         use crate::jvm::Error::PlacingLabelBeforeReference;
 

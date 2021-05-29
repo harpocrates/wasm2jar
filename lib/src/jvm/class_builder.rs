@@ -44,7 +44,7 @@ impl ClassBuilder {
         let super_class_utf8 = constants.get_utf8(super_class)?;
 
         let class = ClassFile {
-            version: Version::JAVA8,
+            version: Version::JAVA11,
             constants: OffsetVec::new(),
             access_flags,
             this_class: constants.get_class(this_class_utf8)?,

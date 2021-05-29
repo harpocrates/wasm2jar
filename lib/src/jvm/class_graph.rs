@@ -541,6 +541,33 @@ impl ClassGraph {
             );
         }
     }
+
+    /// Add standard util types to the class graph
+    pub fn insert_util_types(&mut self) {
+        // java.util.Arrays
+        {
+            let java_util_arrays = self
+                .classes
+                .entry(Cow::Borrowed(RefType::ARRAYS_NAME))
+                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+            java_util_arrays.add_method(
+                true,
+                "copyOf",
+                MethodDescriptor {
+                    parameters: vec![FieldType::array(FieldType::OBJECT), FieldType::INT],
+                    return_type: Some(FieldType::array(FieldType::OBJECT)),
+                },
+            );
+            java_util_arrays.add_method(
+                true,
+                "fill",
+                MethodDescriptor {
+                    parameters: vec![FieldType::array(FieldType::OBJECT), FieldType::OBJECT],
+                    return_type: None,
+                },
+            );
+        }
+    }
 }
 
 // TODO: should we track subclasses?

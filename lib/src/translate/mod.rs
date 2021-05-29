@@ -13,3 +13,89 @@ pub use module::*;
 pub use renamer::*;
 pub use settings::*;
 pub use utility::*;
+
+use crate::wasm::{StackType, TableType};
+use wasmparser::{ElementItem, ElementKind, FuncType, InitExpr, ResizableLimits};
+
+/// Visibility of different importable/exportable entities in the WASM module
+#[derive(Debug)]
+pub struct MemberOrigin {
+    /// If imported, which module is it imported from?
+    imported: Option<Option<String>>,
+
+    /// Is it exported?
+    exported: bool,
+}
+
+impl MemberOrigin {
+    /// A member is internal if it is not imported or exported
+    pub fn is_internal(&self) -> bool {
+        !self.exported && self.imported.is_none()
+    }
+}
+
+/// WASM table
+///
+/// Internal tables are represented as fields on the module that have array types. Since tables
+/// types are constrained, we have only two cases to handle:
+///
+///   * Function reference tables have type `[Ljava/lang/invoke/MethodHandle;`
+///   * External reference tables have type `[Ljava/lang/Object;`
+///
+/// External (imported or exported) tables require an extra layer of indirected. They are more
+/// complicated because they can be altered (even resized) from the outside or be aliased with
+/// different names (an imported table can be re-exported under a different name).
+#[derive(Debug)]
+pub struct Table {
+    /// Where is the table defined?
+    origin: MemberOrigin,
+
+    /// Name of the method in the class (if exported, this matches the export name)
+    field_name: String,
+
+    /// Table type
+    table_type: TableType,
+
+    /// Table limits
+    limits: ResizableLimits,
+}
+
+pub struct Global<'a> {
+    /// Where is the table defined?
+    origin: MemberOrigin,
+
+    /// Name of the method in the class (if exported, this matches the export name)
+    field_name: String,
+
+    /// Global type
+    global_type: StackType,
+
+    /// Is the global mutable?
+    mutable: bool,
+
+    /// Initial value
+    initial: Option<InitExpr<'a>>,
+}
+
+pub struct Element<'a> {
+    /// Type of element section
+    kind: ElementKind<'a>,
+
+    /// Element type
+    element_type: TableType,
+
+    /// Entries in the element
+    items: Vec<ElementItem>,
+}
+
+/// WASM functions are represented as methods
+pub struct Function {
+    /// Where is the function defined?
+    origin: MemberOrigin,
+
+    /// Name of the method in the class
+    method_name: String,
+
+    /// Function type
+    func_type: FuncType,
+}

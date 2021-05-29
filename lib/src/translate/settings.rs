@@ -91,7 +91,7 @@ impl Settings {
             output_full_class_name,
             start_function_name: String::from("initialize"),
             wasm_function_name_prefix: String::from("func"),
-            utilities_short_class_name: String::from("func"),
+            utilities_short_class_name: String::from("Utils"),
             part_short_class_name: String::from("Part"),
             funcref_array_table_field_name: String::from("funcref_tables"),
             externref_array_table_field_name: String::from("externref_tables"),

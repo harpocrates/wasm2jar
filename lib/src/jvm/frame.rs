@@ -1009,6 +1009,7 @@ fn interpret_instruction(
                 Object(RefType::Array(_)) => (),
                 _ => return Err(VerifierErrorKind::InvalidType),
             }
+            stack.push(Integer);
         }
 
         CheckCast(target_cls_idx) => {

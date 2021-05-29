@@ -362,7 +362,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         &mut self,
         class_name: impl Into<Cow<'static, str>>,
         field_name: impl Into<Cow<'static, str>>,
-        is_read: bool, // else is write
+        access_mode: AccessMode,
     ) -> Result<(), Error> {
         let class_name = class_name.into();
         let field_name = field_name.into();
@@ -380,14 +380,14 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
                 .clone()
         };
 
-        self.access_field_explicit(is_static, is_read, class_name, field_name, &descriptor)
+        self.access_field_explicit(is_static, access_mode, class_name, field_name, &descriptor)
     }
 
     /// Get a field explicitly specifying the descriptor
     fn access_field_explicit(
         &mut self,
         is_static: bool,
-        is_read: bool,
+        access_mode: AccessMode,
         class_name: impl Into<Cow<'static, str>>,
         field_name: impl Into<Cow<'static, str>>,
         descriptor: &FieldType,
@@ -406,12 +406,18 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
             constants.get_field_ref(class_idx, name_and_type_idx)?
         };
 
-        self.push_instruction(match (is_static, is_read) {
-            (true, true) => Instruction::GetStatic(field_ref),
-            (true, false) => Instruction::PutStatic(field_ref),
-            (false, true) => Instruction::GetField(field_ref),
-            (false, false) => Instruction::PutField(field_ref),
+        self.push_instruction(match (is_static, access_mode) {
+            (true, AccessMode::Read) => Instruction::GetStatic(field_ref),
+            (true, AccessMode::Write) => Instruction::PutStatic(field_ref),
+            (false, AccessMode::Read) => Instruction::GetField(field_ref),
+            (false, AccessMode::Write) => Instruction::PutField(field_ref),
         })
+    }
+
+    /// Construct a new array of the given type
+    fn new_ref_array(&mut self, elem_type: &RefType) -> Result<(), Error> {
+        let class_idx = self.get_class_idx(elem_type)?;
+        self.push_instruction(Instruction::ANewArray(class_idx))
     }
 
     /// Get a class index from a name
@@ -459,4 +465,9 @@ impl BranchCond {
             BranchCond::IfNull(eq) => BranchInstruction::IfNull(*eq, jump_lbl, fallthrough_lbl),
         }
     }
+}
+
+pub enum AccessMode {
+    Read,
+    Write,
 }

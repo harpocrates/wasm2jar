@@ -3,6 +3,9 @@ use std::collections::HashSet;
 pub trait Renamer {
     /// Rename a function's unqualified name
     fn rename_function(&mut self, name: &str) -> String;
+
+    /// Rename a table's unqualified name
+    fn rename_table(&mut self, name: &str) -> String;
 }
 
 /// Doesn't rename anything
@@ -10,6 +13,10 @@ pub struct IdentityRenamer;
 
 impl Renamer for IdentityRenamer {
     fn rename_function(&mut self, name: &str) -> String {
+        name.to_owned()
+    }
+
+    fn rename_table(&mut self, name: &str) -> String {
         name.to_owned()
     }
 }
@@ -88,10 +95,8 @@ impl JavaRenamer {
         "record",
         "sealed",
     ];
-}
 
-impl Renamer for JavaRenamer {
-    fn rename_function(&mut self, name: &str) -> String {
+    fn rename(&mut self, name: &str) -> String {
         let mut new_name = String::new();
         for c in name.to_owned().chars() {
             match c {
@@ -112,5 +117,15 @@ impl Renamer for JavaRenamer {
         }
 
         new_name
+    }
+}
+
+impl Renamer for JavaRenamer {
+    fn rename_function(&mut self, name: &str) -> String {
+        self.rename(name)
+    }
+
+    fn rename_table(&mut self, name: &str) -> String {
+        self.rename(name)
     }
 }

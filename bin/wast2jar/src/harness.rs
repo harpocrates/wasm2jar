@@ -288,6 +288,32 @@ impl<'a> TestHarness<'a> {
                 harness.close_curly_block()?;
             }
 
+            WastDirective::Invoke(invoke) => {
+                let span_str = self.pretty_span(invoke.span);
+
+                let harness = self.get_java_writer()?;
+                harness.newline()?;
+                harness.inline_code("try")?;
+                harness.open_curly_block()?;
+
+                Self::java_invoke(&invoke, harness)?;
+                harness.inline_code(";")?;
+                harness.newline()?;
+
+                harness.close_curly_block()?;
+                harness.inline_code("catch (Throwable e)")?;
+                harness.open_curly_block()?;
+                harness
+                    .inline_code_fmt(format_args!("{} = true;", JavaHarness::FAILURE_VAR_NAME))?;
+                harness.newline()?;
+                harness.inline_code_fmt(format_args!(
+                    "System.out.println(\"Unexpected error at {}: \" + e.toString());",
+                    &span_str
+                ))?;
+                harness.newline()?;
+                harness.close_curly_block()?;
+            }
+
             _ => todo!(),
         }
 
@@ -543,6 +569,9 @@ impl<'a> TestHarness<'a> {
                 }
             }
             Instruction::RefNull(_) => java_writer.inline_code("null"),
+            Instruction::RefExtern(idx) => {
+                java_writer.inline_code_fmt(format_args!("java.lang.Integer.valueOf({})", idx))
+            }
             other => panic!("Unsupported WAST expression instruction {:?}", other),
         }
     }
@@ -561,7 +590,9 @@ impl<'a> TestHarness<'a> {
             wast::AssertExpression::I64(_) => ("long", "Long", ".longValue()"),
             wast::AssertExpression::F32(_) => ("float", "Float", ".floatValue()"),
             wast::AssertExpression::F64(_) => ("double", "Double", ".doubleValue()"),
-            wast::AssertExpression::RefNull(_) => ("Object", "Object", ""),
+            wast::AssertExpression::RefNull(_) | wast::AssertExpression::RefExtern(_) => {
+                ("Object", "Object", "")
+            }
             _ => unimplemented!(),
         }
     }
@@ -621,6 +652,11 @@ impl<'a> TestHarness<'a> {
             AssertExpression::RefNull(_) => {
                 java_writer.inline_code("null == ")?;
                 Ok("")
+            }
+            AssertExpression::RefExtern(idx) => {
+                java_writer
+                    .inline_code_fmt(format_args!("java.lang.Integer.valueOf({}).equals(", idx))?;
+                Ok(")")
             }
             _ => todo!(),
         }

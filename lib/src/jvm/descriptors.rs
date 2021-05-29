@@ -204,6 +204,7 @@ impl RefType {
     pub const LONG_NAME: &'static str = "java/lang/Long";
     pub const DOUBLE_NAME: &'static str = "java/lang/Double";
     pub const MATH_NAME: &'static str = "java/lang/Math";
+    pub const ARRAYS_NAME: &'static str = "java/util/Arrays";
 
     pub const OBJECT_CLASS: RefType = Self::Object(Cow::Borrowed(Self::OBJECT_NAME));
 

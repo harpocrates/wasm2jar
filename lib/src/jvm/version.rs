@@ -16,6 +16,18 @@ impl Version {
         minor_version: 0,
         major_version: 52,
     };
+
+    /// JVM class file version corresponding to Java SE 9
+    pub const JAVA9: Version = Version {
+        minor_version: 0,
+        major_version: 53,
+    };
+
+    /// JVM class file version corresponding to Java SE 11
+    pub const JAVA11: Version = Version {
+        minor_version: 0,
+        major_version: 55,
+    };
 }
 
 impl Serialize for Version {

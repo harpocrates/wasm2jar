@@ -1,4 +1,4 @@
-use super::{CodeBuilderExts, Error, Settings};
+use super::{AccessMode, CodeBuilderExts, Error, Settings};
 use crate::jvm::{
     BranchInstruction, ClassAccessFlags, ClassBuilder, ClassGraph, CompareMode, FieldType,
     InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType, MethodAccessFlags,
@@ -360,7 +360,7 @@ impl UtilityClass {
 
         // Check if first argument is `Integer.MIN_VALUE`
         code.push_instruction(Instruction::ILoad(0))?;
-        code.access_field(RefType::INTEGER_NAME, "MIN_VALUE", true)?;
+        code.access_field(RefType::INTEGER_NAME, "MIN_VALUE", AccessMode::Read)?;
         code.push_branch_instruction(BranchInstruction::IfICmp(
             OrdComparison::NE,
             regular_div,
@@ -396,7 +396,7 @@ impl UtilityClass {
 
         // Check if first argument is `Long.MIN_VALUE`
         code.push_instruction(Instruction::LLoad(0))?;
-        code.access_field(RefType::LONG_NAME, "MIN_VALUE", true)?;
+        code.access_field(RefType::LONG_NAME, "MIN_VALUE", AccessMode::Read)?;
         code.push_instruction(Instruction::LCmp)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::NE, regular_div, ()))?;
 

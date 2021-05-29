@@ -1,4 +1,7 @@
-use super::{BranchCond, CodeBuilderExts, Error, Settings, UtilityClass, UtilityMethod};
+use super::{
+    AccessMode, BranchCond, CodeBuilderExts, Error, Global, Settings, Table, UtilityClass,
+    UtilityMethod,
+};
 use crate::jvm::{
     BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
     MethodDescriptor, OffsetVec, OrdComparison, RefType, Width,
@@ -26,6 +29,12 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
 
     /// Code builder
     jvm_code: &'b mut B,
+
+    /// Tables
+    wasm_tables: &'b [Table],
+
+    /// Globals
+    wasm_globals: &'b [Global<'a>],
 
     /// Local variables
     jvm_locals: LocalsLayout,
@@ -56,6 +65,8 @@ where
         settings: &'b Settings,
         utilities: &'b mut UtilityClass,
         jvm_code: &'b mut B,
+        wasm_tables: &'b [Table],
+        wasm_globals: &'b [Global<'a>],
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<R>,
     ) -> Result<FunctionTranslator<'a, 'b, B, R>, Error> {
@@ -73,6 +84,8 @@ where
             utilities,
             jvm_code,
             jvm_locals,
+            wasm_tables,
+            wasm_globals,
             wasm_validator,
             wasm_prev_operand_stack_height: 0,
             wasm_function,
@@ -236,16 +249,16 @@ where
                 self.jvm_code.dup()?;
                 self.jvm_code.set_local(off, field_type)?;
             }
-            Operator::GlobalGet { .. } => todo!(),
-            Operator::GlobalSet { .. } => todo!(),
+            Operator::GlobalGet { global_index } => self.visit_global_get(global_index)?,
+            Operator::GlobalSet { global_index } => self.visit_global_set(global_index)?,
 
             // Table instructions
-            Operator::TableGet { .. } => todo!(),
-            Operator::TableSet { .. } => todo!(),
+            Operator::TableGet { table } => self.visit_table_get(table)?,
+            Operator::TableSet { table } => self.visit_table_set(table)?,
             Operator::TableInit { .. } => todo!(),
             Operator::TableCopy { .. } => todo!(),
             Operator::TableGrow { .. } => todo!(),
-            Operator::TableSize { .. } => todo!(),
+            Operator::TableSize { table } => self.visit_table_size(table)?,
             Operator::TableFill { .. } => todo!(),
 
             // Memory Instructions
@@ -1348,6 +1361,148 @@ where
             .all(|(ty1, ty2)| *ty1 == ty2.field_type().into());
 
         assert!(types_match, "Stack does not match expected input types");
+    }
+
+    /// Visit a global get operator
+    fn visit_global_get(&mut self, global_index: u32) -> Result<(), Error> {
+        let global = &self.wasm_globals[global_index as usize];
+        if global.origin.is_internal() {
+            let this_off = self.jvm_locals.lookup_this()?.0;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code.access_field(
+                self.settings.output_full_class_name.clone(),
+                global.field_name.clone(),
+                AccessMode::Read,
+            )?;
+        } else {
+            todo!()
+        }
+
+        Ok(())
+    }
+
+    /// Visit a global set operator
+    fn visit_global_set(&mut self, global_index: u32) -> Result<(), Error> {
+        let global = &self.wasm_globals[global_index as usize];
+        let global_field_type = global.global_type.field_type();
+
+        // Stash the value being set in a local
+        let temp_index = self.jvm_locals.push_local(global_field_type.clone())?;
+        self.jvm_code.set_local(temp_index, &global_field_type)?;
+
+        if global.origin.is_internal() {
+            let this_off = self.jvm_locals.lookup_this()?.0;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code.get_local(temp_index, &global_field_type)?;
+            self.jvm_code.access_field(
+                self.settings.output_full_class_name.clone(),
+                global.field_name.clone(),
+                AccessMode::Write,
+            )?;
+        } else {
+            todo!()
+        }
+
+        self.jvm_code.kill_local(temp_index, global_field_type)?;
+        self.jvm_locals.pop_local()?;
+
+        Ok(())
+    }
+
+    /// Visit a table get operator
+    fn visit_table_get(&mut self, table: u32) -> Result<(), Error> {
+        let table = &self.wasm_tables[table as usize];
+
+        // Stash the index in a local
+        let temp_index = self.jvm_locals.push_local(FieldType::INT)?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(temp_index))?;
+
+        if table.origin.is_internal() {
+            let this_off = self.jvm_locals.lookup_this()?.0;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code.access_field(
+                self.settings.output_full_class_name.clone(),
+                table.field_name.clone(),
+                AccessMode::Read,
+            )?;
+            self.jvm_code
+                .push_instruction(Instruction::ILoad(temp_index))?;
+            self.jvm_code.push_instruction(Instruction::AALoad)?;
+        } else {
+            todo!()
+        }
+
+        self.jvm_code
+            .push_instruction(Instruction::IKill(temp_index))?;
+        self.jvm_locals.pop_local()?;
+
+        Ok(())
+    }
+
+    /// Visit a table set operator
+    fn visit_table_set(&mut self, table: u32) -> Result<(), Error> {
+        let table = &self.wasm_tables[table as usize];
+        let table_elem_type = table.table_type.field_type();
+
+        // Stash the index and element in locals
+        let temp_value = self.jvm_locals.push_local(table_elem_type.clone())?;
+        let temp_index = self.jvm_locals.push_local(FieldType::INT)?;
+        self.jvm_code
+            .push_instruction(Instruction::AStore(temp_value))?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(temp_index))?;
+
+        if table.origin.is_internal() {
+            let this_off = self.jvm_locals.lookup_this()?.0;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code.access_field(
+                self.settings.output_full_class_name.clone(),
+                table.field_name.clone(),
+                AccessMode::Read,
+            )?;
+            self.jvm_code
+                .push_instruction(Instruction::ILoad(temp_index))?;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(temp_value))?;
+            self.jvm_code.push_instruction(Instruction::AAStore)?;
+        } else {
+            todo!()
+        }
+
+        self.jvm_code
+            .push_instruction(Instruction::IKill(temp_index))?;
+        self.jvm_code
+            .push_instruction(Instruction::AKill(temp_value))?;
+        self.jvm_locals.pop_local()?;
+        self.jvm_locals.pop_local()?;
+
+        Ok(())
+    }
+
+    /// Visit a table size operator
+    fn visit_table_size(&mut self, table: u32) -> Result<(), Error> {
+        let table = &self.wasm_tables[table as usize];
+
+        if table.origin.is_internal() {
+            let this_off = self.jvm_locals.lookup_this()?.0;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code.access_field(
+                self.settings.output_full_class_name.clone(),
+                table.field_name.clone(),
+                AccessMode::Read,
+            )?;
+            self.jvm_code.push_instruction(Instruction::ArrayLength)?;
+        } else {
+            todo!()
+        }
+
+        Ok(())
     }
 
     // TODO: everywhere we use this, we should find a way to thread through the _actual_ offset

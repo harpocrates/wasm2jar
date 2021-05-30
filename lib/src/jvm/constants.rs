@@ -319,14 +319,14 @@ impl Serialize for ConstantsPool {
 impl ConstantsReader for ConstantsPool {
     fn lookup_constant_type(&self, index: ConstantIndex) -> Result<FieldType, VerifierErrorKind> {
         match self.get(index).ok() {
-            Some(Constant::Class(_)) => Ok(FieldType::Ref(RefType::CLASS_CLASS)),
-            Some(Constant::String(_)) => Ok(FieldType::Ref(RefType::STRING_CLASS)),
+            Some(Constant::Class(_)) => Ok(FieldType::Ref(RefType::CLASS)),
+            Some(Constant::String(_)) => Ok(FieldType::Ref(RefType::STRING)),
             Some(Constant::Integer(_)) => Ok(FieldType::INT),
             Some(Constant::Float(_)) => Ok(FieldType::FLOAT),
             Some(Constant::Long(_)) => Ok(FieldType::LONG),
             Some(Constant::Double(_)) => Ok(FieldType::DOUBLE),
-            Some(Constant::MethodHandle { .. }) => Ok(FieldType::Ref(RefType::METHOD_HANDLE_CLASS)),
-            Some(Constant::MethodType { .. }) => Ok(FieldType::Ref(RefType::METHOD_TYPE_CLASS)),
+            Some(Constant::MethodHandle { .. }) => Ok(FieldType::Ref(RefType::METHODHANDLE)),
+            Some(Constant::MethodType { .. }) => Ok(FieldType::Ref(RefType::METHODTYPE)),
             Some(other) => Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
             None => Err(VerifierErrorKind::MissingConstant(index)),
         }

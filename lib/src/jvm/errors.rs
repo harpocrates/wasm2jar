@@ -1,6 +1,6 @@
 use super::{
-    BranchInstruction, ClassConstantIndex, Constant, ConstantIndex, Frame, Instruction, Offset,
-    RefType, SynLabel, VerificationType,
+    BinaryName, BranchInstruction, ClassConstantIndex, Constant, ConstantIndex, Frame, Instruction,
+    Offset, RefType, SynLabel, UnqualifiedName, VerificationType,
 };
 
 #[derive(Debug)]
@@ -51,9 +51,9 @@ pub enum Error {
         Frame<ClassConstantIndex, u16>,
     ),
 
-    MissingClass(String),
-    MissingMember(String),
-    AmbiguousMethod(String, String),
+    MissingClass(BinaryName),
+    MissingMember(UnqualifiedName),
+    AmbiguousMethod(BinaryName, UnqualifiedName),
 }
 
 #[derive(Debug)]

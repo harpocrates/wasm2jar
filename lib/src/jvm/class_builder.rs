@@ -1,12 +1,11 @@
 use super::*;
 
-use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
 
 pub struct ClassBuilder {
     /// This class name
-    this_class: String,
+    this_class: BinaryName,
 
     /// Class file, but with `constants` left blank
     class: ClassFile,
@@ -22,10 +21,10 @@ impl ClassBuilder {
     /// Create a new class builder
     pub fn new(
         access_flags: ClassAccessFlags,
-        this_class: String,
-        super_class: String,
+        this_class: BinaryName,
+        super_class: BinaryName,
         is_interface: bool,
-        interfaces: Vec<String>,
+        interfaces: Vec<BinaryName>,
         class_graph: Rc<RefCell<ClassGraph>>,
     ) -> Result<ClassBuilder, Error> {
         let mut class_data = ClassData::new(super_class.clone(), is_interface);
@@ -35,13 +34,13 @@ impl ClassBuilder {
         class_graph
             .borrow_mut()
             .classes
-            .entry(Cow::Owned(this_class.clone()))
+            .entry(this_class.clone())
             .or_insert(class_data);
 
         // Construct a fresh constant pool
         let mut constants = ConstantsPool::new();
-        let this_class_utf8 = constants.get_utf8(&this_class)?;
-        let super_class_utf8 = constants.get_utf8(super_class)?;
+        let this_class_utf8 = constants.get_utf8(this_class.as_str())?;
+        let super_class_utf8 = constants.get_utf8(super_class.as_str())?;
 
         let class = ClassFile {
             version: Version::JAVA11,
@@ -52,7 +51,7 @@ impl ClassBuilder {
             interfaces: interfaces
                 .iter()
                 .map(|interface| {
-                    let interface_utf8 = constants.get_utf8(interface)?;
+                    let interface_utf8 = constants.get_utf8(interface.as_str())?;
                     constants.get_class(interface_utf8)
                 })
                 .collect::<Result<_, _>>()?,
@@ -92,10 +91,10 @@ impl ClassBuilder {
     pub fn add_field(
         &mut self,
         access_flags: FieldAccessFlags,
-        name: String,
+        name: UnqualifiedName,
         descriptor: String,
     ) -> Result<(), Error> {
-        let name_index = self.constants_pool.borrow_mut().get_utf8(&name)?;
+        let name_index = self.constants_pool.borrow_mut().get_utf8(name.as_str())?;
         let descriptor_index = self.constants_pool.borrow_mut().get_utf8(&descriptor)?;
         let descriptor = FieldType::parse(&descriptor).map_err(Error::IoError)?;
 
@@ -106,7 +105,7 @@ impl ClassBuilder {
             attributes: vec![],
         });
 
-        let class_str: &str = &self.this_class;
+        let class_str: &BinaryName = &self.this_class;
         self.class_graph
             .borrow_mut()
             .classes
@@ -125,11 +124,11 @@ impl ClassBuilder {
     pub fn add_method(
         &mut self,
         access_flags: MethodAccessFlags,
-        name: String,
+        name: UnqualifiedName,
         descriptor: String,
         code: Option<Code>,
     ) -> Result<(), Error> {
-        let name_index = self.constants_pool.borrow_mut().get_utf8(&name)?;
+        let name_index = self.constants_pool.borrow_mut().get_utf8(name.as_str())?;
         let descriptor_index = self.constants_pool.borrow_mut().get_utf8(&descriptor)?;
         let descriptor = MethodDescriptor::parse(&descriptor).map_err(Error::IoError)?;
         let mut attributes = vec![];
@@ -145,7 +144,7 @@ impl ClassBuilder {
             attributes,
         });
 
-        let class_str: &str = &self.this_class;
+        let class_str: &BinaryName = &self.this_class;
         self.class_graph
             .borrow_mut()
             .classes
@@ -163,11 +162,11 @@ impl ClassBuilder {
     pub fn start_method(
         &mut self,
         access_flags: MethodAccessFlags,
-        name: String,
+        name: UnqualifiedName,
         descriptor: MethodDescriptor,
     ) -> Result<MethodBuilder, Error> {
         let is_static = access_flags.contains(MethodAccessFlags::STATIC);
-        let class_str: &str = &self.this_class;
+        let class_str: &BinaryName = &self.this_class;
         let rendered_descriptor = descriptor.render();
         self.class_graph
             .borrow_mut()
@@ -179,10 +178,10 @@ impl ClassBuilder {
         let code = BytecodeBuilder::new(
             descriptor,
             !is_static,
-            &name == "<init>",
+            &name == &UnqualifiedName::INIT,
             self.class_graph.clone(),
             self.constants_pool.clone(),
-            RefType::object(self.this_class.clone()),
+            RefType::Object(self.this_class.clone()),
         );
 
         Ok(MethodBuilder {
@@ -194,7 +193,10 @@ impl ClassBuilder {
     }
 
     pub fn finish_method(&mut self, builder: MethodBuilder) -> Result<(), Error> {
-        let name_index = self.constants_pool.borrow_mut().get_utf8(&builder.name)?;
+        let name_index = self
+            .constants_pool
+            .borrow_mut()
+            .get_utf8(builder.name.as_str())?;
         let descriptor_index = self
             .constants_pool
             .borrow_mut()
@@ -217,14 +219,14 @@ impl ClassBuilder {
         self.constants_pool.borrow_mut()
     }
 
-    pub fn class_name(&self) -> &str {
+    pub fn class_name(&self) -> &BinaryName {
         &self.this_class
     }
 }
 
 pub struct MethodBuilder {
     /// This method name
-    name: String,
+    name: UnqualifiedName,
 
     /// Access flags
     access_flags: MethodAccessFlags,
@@ -247,8 +249,8 @@ fn sample_class() -> Result<(), Error> {
 
     let mut class_builder = ClassBuilder::new(
         ClassAccessFlags::PUBLIC,
-        String::from("me/alec/Point"),
-        String::from("java/lang/Object"),
+        BinaryName::from_string(String::from("me/alec/Point")).unwrap(),
+        BinaryName::from_string(String::from("java/lang/Object")).unwrap(),
         false,
         vec![],
         class_graph,
@@ -256,18 +258,18 @@ fn sample_class() -> Result<(), Error> {
 
     class_builder.add_field(
         FieldAccessFlags::PUBLIC,
-        String::from("x"),
+        UnqualifiedName::from_string(String::from("x")).unwrap(),
         String::from("I"),
     )?;
     class_builder.add_field(
         FieldAccessFlags::PUBLIC,
-        String::from("y"),
+        UnqualifiedName::from_string(String::from("y")).unwrap(),
         String::from("I"),
     )?;
 
     let mut method_builder = class_builder.start_method(
         MethodAccessFlags::PUBLIC,
-        String::from("<init>"),
+        UnqualifiedName::INIT,
         MethodDescriptor {
             parameters: vec![FieldType::INT, FieldType::INT],
             return_type: None,

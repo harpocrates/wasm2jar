@@ -20,8 +20,8 @@ impl StackType {
             StackType::I64 => FieldType::LONG,
             StackType::F32 => FieldType::FLOAT,
             StackType::F64 => FieldType::DOUBLE,
-            StackType::FuncRef => FieldType::Ref(RefType::METHOD_HANDLE_CLASS),
-            StackType::ExternRef => FieldType::Ref(RefType::OBJECT_CLASS),
+            StackType::FuncRef => FieldType::Ref(RefType::METHODHANDLE),
+            StackType::ExternRef => FieldType::Ref(RefType::OBJECT),
         }
     }
 
@@ -42,8 +42,8 @@ impl StackType {
 /// Mapping from general types into reference types
 pub const fn ref_type_from_general(wasm_type: Type) -> Result<RefType, BadType> {
     Ok(match wasm_type {
-        Type::FuncRef => RefType::METHOD_HANDLE_CLASS,
-        Type::ExternRef => RefType::OBJECT_CLASS,
+        Type::FuncRef => RefType::METHODHANDLE,
+        Type::ExternRef => RefType::OBJECT,
         _ => return Err(BadType::UnsupportedReferenceType(wasm_type)),
     })
 }
@@ -106,8 +106,8 @@ impl TableType {
     /// Convert a stack type into the corresponding JVM reference typ
     pub const fn ref_type(self) -> RefType {
         match self {
-            TableType::FuncRef => RefType::METHOD_HANDLE_CLASS,
-            TableType::ExternRef => RefType::OBJECT_CLASS,
+            TableType::FuncRef => RefType::METHODHANDLE,
+            TableType::ExternRef => RefType::OBJECT,
         }
     }
 

@@ -1,8 +1,8 @@
 use super::{AccessMode, CodeBuilderExts, Error, Settings};
 use crate::jvm::{
-    BranchInstruction, ClassAccessFlags, ClassBuilder, ClassGraph, CompareMode, FieldType,
-    InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType, MethodAccessFlags,
-    MethodDescriptor, OrdComparison, RefType, ShiftType,
+    BinaryName, BranchInstruction, ClassAccessFlags, ClassBuilder, ClassGraph, CompareMode,
+    FieldType, InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType,
+    MethodAccessFlags, MethodDescriptor, Name, OrdComparison, RefType, ShiftType, UnqualifiedName,
 };
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -102,32 +102,32 @@ pub enum UtilityMethod {
 }
 impl UtilityMethod {
     /// Get the method name
-    pub const fn name(&self) -> &'static str {
+    pub const fn name(&self) -> UnqualifiedName {
         match self {
-            UtilityMethod::I32DivS => "i32DivS",
-            UtilityMethod::I64DivS => "i64DivS",
-            UtilityMethod::F32Abs => "f32Abs",
-            UtilityMethod::F64Abs => "f64Abs",
-            UtilityMethod::F32Trunc => "f32Trunc",
-            UtilityMethod::F64Trunc => "f64Trunc",
-            UtilityMethod::Unreachable => "unreachable",
-            UtilityMethod::I32TruncF32S => "i32TruncF32S",
-            UtilityMethod::I32TruncF32U => "i32TruncF32U",
-            UtilityMethod::I32TruncF64S => "i32TruncF64S",
-            UtilityMethod::I32TruncF64U => "i32TruncF64U",
-            UtilityMethod::I64ExtendI32U => "i64ExtendI32U",
-            UtilityMethod::I64TruncF32S => "i64TruncF32S",
-            UtilityMethod::I64TruncF32U => "i64TruncF32U",
-            UtilityMethod::I64TruncF64S => "i64TruncF64S",
-            UtilityMethod::I64TruncF64U => "i64TruncF64U",
-            UtilityMethod::F32ConvertI32U => "f32ConvertI32U",
-            UtilityMethod::F32ConvertI64U => "f32ConvertI64U",
-            UtilityMethod::F64ConvertI32U => "f64ConvertI32U",
-            UtilityMethod::F64ConvertI64U => "f64ConvertI64U",
-            UtilityMethod::I32TruncSatF32U => "i32TruncSatF32U",
-            UtilityMethod::I32TruncSatF64U => "i32TruncSatF64U",
-            UtilityMethod::I64TruncSatF32U => "i64TruncSatF32U",
-            UtilityMethod::I64TruncSatF64U => "i64TruncSatF64U",
+            UtilityMethod::I32DivS => UnqualifiedName::I32DIVS,
+            UtilityMethod::I64DivS => UnqualifiedName::I64DIVS,
+            UtilityMethod::F32Abs => UnqualifiedName::F32ABS,
+            UtilityMethod::F64Abs => UnqualifiedName::F64ABS,
+            UtilityMethod::F32Trunc => UnqualifiedName::F32TRUNC,
+            UtilityMethod::F64Trunc => UnqualifiedName::F64TRUNC,
+            UtilityMethod::Unreachable => UnqualifiedName::UNREACHABLE,
+            UtilityMethod::I32TruncF32S => UnqualifiedName::I32TRUNCF32S,
+            UtilityMethod::I32TruncF32U => UnqualifiedName::I32TRUNCF32U,
+            UtilityMethod::I32TruncF64S => UnqualifiedName::I32TRUNCF64S,
+            UtilityMethod::I32TruncF64U => UnqualifiedName::I32TRUNCF64U,
+            UtilityMethod::I64ExtendI32U => UnqualifiedName::I64EXTENDI32U,
+            UtilityMethod::I64TruncF32S => UnqualifiedName::I64TRUNCF32S,
+            UtilityMethod::I64TruncF32U => UnqualifiedName::I64TRUNCF32U,
+            UtilityMethod::I64TruncF64S => UnqualifiedName::I64TRUNCF64S,
+            UtilityMethod::I64TruncF64U => UnqualifiedName::I64TRUNCF64U,
+            UtilityMethod::F32ConvertI32U => UnqualifiedName::F32CONVERTI32U,
+            UtilityMethod::F32ConvertI64U => UnqualifiedName::F32CONVERTI64U,
+            UtilityMethod::F64ConvertI32U => UnqualifiedName::F64CONVERTI32U,
+            UtilityMethod::F64ConvertI64U => UnqualifiedName::F64CONVERTI64U,
+            UtilityMethod::I32TruncSatF32U => UnqualifiedName::I32TRUNCSATF32U,
+            UtilityMethod::I32TruncSatF64U => UnqualifiedName::I32TRUNCSATF64U,
+            UtilityMethod::I64TruncSatF32U => UnqualifiedName::I64TRUNCSATF32U,
+            UtilityMethod::I64TruncSatF64U => UnqualifiedName::I64TRUNCSATF64U,
         }
     }
 
@@ -160,7 +160,7 @@ impl UtilityMethod {
             },
             UtilityMethod::Unreachable => MethodDescriptor {
                 parameters: vec![],
-                return_type: Some(FieldType::Ref(RefType::ASSERTION_CLASS)),
+                return_type: Some(FieldType::Ref(RefType::ASSERTIONERROR)),
             },
             UtilityMethod::I32TruncF32S => MethodDescriptor {
                 parameters: vec![FieldType::FLOAT],
@@ -247,13 +247,15 @@ impl UtilityClass {
         settings: &Settings,
         class_graph: Rc<RefCell<ClassGraph>>,
     ) -> Result<UtilityClass, Error> {
+        let class_name = format!(
+            "{}${}",
+            settings.output_full_class_name.as_str(),
+            settings.utilities_short_class_name.as_str()
+        );
         let mut class = ClassBuilder::new(
             ClassAccessFlags::SYNTHETIC,
-            format!(
-                "{}${}",
-                settings.output_full_class_name, settings.utilities_short_class_name
-            ),
-            RefType::OBJECT_NAME.to_string(),
+            BinaryName::from_string(class_name).map_err(Error::MalformedName)?,
+            BinaryName::OBJECT,
             false,
             vec![],
             class_graph.clone(),
@@ -262,11 +264,11 @@ impl UtilityClass {
         // Add the `InnerClasses` attribute
         let inner_classes: InnerClasses = {
             let mut constants = class.constants();
-            let outer_class_name = constants.get_utf8(&settings.output_full_class_name)?;
+            let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
-            let inner_class_name = constants.get_utf8(class.class_name())?;
+            let inner_class_name = constants.get_utf8(class.class_name().as_str())?;
             let inner_class = constants.get_class(inner_class_name)?;
-            let inner_name = constants.get_utf8(&settings.utilities_short_class_name)?;
+            let inner_name = constants.get_utf8(settings.utilities_short_class_name.as_str())?;
             let inner_class_attr = InnerClass {
                 inner_class,
                 outer_class,
@@ -290,12 +292,12 @@ impl UtilityClass {
         code: &mut B,
     ) -> Result<(), Error> {
         let _ = self.add_utility_method(method)?;
-        let class_name = self.class.class_name().to_owned();
+        let class_name = self.class.class_name();
         let method_name = method.name();
         code.invoke_explicit(
             InvokeType::Static,
             class_name,
-            method_name,
+            &method_name,
             &method.descriptor(),
         )?;
         Ok(())
@@ -308,11 +310,9 @@ impl UtilityClass {
         }
 
         let descriptor = method.descriptor();
-        let mut method_builder = self.class.start_method(
-            MethodAccessFlags::STATIC,
-            method.name().to_owned(),
-            descriptor,
-        )?;
+        let mut method_builder =
+            self.class
+                .start_method(MethodAccessFlags::STATIC, method.name(), descriptor)?;
         let code = &mut method_builder.code;
 
         match method {
@@ -360,18 +360,22 @@ impl UtilityClass {
 
         // Check if first argument is `Integer.MIN_VALUE`
         code.push_instruction(Instruction::ILoad(0))?;
-        code.access_field(RefType::INTEGER_NAME, "MIN_VALUE", AccessMode::Read)?;
+        code.access_field(
+            &BinaryName::INTEGER,
+            &UnqualifiedName::MINVALUE,
+            AccessMode::Read,
+        )?;
         code.push_branch_instruction(BranchInstruction::IfICmp(
             OrdComparison::NE,
             regular_div,
             (),
         ))?;
 
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("integer overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         // This is the usual path: where we aren't dividing `Integer.MIN_VALUE` by `-1`
@@ -396,15 +400,19 @@ impl UtilityClass {
 
         // Check if first argument is `Long.MIN_VALUE`
         code.push_instruction(Instruction::LLoad(0))?;
-        code.access_field(RefType::LONG_NAME, "MIN_VALUE", AccessMode::Read)?;
+        code.access_field(
+            &BinaryName::LONG,
+            &UnqualifiedName::MINVALUE,
+            AccessMode::Read,
+        )?;
         code.push_instruction(Instruction::LCmp)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::NE, regular_div, ()))?;
 
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("integer overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         // This is the usual path: where we aren't dividing `Long.MIN_VALUE` by `-1`
@@ -419,10 +427,10 @@ impl UtilityClass {
 
     fn generate_f32_abs<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
         code.push_instruction(Instruction::FLoad(0))?;
-        code.invoke(RefType::FLOAT_NAME, "floatToRawIntBits")?;
+        code.invoke(&BinaryName::FLOAT, &UnqualifiedName::FLOATTORAWINTBITS)?;
         code.const_int(0x7FFF_FFFF)?;
         code.push_instruction(Instruction::IAnd)?;
-        code.invoke(RefType::FLOAT_NAME, "intBitsToFloat")?;
+        code.invoke(&BinaryName::FLOAT, &UnqualifiedName::INTBITSTOFLOAT)?;
         code.push_branch_instruction(BranchInstruction::FReturn)?;
 
         Ok(())
@@ -430,10 +438,10 @@ impl UtilityClass {
 
     fn generate_f64_abs<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
         code.push_instruction(Instruction::DLoad(0))?;
-        code.invoke(RefType::DOUBLE_NAME, "doubleToRawLongBits")?;
+        code.invoke(&BinaryName::DOUBLE, &UnqualifiedName::DOUBLETORAWLONGBITS)?;
         code.const_long(0x7FFF_FFFF_FFFF_FFFF)?;
         code.push_instruction(Instruction::LAnd)?;
-        code.invoke(RefType::DOUBLE_NAME, "longBitsToDouble")?;
+        code.invoke(&BinaryName::DOUBLE, &UnqualifiedName::LONGBITSTODOUBLE)?;
         code.push_branch_instruction(BranchInstruction::DReturn)?;
 
         Ok(())
@@ -450,13 +458,13 @@ impl UtilityClass {
 
         // positive argument
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::LT, negative, ()))?;
-        code.invoke(RefType::MATH_NAME, "floor")?;
+        code.invoke(&BinaryName::MATH, &UnqualifiedName::FLOOR)?;
         code.push_instruction(Instruction::D2F)?;
         code.push_branch_instruction(BranchInstruction::FReturn)?;
 
         // negative argument
         code.place_label(negative)?;
-        code.invoke(RefType::MATH_NAME, "ceil")?;
+        code.invoke(&BinaryName::MATH, &UnqualifiedName::CEIL)?;
         code.push_instruction(Instruction::D2F)?;
         code.push_branch_instruction(BranchInstruction::FReturn)?;
 
@@ -473,23 +481,23 @@ impl UtilityClass {
         // positive argument
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::LT, negative, ()))?;
         code.push_instruction(Instruction::DLoad(0))?;
-        code.invoke(RefType::MATH_NAME, "floor")?;
+        code.invoke(&BinaryName::MATH, &UnqualifiedName::FLOOR)?;
         code.push_branch_instruction(BranchInstruction::DReturn)?;
 
         // negative argument
         code.place_label(negative)?;
         code.push_instruction(Instruction::DLoad(0))?;
-        code.invoke(RefType::MATH_NAME, "ceil")?;
+        code.invoke(&BinaryName::MATH, &UnqualifiedName::CEIL)?;
         code.push_branch_instruction(BranchInstruction::DReturn)?;
 
         Ok(())
     }
 
     fn generate_unreachable<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
-        let cls_idx = code.get_class_idx(&RefType::ASSERTION_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ASSERTIONERROR)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
-        code.invoke(RefType::ASSERTION_NAME, "<init>")?;
+        code.invoke(&BinaryName::ASSERTIONERROR, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
@@ -518,12 +526,12 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("float to int overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
@@ -558,12 +566,12 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("float to unsigned int overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
@@ -592,12 +600,12 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("double to int overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
@@ -632,12 +640,12 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("double to unsigned int overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
@@ -666,12 +674,12 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("float to long overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
@@ -722,12 +730,12 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("float to unsigned long overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
@@ -756,12 +764,12 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("double to long overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
@@ -812,12 +820,12 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETIC_CLASS)?;
+        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("double to unsigned long overflow")?;
-        code.invoke(RefType::ARITHMETIC_NAME, "<init>")?;
+        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())

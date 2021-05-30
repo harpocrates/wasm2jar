@@ -1,8 +1,8 @@
 use crate::jvm::{
-    BranchInstruction, ClassConstantIndex, CodeBuilder, Descriptor, EqComparison, Error, FieldType,
-    Instruction, InvokeType, MethodDescriptor, OrdComparison, RefType, Width,
+    BinaryName, BranchInstruction, ClassConstantIndex, CodeBuilder, Descriptor, EqComparison,
+    Error, FieldType, Instruction, InvokeType, MethodDescriptor, Name, OrdComparison, RefType,
+    UnqualifiedName, Width,
 };
-use std::borrow::Cow;
 use std::ops::Not;
 
 pub trait CodeBuilderExts: CodeBuilder<Error> {
@@ -267,8 +267,8 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// an `Error::AmbiguousMethod` will be returned).
     fn invoke(
         &mut self,
-        class_name: impl Into<Cow<'static, str>>,
-        method_name: impl Into<Cow<'static, str>>,
+        class_name: &BinaryName,
+        method_name: &UnqualifiedName,
     ) -> Result<(), Error> {
         let class_name = class_name.into();
         let method_name = method_name.into();
@@ -278,18 +278,20 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
             let class_graph = self.class_graph();
             let class = class_graph
                 .classes
-                .get(&class_name)
-                .ok_or_else(|| Error::MissingClass(class_name.to_string()))?;
+                .get(class_name)
+                .ok_or_else(|| Error::MissingClass(class_name.clone()))?;
             let is_interface = class.is_interface;
             let mut method_overloads = class
                 .methods
-                .get(&method_name)
-                .ok_or_else(|| Error::MissingMember(method_name.to_string()))?
+                .get(method_name)
+                .ok_or_else(|| Error::MissingMember(method_name.clone()))?
                 .iter()
                 .map(|(desc, is_static)| {
                     let typ = if *is_static {
                         InvokeType::Static
-                    } else if method_name == "<init>" || method_name == "<clinit>" {
+                    } else if method_name == &UnqualifiedName::INIT
+                        || method_name == &UnqualifiedName::CLINIT
+                    {
                         InvokeType::Special
                     } else if is_interface {
                         let n = desc.parameter_length(true) as u8;
@@ -312,14 +314,14 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
                     alts.push_str(&alt.render());
                 }
                 log::error!(
-                    "Ambiguous overloads for {}.{}: {}",
+                    "Ambiguous overloads for {:?}.{:?}: {}",
                     class_name,
                     method_name,
                     alts
                 );
                 return Err(Error::AmbiguousMethod(
-                    class_name.to_string(),
-                    method_name.to_string(),
+                    class_name.clone(),
+                    method_name.clone(),
                 ));
             }
         };
@@ -331,12 +333,10 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     fn invoke_explicit(
         &mut self,
         invoke_typ: InvokeType,
-        class_name: impl Into<Cow<'static, str>>,
-        method_name: impl Into<Cow<'static, str>>,
+        class_name: &BinaryName,
+        method_name: &UnqualifiedName,
         descriptor: &MethodDescriptor,
     ) -> Result<(), Error> {
-        let class_name = class_name.into();
-        let method_name = method_name.into();
         let descriptor = descriptor.render();
         let is_interface = if let InvokeType::Interface(_) = invoke_typ {
             true
@@ -346,9 +346,9 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
 
         let method_ref = {
             let mut constants = self.constants();
-            let class_utf8 = constants.get_utf8(class_name)?;
+            let class_utf8 = constants.get_utf8(class_name.as_str())?;
             let class_idx = constants.get_class(class_utf8)?;
-            let method_utf8 = constants.get_utf8(method_name)?;
+            let method_utf8 = constants.get_utf8(method_name.as_str())?;
             let desc_utf8 = constants.get_utf8(descriptor)?;
             let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
             constants.get_method_ref(class_idx, name_and_type_idx, is_interface)?
@@ -360,23 +360,20 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// Get/put a field
     fn access_field(
         &mut self,
-        class_name: impl Into<Cow<'static, str>>,
-        field_name: impl Into<Cow<'static, str>>,
+        class_name: &BinaryName,
+        field_name: &UnqualifiedName,
         access_mode: AccessMode,
     ) -> Result<(), Error> {
-        let class_name = class_name.into();
-        let field_name = field_name.into();
-
         // Query the class graph for the descriptor
         let (is_static, descriptor): (bool, FieldType) = {
             let class_graph = self.class_graph();
             class_graph
                 .classes
-                .get(&class_name)
-                .ok_or_else(|| Error::MissingClass(class_name.to_string()))?
+                .get(class_name)
+                .ok_or_else(|| Error::MissingClass(class_name.clone()))?
                 .fields
-                .get(&field_name)
-                .ok_or_else(|| Error::MissingMember(field_name.to_string()))?
+                .get(field_name)
+                .ok_or_else(|| Error::MissingMember(field_name.clone()))?
                 .clone()
         };
 
@@ -388,19 +385,17 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         &mut self,
         is_static: bool,
         access_mode: AccessMode,
-        class_name: impl Into<Cow<'static, str>>,
-        field_name: impl Into<Cow<'static, str>>,
+        class_name: &BinaryName,
+        field_name: &UnqualifiedName,
         descriptor: &FieldType,
     ) -> Result<(), Error> {
-        let class_name = class_name.into();
-        let field_name = field_name.into();
         let descriptor = descriptor.render();
 
         let field_ref = {
             let mut constants = self.constants();
-            let class_utf8 = constants.get_utf8(class_name)?;
+            let class_utf8 = constants.get_utf8(class_name.as_str())?;
             let class_idx = constants.get_class(class_utf8)?;
-            let field_utf8 = constants.get_utf8(field_name)?;
+            let field_utf8 = constants.get_utf8(field_name.as_str())?;
             let desc_utf8 = constants.get_utf8(descriptor)?;
             let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
             constants.get_field_ref(class_idx, name_and_type_idx)?

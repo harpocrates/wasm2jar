@@ -1,4 +1,4 @@
-use super::Width;
+use super::{BinaryName, Name, Width};
 use std::borrow::Cow;
 use std::io::{Error, ErrorKind, Result};
 use std::str::Chars;
@@ -100,7 +100,7 @@ impl Descriptor for BaseType {
 /// Reference type
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum RefType {
-    Object(Cow<'static, str>),
+    Object(BinaryName),
     Array(Box<FieldType>), // TODO: consider including dimension depth so as to avoid nested boxes
 }
 
@@ -109,7 +109,7 @@ impl Descriptor for RefType {
         match self {
             RefType::Object(class_name) => {
                 write_to.push('L');
-                write_to.push_str(class_name);
+                write_to.push_str(class_name.as_str());
                 write_to.push(';');
             }
             RefType::Array(field_type) => {
@@ -129,7 +129,9 @@ impl Descriptor for RefType {
                         Error::new(ErrorKind::UnexpectedEof, msg)
                     })?;
                     if c == ';' {
-                        return Ok(RefType::object(class_name));
+                        return BinaryName::from_string(class_name)
+                            .map_err(|msg| Error::new(ErrorKind::InvalidInput, msg))
+                            .map(RefType::Object);
                     } else {
                         class_name.push(c)
                     }
@@ -156,10 +158,6 @@ impl RefType {
         RefType::Array(Box::new(field_type))
     }
 
-    pub fn object(class_name: impl Into<Cow<'static, str>>) -> RefType {
-        RefType::Object(class_name.into())
-    }
-
     /// Render the type for a class info
     ///
     /// When making a `CONSTANT_Class_info`, reference types are almost always objects. However,
@@ -167,8 +165,10 @@ impl RefType {
     /// to an array type). See section 4.4.1 for more.
     pub fn render_class_info(&self) -> Cow<'static, str> {
         match self {
-            RefType::Object(Cow::Borrowed(object_desc)) => Cow::Borrowed(object_desc),
-            RefType::Object(Cow::Owned(object_desc)) => Cow::Owned(object_desc.clone()),
+            RefType::Object(obj) => match obj.as_cow() {
+                Cow::Borrowed(object_desc) => Cow::Borrowed(object_desc),
+                Cow::Owned(object_desc) => Cow::Owned(object_desc.clone()),
+            },
             array => Cow::Owned(array.render()),
         }
     }
@@ -178,52 +178,27 @@ impl RefType {
         if let Some('[') = descriptor.chars().next() {
             RefType::parse(&descriptor)
         } else {
-            Ok(RefType::object(descriptor.to_string()))
+            BinaryName::from_string(descriptor.to_string())
+                .map_err(|msg| Error::new(ErrorKind::InvalidInput, msg))
+                .map(RefType::Object)
         }
     }
 
-    pub const OBJECT_NAME: &'static str = "java/lang/Object";
-
-    pub const CLASS_NAME: &'static str = "java/lang/Class";
-    pub const STRING_NAME: &'static str = "java/lang/String";
-    pub const METHOD_HANDLE_NAME: &'static str = "java/lang/invoke/MethodHandle";
-    pub const METHOD_TYPE_NAME: &'static str = "java/lang/invoke/MethodType";
-
-    pub const CLONEABLE_NAME: &'static str = "java/lang/Cloneable";
-    pub const SERIALIZABLE_NAME: &'static str = "java/io/Serializable";
-    pub const ERROR_NAME: &'static str = "java/lang/Error";
-    pub const THROWABLE_NAME: &'static str = "java/lang/Throwable";
-    pub const EXCEPTION_NAME: &'static str = "java/lang/Exception";
-    pub const RUNTIMEEXCEPTION_NAME: &'static str = "java/lang/RuntimeException";
-    pub const ARITHMETIC_NAME: &'static str = "java/lang/ArithmeticException";
-    pub const ASSERTION_NAME: &'static str = "java/lang/AssertionError";
-    pub const CHARSEQUENCE_NAME: &'static str = "java/lang/CharSequence";
-    pub const NUMBER_NAME: &'static str = "java/lang/Number";
-    pub const INTEGER_NAME: &'static str = "java/lang/Integer";
-    pub const FLOAT_NAME: &'static str = "java/lang/Float";
-    pub const LONG_NAME: &'static str = "java/lang/Long";
-    pub const DOUBLE_NAME: &'static str = "java/lang/Double";
-    pub const MATH_NAME: &'static str = "java/lang/Math";
-    pub const ARRAYS_NAME: &'static str = "java/util/Arrays";
-
-    pub const OBJECT_CLASS: RefType = Self::Object(Cow::Borrowed(Self::OBJECT_NAME));
-
-    pub const CLASS_CLASS: RefType = Self::Object(Cow::Borrowed(Self::CLASS_NAME));
-    pub const STRING_CLASS: RefType = Self::Object(Cow::Borrowed(Self::STRING_NAME));
-    pub const METHOD_HANDLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_HANDLE_NAME));
-    pub const METHOD_TYPE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::METHOD_TYPE_NAME));
-
-    pub const ERROR_CLASS: RefType = Self::Object(Cow::Borrowed(Self::ERROR_NAME));
-    pub const THROWABLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::THROWABLE_NAME));
-    pub const EXCEPTION_CLASS: RefType = Self::Object(Cow::Borrowed(Self::EXCEPTION_NAME));
-    pub const RUNTIMEEXCEPTION_CLASS: RefType =
-        Self::Object(Cow::Borrowed(Self::RUNTIMEEXCEPTION_NAME));
-    pub const ARITHMETIC_CLASS: RefType = Self::Object(Cow::Borrowed(Self::ARITHMETIC_NAME));
-    pub const ASSERTION_CLASS: RefType = Self::Object(Cow::Borrowed(Self::ASSERTION_NAME));
-    pub const INTEGER_CLASS: RefType = Self::Object(Cow::Borrowed(Self::INTEGER_NAME));
-    pub const FLOAT_CLASS: RefType = Self::Object(Cow::Borrowed(Self::FLOAT_NAME));
-    pub const LONG_CLASS: RefType = Self::Object(Cow::Borrowed(Self::LONG_NAME));
-    pub const DOUBLE_CLASS: RefType = Self::Object(Cow::Borrowed(Self::DOUBLE_NAME));
+    pub const ARITHMETICEXCEPTION: RefType = Self::Object(BinaryName::ARITHMETICEXCEPTION);
+    pub const ASSERTIONERROR: RefType = Self::Object(BinaryName::ASSERTIONERROR);
+    pub const CLASS: RefType = Self::Object(BinaryName::CLASS);
+    pub const DOUBLE: RefType = Self::Object(BinaryName::DOUBLE);
+    pub const ERROR: RefType = Self::Object(BinaryName::ERROR);
+    pub const EXCEPTION: RefType = Self::Object(BinaryName::EXCEPTION);
+    pub const FLOAT: RefType = Self::Object(BinaryName::FLOAT);
+    pub const INTEGER: RefType = Self::Object(BinaryName::INTEGER);
+    pub const LONG: RefType = Self::Object(BinaryName::LONG);
+    pub const METHODHANDLE: RefType = Self::Object(BinaryName::METHODHANDLE);
+    pub const METHODTYPE: RefType = Self::Object(BinaryName::METHODTYPE);
+    pub const OBJECT: RefType = Self::Object(BinaryName::OBJECT);
+    pub const RUNTIMEEXCEPTION: RefType = Self::Object(BinaryName::RUNTIMEEXCEPTION);
+    pub const STRING: RefType = Self::Object(BinaryName::STRING);
+    pub const THROWABLE: RefType = Self::Object(BinaryName::THROWABLE);
 }
 
 /// Type of a class, instance, or local variable
@@ -251,14 +226,14 @@ impl FieldType {
     pub const SHORT: FieldType = FieldType::Base(BaseType::Short);
     pub const BYTE: FieldType = FieldType::Base(BaseType::Byte);
     pub const BOOLEAN: FieldType = FieldType::Base(BaseType::Boolean);
-    pub const OBJECT: FieldType = FieldType::Ref(RefType::OBJECT_CLASS);
+    pub const OBJECT: FieldType = FieldType::Ref(RefType::OBJECT);
 
     pub fn array(field_type: FieldType) -> FieldType {
         FieldType::Ref(RefType::array(field_type))
     }
 
-    pub fn object(class_name: impl Into<Cow<'static, str>>) -> FieldType {
-        FieldType::Ref(RefType::object(class_name))
+    pub const fn object(class_name: BinaryName) -> FieldType {
+        FieldType::Ref(RefType::Object(class_name))
     }
 }
 
@@ -646,28 +621,28 @@ mod test {
     #[test]
     fn field_types() {
         round_trip("I", FieldType::Base(BaseType::Int));
-        round_trip("Ljava/lang/Object;", FieldType::object("java/lang/Object"));
+        round_trip("Ljava/lang/Object;", FieldType::OBJECT);
         round_trip(
             "[[[D",
             FieldType::array(FieldType::array(FieldType::array(FieldType::DOUBLE))),
         );
         round_trip(
             "[Ljava/lang/String;",
-            FieldType::array(FieldType::object("java/lang/String")),
+            FieldType::array(FieldType::Ref(RefType::STRING)),
         );
     }
 
     #[test]
     fn method_descriptors() {
         round_trip(
-            "(IDLjava/lang/Thread;)Ljava/lang/Object;",
+            "(IDLjava/lang/Integer;)Ljava/lang/Object;",
             MethodDescriptor {
                 parameters: vec![
                     FieldType::INT,
                     FieldType::DOUBLE,
-                    FieldType::object("java/lang/Thread"),
+                    FieldType::Ref(RefType::INTEGER),
                 ],
-                return_type: Some(FieldType::object("java/lang/Object")),
+                return_type: Some(FieldType::OBJECT),
             },
         )
     }

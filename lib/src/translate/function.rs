@@ -3,13 +3,12 @@ use super::{
     UtilityMethod,
 };
 use crate::jvm::{
-    BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
-    MethodDescriptor, OffsetVec, OrdComparison, RefType, Width,
+    BinaryName, BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
+    MethodDescriptor, OffsetVec, OrdComparison, RefType, UnqualifiedName, Width,
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
 };
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
@@ -75,7 +74,7 @@ where
                 .inputs
                 .iter()
                 .map(|wasm_ty| wasm_ty.field_type()),
-            RefType::object(settings.output_full_class_name.clone()),
+            RefType::Object(settings.output_full_class_name.clone()),
         );
 
         Ok(FunctionTranslator {
@@ -309,25 +308,25 @@ where
             Operator::I32LtS => self.visit_cond(BranchCond::IfICmp(OrdComparison::LT), next_op)?,
             Operator::I32LtU => {
                 self.jvm_code
-                    .invoke(RefType::INTEGER_NAME, "compareUnsigned")?;
+                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::COMPAREUNSIGNED)?;
                 self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
             }
             Operator::I32GtS => self.visit_cond(BranchCond::IfICmp(OrdComparison::GT), next_op)?,
             Operator::I32GtU => {
                 self.jvm_code
-                    .invoke(RefType::INTEGER_NAME, "compareUnsigned")?;
+                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::COMPAREUNSIGNED)?;
                 self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
             }
             Operator::I32LeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::LE), next_op)?,
             Operator::I32LeU => {
                 self.jvm_code
-                    .invoke(RefType::INTEGER_NAME, "compareUnsigned")?;
+                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::COMPAREUNSIGNED)?;
                 self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
             }
             Operator::I32GeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::GE), next_op)?,
             Operator::I32GeU => {
                 self.jvm_code
-                    .invoke(RefType::INTEGER_NAME, "compareUnsigned")?;
+                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::COMPAREUNSIGNED)?;
                 self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
             }
 
@@ -400,7 +399,7 @@ where
             }
             Operator::I64LtU => {
                 self.jvm_code
-                    .invoke(RefType::LONG_NAME, "compareUnsigned")?;
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::COMPAREUNSIGNED)?;
                 self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
             }
             Operator::I64GtS => {
@@ -409,7 +408,7 @@ where
             }
             Operator::I64GtU => {
                 self.jvm_code
-                    .invoke(RefType::LONG_NAME, "compareUnsigned")?;
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::COMPAREUNSIGNED)?;
                 self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
             }
             Operator::I64LeS => {
@@ -418,7 +417,7 @@ where
             }
             Operator::I64LeU => {
                 self.jvm_code
-                    .invoke(RefType::LONG_NAME, "compareUnsigned")?;
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::COMPAREUNSIGNED)?;
                 self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
             }
             Operator::I64GeS => {
@@ -427,17 +426,20 @@ where
             }
             Operator::I64GeU => {
                 self.jvm_code
-                    .invoke(RefType::LONG_NAME, "compareUnsigned")?;
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::COMPAREUNSIGNED)?;
                 self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
             }
 
             Operator::I32Clz => self
                 .jvm_code
-                .invoke(RefType::INTEGER_NAME, "numberOfLeadingZeros")?,
-            Operator::I32Ctz => self
+                .invoke(&BinaryName::INTEGER, &UnqualifiedName::NUMBEROFLEADINGZEROS)?,
+            Operator::I32Ctz => self.jvm_code.invoke(
+                &BinaryName::INTEGER,
+                &UnqualifiedName::NUMBEROFTRAILINGZEROS,
+            )?,
+            Operator::I32Popcnt => self
                 .jvm_code
-                .invoke(RefType::INTEGER_NAME, "numberOfTrailingZeros")?,
-            Operator::I32Popcnt => self.jvm_code.invoke(RefType::INTEGER_NAME, "bitCount")?,
+                .invoke(&BinaryName::INTEGER, &UnqualifiedName::BITCOUNT)?,
             Operator::I32Add => self.jvm_code.push_instruction(IAdd)?,
             Operator::I32Sub => self.jvm_code.push_instruction(ISub)?,
             Operator::I32Mul => self.jvm_code.push_instruction(IMul)?,
@@ -451,32 +453,37 @@ where
             }
             Operator::I32DivU => self
                 .jvm_code
-                .invoke(RefType::INTEGER_NAME, "divideUnsigned")?,
+                .invoke(&BinaryName::INTEGER, &UnqualifiedName::DIVIDEUNSIGNED)?,
             Operator::I32RemS => self.jvm_code.push_instruction(IRem)?,
             Operator::I32RemU => self
                 .jvm_code
-                .invoke(RefType::INTEGER_NAME, "remainderUnsigned")?,
+                .invoke(&BinaryName::INTEGER, &UnqualifiedName::REMAINDERUNSIGNED)?,
             Operator::I32And => self.jvm_code.push_instruction(IAnd)?,
             Operator::I32Or => self.jvm_code.push_instruction(IOr)?,
             Operator::I32Xor => self.jvm_code.push_instruction(IXor)?,
             Operator::I32Shl => self.jvm_code.push_instruction(ISh(Left))?,
             Operator::I32ShrS => self.jvm_code.push_instruction(ISh(ArithmeticRight))?,
             Operator::I32ShrU => self.jvm_code.push_instruction(ISh(LogicalRight))?,
-            Operator::I32Rotl => self.jvm_code.invoke(RefType::INTEGER_NAME, "rotateLeft")?,
-            Operator::I32Rotr => self.jvm_code.invoke(RefType::INTEGER_NAME, "rotateRight")?,
+            Operator::I32Rotl => self
+                .jvm_code
+                .invoke(&BinaryName::INTEGER, &UnqualifiedName::ROTATELEFT)?,
+            Operator::I32Rotr => self
+                .jvm_code
+                .invoke(&BinaryName::INTEGER, &UnqualifiedName::ROTATERIGHT)?,
 
             Operator::I64Clz => {
                 self.jvm_code
-                    .invoke(RefType::LONG_NAME, "numberOfLeadingZeros")?;
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::NUMBEROFLEADINGZEROS)?;
                 self.jvm_code.push_instruction(I2L)?;
             }
             Operator::I64Ctz => {
                 self.jvm_code
-                    .invoke(RefType::LONG_NAME, "numberOfTrailingZeros")?;
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::NUMBEROFTRAILINGZEROS)?;
                 self.jvm_code.push_instruction(I2L)?;
             }
             Operator::I64Popcnt => {
-                self.jvm_code.invoke(RefType::LONG_NAME, "bitCount")?;
+                self.jvm_code
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::BITCOUNT)?;
                 self.jvm_code.push_instruction(I2L)?;
             }
             Operator::I64Add => self.jvm_code.push_instruction(LAdd)?,
@@ -491,10 +498,12 @@ where
                 }
             }
             Operator::I64RemS => self.jvm_code.push_instruction(LRem)?,
-            Operator::I64DivU => self.jvm_code.invoke(RefType::LONG_NAME, "divideUnsigned")?,
+            Operator::I64DivU => self
+                .jvm_code
+                .invoke(&BinaryName::LONG, &UnqualifiedName::DIVIDEUNSIGNED)?,
             Operator::I64RemU => self
                 .jvm_code
-                .invoke(RefType::LONG_NAME, "remainderUnsigned")?,
+                .invoke(&BinaryName::LONG, &UnqualifiedName::REMAINDERUNSIGNED)?,
             Operator::I64And => self.jvm_code.push_instruction(LAnd)?,
             Operator::I64Or => self.jvm_code.push_instruction(LOr)?,
             Operator::I64Xor => self.jvm_code.push_instruction(LXor)?,
@@ -512,11 +521,13 @@ where
             }
             Operator::I64Rotl => {
                 self.jvm_code.push_instruction(L2I)?;
-                self.jvm_code.invoke(RefType::LONG_NAME, "rotateLeft")?;
+                self.jvm_code
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::ROTATELEFT)?;
             }
             Operator::I64Rotr => {
                 self.jvm_code.push_instruction(L2I)?;
-                self.jvm_code.invoke(RefType::LONG_NAME, "rotateRight")?;
+                self.jvm_code
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::ROTATERIGHT)?;
             }
 
             Operator::F32Abs => {
@@ -530,8 +541,8 @@ where
                     };
                     self.jvm_code.invoke_explicit(
                         InvokeType::Static,
-                        RefType::MATH_NAME,
-                        "abs",
+                        &BinaryName::MATH,
+                        &UnqualifiedName::ABS,
                         &desc,
                     )?;
                 }
@@ -539,12 +550,14 @@ where
             Operator::F32Neg => self.jvm_code.push_instruction(FNeg)?,
             Operator::F32Ceil => {
                 self.jvm_code.push_instruction(F2D)?;
-                self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?;
+                self.jvm_code
+                    .invoke(&BinaryName::MATH, &UnqualifiedName::CEIL)?;
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Floor => {
                 self.jvm_code.push_instruction(F2D)?;
-                self.jvm_code.invoke(RefType::MATH_NAME, "floor")?;
+                self.jvm_code
+                    .invoke(&BinaryName::MATH, &UnqualifiedName::FLOOR)?;
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Trunc => {
@@ -553,20 +566,26 @@ where
             }
             Operator::F32Nearest => {
                 self.jvm_code.push_instruction(F2D)?;
-                self.jvm_code.invoke(RefType::MATH_NAME, "rint")?;
+                self.jvm_code
+                    .invoke(&BinaryName::MATH, &UnqualifiedName::RINT)?;
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Sqrt => {
                 self.jvm_code.push_instruction(F2D)?;
-                self.jvm_code.invoke(RefType::MATH_NAME, "sqrt")?;
+                self.jvm_code
+                    .invoke(&BinaryName::MATH, &UnqualifiedName::SQRT)?;
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Add => self.jvm_code.push_instruction(FAdd)?,
             Operator::F32Sub => self.jvm_code.push_instruction(FSub)?,
             Operator::F32Mul => self.jvm_code.push_instruction(FMul)?,
             Operator::F32Div => self.jvm_code.push_instruction(FDiv)?,
-            Operator::F32Min => self.jvm_code.invoke(RefType::FLOAT_NAME, "min")?,
-            Operator::F32Max => self.jvm_code.invoke(RefType::FLOAT_NAME, "max")?,
+            Operator::F32Min => self
+                .jvm_code
+                .invoke(&BinaryName::FLOAT, &UnqualifiedName::MIN)?,
+            Operator::F32Max => self
+                .jvm_code
+                .invoke(&BinaryName::FLOAT, &UnqualifiedName::MAX)?,
             Operator::F32Copysign => {
                 let desc = MethodDescriptor {
                     parameters: vec![FieldType::FLOAT, FieldType::FLOAT],
@@ -574,8 +593,8 @@ where
                 };
                 self.jvm_code.invoke_explicit(
                     InvokeType::Static,
-                    RefType::MATH_NAME,
-                    "copySign",
+                    &BinaryName::MATH,
+                    &UnqualifiedName::COPYSIGN,
                     &desc,
                 )?;
             }
@@ -590,27 +609,39 @@ where
                     };
                     self.jvm_code.invoke_explicit(
                         InvokeType::Static,
-                        RefType::MATH_NAME,
-                        "abs",
+                        &BinaryName::MATH,
+                        &UnqualifiedName::ABS,
                         &desc,
                     )?;
                 }
             }
             Operator::F64Neg => self.jvm_code.push_instruction(DNeg)?,
-            Operator::F64Ceil => self.jvm_code.invoke(RefType::MATH_NAME, "ceil")?,
-            Operator::F64Floor => self.jvm_code.invoke(RefType::MATH_NAME, "floor")?,
+            Operator::F64Ceil => self
+                .jvm_code
+                .invoke(&BinaryName::MATH, &UnqualifiedName::CEIL)?,
+            Operator::F64Floor => self
+                .jvm_code
+                .invoke(&BinaryName::MATH, &UnqualifiedName::FLOOR)?,
             Operator::F64Trunc => {
                 self.utilities
                     .invoke_utility(UtilityMethod::F64Trunc, self.jvm_code)?;
             }
-            Operator::F64Nearest => self.jvm_code.invoke(RefType::MATH_NAME, "rint")?,
-            Operator::F64Sqrt => self.jvm_code.invoke(RefType::MATH_NAME, "sqrt")?,
+            Operator::F64Nearest => self
+                .jvm_code
+                .invoke(&BinaryName::MATH, &UnqualifiedName::RINT)?,
+            Operator::F64Sqrt => self
+                .jvm_code
+                .invoke(&BinaryName::MATH, &UnqualifiedName::SQRT)?,
             Operator::F64Add => self.jvm_code.push_instruction(DAdd)?,
             Operator::F64Sub => self.jvm_code.push_instruction(DSub)?,
             Operator::F64Mul => self.jvm_code.push_instruction(DMul)?,
             Operator::F64Div => self.jvm_code.push_instruction(DDiv)?,
-            Operator::F64Min => self.jvm_code.invoke(RefType::DOUBLE_NAME, "min")?,
-            Operator::F64Max => self.jvm_code.invoke(RefType::DOUBLE_NAME, "max")?,
+            Operator::F64Min => self
+                .jvm_code
+                .invoke(&BinaryName::DOUBLE, &UnqualifiedName::MIN)?,
+            Operator::F64Max => self
+                .jvm_code
+                .invoke(&BinaryName::DOUBLE, &UnqualifiedName::MAX)?,
             Operator::F64Copysign => {
                 let desc = MethodDescriptor {
                     parameters: vec![FieldType::DOUBLE, FieldType::DOUBLE],
@@ -618,8 +649,8 @@ where
                 };
                 self.jvm_code.invoke_explicit(
                     InvokeType::Static,
-                    RefType::MATH_NAME,
-                    "copySign",
+                    &BinaryName::MATH,
+                    &UnqualifiedName::COPYSIGN,
                     &desc,
                 )?;
             }
@@ -687,16 +718,16 @@ where
 
             Operator::I32ReinterpretF32 => self
                 .jvm_code
-                .invoke(RefType::FLOAT_NAME, "floatToRawIntBits")?,
+                .invoke(&BinaryName::FLOAT, &UnqualifiedName::FLOATTORAWINTBITS)?,
             Operator::I64ReinterpretF64 => self
                 .jvm_code
-                .invoke(RefType::DOUBLE_NAME, "doubleToRawLongBits")?,
+                .invoke(&BinaryName::DOUBLE, &UnqualifiedName::DOUBLETORAWLONGBITS)?,
             Operator::F32ReinterpretI32 => self
                 .jvm_code
-                .invoke(RefType::FLOAT_NAME, "intBitsToFloat")?,
+                .invoke(&BinaryName::FLOAT, &UnqualifiedName::INTBITSTOFLOAT)?,
             Operator::F64ReinterpretI64 => self
                 .jvm_code
-                .invoke(RefType::DOUBLE_NAME, "longBitsToDouble")?,
+                .invoke(&BinaryName::DOUBLE, &UnqualifiedName::LONGBITSTODOUBLE)?,
 
             Operator::I32Extend8S => self.jvm_code.push_instruction(I2B)?,
             Operator::I32Extend16S => self.jvm_code.push_instruction(I2S)?,
@@ -1170,11 +1201,16 @@ where
         //   - we shouldn't assume that the function index is directly into functions defined in
         //     this module (imported functions come first!)
         //
-        let class_name = format!(
-            "{}${}0",
-            self.settings.output_full_class_name, self.settings.part_short_class_name,
-        );
-        let method_name = format!("{}{}", self.settings.wasm_function_name_prefix, func_idx);
+        let class_name = self
+            .settings
+            .output_full_class_name
+            .concat(&UnqualifiedName::DOLLAR)
+            .concat(&self.settings.part_short_class_name)
+            .concat(&UnqualifiedName::number(0));
+        let method_name = self
+            .settings
+            .wasm_function_name_prefix
+            .concat(&UnqualifiedName::number(func_idx as usize));
         {
             let mut class_graph = self.jvm_code.class_graph();
             let mut desc = func_typ.method_descriptor();
@@ -1183,12 +1219,12 @@ where
             ));
             class_graph
                 .classes
-                .get_mut(&Cow::Owned(class_name.clone()))
+                .get_mut(&class_name)
                 .expect("part class not in class graph")
                 .add_method(true, method_name.clone(), desc);
         }
 
-        self.jvm_code.invoke(class_name, method_name)?;
+        self.jvm_code.invoke(&class_name, &method_name)?;
         if func_typ.outputs.len() > 1 {
             self.unpack_stack_from_array(&func_typ.outputs)?;
         }
@@ -1206,7 +1242,7 @@ where
         let arr_offset = self
             .jvm_locals
             .push_local(FieldType::array(FieldType::OBJECT))?;
-        let object_cls = self.jvm_code.get_class_idx(&RefType::OBJECT_CLASS)?;
+        let object_cls = self.jvm_code.get_class_idx(&RefType::OBJECT)?;
         self.jvm_code.const_int(expected.len() as i32)?;
         self.jvm_code
             .push_instruction(Instruction::ANewArray(object_cls))?;
@@ -1225,10 +1261,18 @@ where
         for stack_value in expected.iter().rev() {
             // Turn the top value into an object and stack it in the temp variable
             match stack_value {
-                StackType::I32 => self.jvm_code.invoke(RefType::INTEGER_NAME, "valueOf")?,
-                StackType::I64 => self.jvm_code.invoke(RefType::LONG_NAME, "valueOf")?,
-                StackType::F32 => self.jvm_code.invoke(RefType::FLOAT_NAME, "valueOf")?,
-                StackType::F64 => self.jvm_code.invoke(RefType::DOUBLE_NAME, "valueOf")?,
+                StackType::I32 => self
+                    .jvm_code
+                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::VALUEOF)?,
+                StackType::I64 => self
+                    .jvm_code
+                    .invoke(&BinaryName::LONG, &UnqualifiedName::VALUEOF)?,
+                StackType::F32 => self
+                    .jvm_code
+                    .invoke(&BinaryName::FLOAT, &UnqualifiedName::VALUEOF)?,
+                StackType::F64 => self
+                    .jvm_code
+                    .invoke(&BinaryName::DOUBLE, &UnqualifiedName::VALUEOF)?,
                 StackType::FuncRef | StackType::ExternRef => (), // already reference types
             }
             self.jvm_code
@@ -1294,31 +1338,35 @@ where
             // Unbox the top of the stack
             match stack_value {
                 StackType::I32 => {
-                    let integer_cls = self.jvm_code.get_class_idx(&RefType::INTEGER_CLASS)?;
+                    let integer_cls = self.jvm_code.get_class_idx(&RefType::INTEGER)?;
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(integer_cls))?;
-                    self.jvm_code.invoke(RefType::NUMBER_NAME, "intValue")?;
+                    self.jvm_code
+                        .invoke(&BinaryName::NUMBER, &UnqualifiedName::INTVALUE)?;
                 }
                 StackType::I64 => {
-                    let long_cls = self.jvm_code.get_class_idx(&RefType::LONG_CLASS)?;
+                    let long_cls = self.jvm_code.get_class_idx(&RefType::LONG)?;
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(long_cls))?;
-                    self.jvm_code.invoke(RefType::NUMBER_NAME, "longValue")?;
+                    self.jvm_code
+                        .invoke(&BinaryName::NUMBER, &UnqualifiedName::LONGVALUE)?;
                 }
                 StackType::F32 => {
-                    let float_cls = self.jvm_code.get_class_idx(&RefType::FLOAT_CLASS)?;
+                    let float_cls = self.jvm_code.get_class_idx(&RefType::FLOAT)?;
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(float_cls))?;
-                    self.jvm_code.invoke(RefType::NUMBER_NAME, "floatValue")?;
+                    self.jvm_code
+                        .invoke(&BinaryName::NUMBER, &UnqualifiedName::FLOATVALUE)?;
                 }
                 StackType::F64 => {
-                    let double_cls = self.jvm_code.get_class_idx(&RefType::DOUBLE_CLASS)?;
+                    let double_cls = self.jvm_code.get_class_idx(&RefType::DOUBLE)?;
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(double_cls))?;
-                    self.jvm_code.invoke(RefType::NUMBER_NAME, "doubleValue")?;
+                    self.jvm_code
+                        .invoke(&BinaryName::NUMBER, &UnqualifiedName::DOUBLEVALUE)?;
                 }
                 StackType::FuncRef => {
-                    let handle_cls = self.jvm_code.get_class_idx(&RefType::METHOD_HANDLE_CLASS)?;
+                    let handle_cls = self.jvm_code.get_class_idx(&RefType::METHODHANDLE)?;
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(handle_cls))?;
                 }
@@ -1371,8 +1419,8 @@ where
             self.jvm_code
                 .push_instruction(Instruction::ALoad(this_off))?;
             self.jvm_code.access_field(
-                self.settings.output_full_class_name.clone(),
-                global.field_name.clone(),
+                &self.settings.output_full_class_name,
+                &global.field_name,
                 AccessMode::Read,
             )?;
         } else {
@@ -1397,8 +1445,8 @@ where
                 .push_instruction(Instruction::ALoad(this_off))?;
             self.jvm_code.get_local(temp_index, &global_field_type)?;
             self.jvm_code.access_field(
-                self.settings.output_full_class_name.clone(),
-                global.field_name.clone(),
+                &self.settings.output_full_class_name,
+                &global.field_name,
                 AccessMode::Write,
             )?;
         } else {
@@ -1425,8 +1473,8 @@ where
             self.jvm_code
                 .push_instruction(Instruction::ALoad(this_off))?;
             self.jvm_code.access_field(
-                self.settings.output_full_class_name.clone(),
-                table.field_name.clone(),
+                &self.settings.output_full_class_name,
+                &table.field_name,
                 AccessMode::Read,
             )?;
             self.jvm_code
@@ -1461,8 +1509,8 @@ where
             self.jvm_code
                 .push_instruction(Instruction::ALoad(this_off))?;
             self.jvm_code.access_field(
-                self.settings.output_full_class_name.clone(),
-                table.field_name.clone(),
+                &self.settings.output_full_class_name,
+                &table.field_name,
                 AccessMode::Read,
             )?;
             self.jvm_code
@@ -1493,8 +1541,8 @@ where
             self.jvm_code
                 .push_instruction(Instruction::ALoad(this_off))?;
             self.jvm_code.access_field(
-                self.settings.output_full_class_name.clone(),
-                table.field_name.clone(),
+                &self.settings.output_full_class_name,
+                &table.field_name,
                 AccessMode::Read,
             )?;
             self.jvm_code.push_instruction(Instruction::ArrayLength)?;

@@ -1,19 +1,26 @@
-use super::{JavaRenamer, Renamer};
+use super::{Error, JavaRenamer, Renamer};
+use crate::jvm::{BinaryName, Name, UnqualifiedName};
 use std::panic::AssertUnwindSafe;
 use wasmparser::WasmFeatures;
 
 pub struct Settings {
     /// Output class name, written as `my/output/Klass`
-    pub output_full_class_name: String,
+    pub output_full_class_name: BinaryName,
 
     /// Name given to the start function
-    pub start_function_name: String,
+    pub start_function_name: UnqualifiedName,
 
     /// Function name prefix (eg. `func`)
-    pub wasm_function_name_prefix: String,
+    pub wasm_function_name_prefix: UnqualifiedName,
+
+    /// Global name prefix (eg. `global`)
+    pub wasm_global_name_prefix: UnqualifiedName,
+
+    /// Table name prefix (eg. `table`)
+    pub wasm_table_name_prefix: UnqualifiedName,
 
     /// Inner utilities class name
-    pub utilities_short_class_name: String,
+    pub utilities_short_class_name: UnqualifiedName,
 
     /// Inner part class name
     ///
@@ -22,21 +29,21 @@ pub struct Settings {
     /// The _sole_ purpose of part classes is to support many more functions than can fit in a
     /// single class. The functions array ensures that we can also _call_ many more functions than
     /// would fit in a class constant pool.
-    pub part_short_class_name: String,
+    pub part_short_class_name: UnqualifiedName,
 
     /// Field name for arrays of `funcref` tables
     ///
     /// This has type `[[Ljava/lang/invoke/MethodHandle;` with values in the outer array being
     /// `null` whenever the WASM table at that index doesn't have element type `funcref`. The field
     /// itself is `ACC_FINAL` since the number of tables doesn't change at runtime.
-    pub funcref_array_table_field_name: String,
+    pub funcref_array_table_field_name: UnqualifiedName,
 
     /// Field name for arrays of `externref` tables
     ///
     /// This has type `[[Ljava/lang/Object;` with values in the outer array being `null` whenever
     /// the WASM table at that index doesn't have element type `externref`. The field itself is
     /// `ACC_FINAL` since the number of tables doesn't change at runtime.
-    pub externref_array_table_field_name: String,
+    pub externref_array_table_field_name: UnqualifiedName,
 
     /// WASM features
     ///
@@ -83,24 +90,30 @@ impl Settings {
         memory64: false,
     };
 
-    pub fn new(output_full_class_name: String) -> Settings {
+    pub fn new(output_full_class_name: String) -> Result<Settings, Error> {
         let mut wasm_features = Self::SUPPORTED_WASM_FEATURES;
         wasm_features.deterministic_only = false;
 
-        Settings {
-            output_full_class_name,
-            start_function_name: String::from("initialize"),
-            wasm_function_name_prefix: String::from("func"),
-            utilities_short_class_name: String::from("Utils"),
-            part_short_class_name: String::from("Part"),
-            funcref_array_table_field_name: String::from("funcref_tables"),
-            externref_array_table_field_name: String::from("externref_tables"),
+        fn make_name<N: Name>(name: impl Into<String>) -> Result<N, Error> {
+            N::from_string(name.into()).map_err(Error::MalformedName)
+        }
+
+        Ok(Settings {
+            output_full_class_name: make_name(output_full_class_name)?,
+            start_function_name: make_name("initialize")?,
+            wasm_function_name_prefix: make_name("func")?,
+            wasm_global_name_prefix: make_name("global")?,
+            wasm_table_name_prefix: make_name("table")?,
+            utilities_short_class_name: make_name("Utils")?,
+            part_short_class_name: make_name("Part")?,
+            funcref_array_table_field_name: make_name("funcref_tables")?,
+            externref_array_table_field_name: make_name("externref_tables")?,
             wasm_features,
             export_strategy: ExportStrategy::Members,
             trap_integer_division_overflow: true,
             bitwise_floating_abs: true,
             renamer: AssertUnwindSafe(Box::new(JavaRenamer::new())),
-        }
+        })
     }
 }
 

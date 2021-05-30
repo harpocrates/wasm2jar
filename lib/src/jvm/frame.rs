@@ -1104,11 +1104,8 @@ fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
         }
         AThrow => {
             let atype = pop_offset_vec(stack)?;
-            let is_exception = VerificationType::is_assignable(
-                class_graph,
-                &atype,
-                &Object(RefType::THROWABLE_CLASS),
-            );
+            let is_exception =
+                VerificationType::is_assignable(class_graph, &atype, &Object(RefType::THROWABLE));
             if !is_exception {
                 return Err(VerifierErrorKind::InvalidType);
             }

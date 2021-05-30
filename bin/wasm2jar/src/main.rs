@@ -1,3 +1,4 @@
+use wasm2jar::jvm::Name;
 use wasm2jar::*;
 
 use clap::{App, Arg};
@@ -34,7 +35,7 @@ fn main() -> Result<(), translate::Error> {
         )
         .get_matches();
 
-    let settings = translate::Settings::new(matches.value_of("class").unwrap().to_owned());
+    let settings = translate::Settings::new(matches.value_of("class").unwrap().to_owned())?;
 
     let wasm_file = matches.value_of("INPUT").unwrap();
     log::info!("Reading and translating '{}'", &wasm_file);
@@ -45,7 +46,7 @@ fn main() -> Result<(), translate::Error> {
     // Write out the results
     let mut output_files = vec![];
     for (class_name, class) in translator.result()? {
-        let class_file = format!("{}.class", class_name);
+        let class_file = format!("{}.class", class_name.as_str());
         log::info!("Writing '{}'", &class_file);
         class
             .save_to_path(&class_file, true)

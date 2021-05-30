@@ -1,5 +1,4 @@
-use super::{FieldType, MethodDescriptor, RefType};
-use std::borrow::Cow;
+use super::{BinaryName, FieldType, MethodDescriptor, RefType, UnqualifiedName};
 use std::collections::{HashMap, HashSet};
 
 /// Tracks the relationships between classes/interfaces and the members on those classes
@@ -8,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 /// of the types/members in the generated code. Then, when a class needs to access some member, it
 /// can import the necessary segment of the class graph into its constant pool.
 pub struct ClassGraph {
-    pub classes: HashMap<Cow<'static, str>, ClassData>,
+    pub classes: HashMap<BinaryName, ClassData>,
 }
 
 impl ClassGraph {
@@ -29,9 +28,9 @@ impl ClassGraph {
         match (sub_type, super_type) {
             // Special superclass and interfaces of all arrays
             (RefType::Array(_), RefType::Object(object_type)) => {
-                object_type == RefType::OBJECT_NAME
-                    || object_type == RefType::CLONEABLE_NAME
-                    || object_type == RefType::SERIALIZABLE_NAME
+                object_type == &BinaryName::OBJECT
+                    || object_type == &BinaryName::CLONEABLE
+                    || object_type == &BinaryName::SERIALIZABLE
             }
 
             // Cursed (unsound) covariance of arrays
@@ -41,11 +40,12 @@ impl ClassGraph {
 
             // Object-to-object assignability holds if there is a path through super type edges
             (RefType::Object(elem_type1), RefType::Object(elem_type2)) => {
-                let mut supertypes_to_visit: Vec<&str> = vec![elem_type1];
-                let mut dont_revisit: HashSet<&str> = supertypes_to_visit.iter().cloned().collect();
+                let mut supertypes_to_visit: Vec<&BinaryName> = vec![elem_type1];
+                let mut dont_revisit: HashSet<&BinaryName> =
+                    supertypes_to_visit.iter().cloned().collect();
 
                 // Optimization: if the super type is a class, then skip visiting interfaces
-                let super_is_class: bool = match self.classes.get(elem_type2.as_ref()) {
+                let super_is_class: bool = match self.classes.get(elem_type2) {
                     None => false,
                     Some(ClassData { is_interface, .. }) => !is_interface,
                 };
@@ -88,35 +88,32 @@ impl ClassGraph {
     pub fn insert_lang_types(&mut self) {
         // java.lang.Object
         {
-            let java_lang_object = self
-                .classes
-                .entry(Cow::Borrowed(RefType::OBJECT_NAME))
-                .or_insert(ClassData {
-                    superclass: None,
-                    interfaces: HashSet::new(),
-                    is_interface: false,
-                    methods: HashMap::new(),
-                    fields: HashMap::new(),
-                });
+            let java_lang_object = self.classes.entry(BinaryName::OBJECT).or_insert(ClassData {
+                superclass: None,
+                interfaces: HashSet::new(),
+                is_interface: false,
+                methods: HashMap::new(),
+                fields: HashMap::new(),
+            });
             java_lang_object.add_method(
                 false,
-                "equals",
+                UnqualifiedName::EQUALS,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::OBJECT_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::OBJECT)],
                     return_type: Some(FieldType::BOOLEAN),
                 },
             );
             java_lang_object.add_method(
                 false,
-                "hashCode",
+                UnqualifiedName::HASHCODE,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::OBJECT_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::OBJECT)],
                     return_type: Some(FieldType::INT),
                 },
             );
             java_lang_object.add_method(
                 false,
-                "<init>",
+                UnqualifiedName::INIT,
                 MethodDescriptor {
                     parameters: vec![],
                     return_type: None,
@@ -128,11 +125,11 @@ impl ClassGraph {
         {
             let java_lang_charsequence = self
                 .classes
-                .entry(Cow::Borrowed(RefType::CHARSEQUENCE_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, true));
+                .entry(BinaryName::CHARSEQUENCE)
+                .or_insert(ClassData::new(BinaryName::OBJECT, true));
             java_lang_charsequence.add_method(
                 false,
-                "length",
+                UnqualifiedName::LENGTH,
                 MethodDescriptor {
                     parameters: vec![],
                     return_type: Some(FieldType::INT),
@@ -144,14 +141,14 @@ impl ClassGraph {
         {
             let java_lang_string = self
                 .classes
-                .entry(Cow::Borrowed(RefType::STRING_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
-            java_lang_string.add_interfaces(vec![RefType::CHARSEQUENCE_NAME]);
+                .entry(BinaryName::STRING)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_string.interfaces.insert(BinaryName::CHARSEQUENCE);
             java_lang_string.add_method(
                 false,
-                "getBytes",
+                UnqualifiedName::GETBYTES,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::STRING)],
                     return_type: None,
                 },
             );
@@ -161,39 +158,39 @@ impl ClassGraph {
         {
             let _java_lang_class = self
                 .classes
-                .entry(Cow::Borrowed(RefType::CLASS_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+                .entry(BinaryName::CLASS)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
         }
 
         // java.lang.invoke.MethodType
         {
             let _java_lang_invoke_methodtype = self
                 .classes
-                .entry(Cow::Borrowed(RefType::METHOD_TYPE_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+                .entry(BinaryName::METHODTYPE)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
         }
 
         // java.lang.invoke.MethodHandle
         {
             let _java_lang_invoke_methodtype = self
                 .classes
-                .entry(Cow::Borrowed(RefType::METHOD_HANDLE_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+                .entry(BinaryName::METHODHANDLE)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
         }
 
         // java.lang.Number
         {
             let java_lang_number = self
                 .classes
-                .entry(Cow::Borrowed(RefType::NUMBER_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+                .entry(BinaryName::NUMBER)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
             for (extractor, extracted_type) in vec![
-                ("byteValue", FieldType::BYTE),
-                ("doubleValue", FieldType::DOUBLE),
-                ("floatValue", FieldType::FLOAT),
-                ("intValue", FieldType::INT),
-                ("longValue", FieldType::LONG),
-                ("shortValue", FieldType::SHORT),
+                (UnqualifiedName::BYTEVALUE, FieldType::BYTE),
+                (UnqualifiedName::DOUBLEVALUE, FieldType::DOUBLE),
+                (UnqualifiedName::FLOATVALUE, FieldType::FLOAT),
+                (UnqualifiedName::INTVALUE, FieldType::INT),
+                (UnqualifiedName::LONGVALUE, FieldType::LONG),
+                (UnqualifiedName::SHORTVALUE, FieldType::SHORT),
             ] {
                 java_lang_number.add_method(
                     false,
@@ -210,13 +207,13 @@ impl ClassGraph {
         {
             let java_lang_integer = self
                 .classes
-                .entry(Cow::Borrowed(RefType::INTEGER_NAME))
-                .or_insert(ClassData::new(RefType::NUMBER_NAME, false));
+                .entry(BinaryName::INTEGER)
+                .or_insert(ClassData::new(BinaryName::NUMBER, false));
             for (name, output_ty) in vec![
-                ("valueOf", FieldType::object(RefType::INTEGER_NAME)),
-                ("bitCount", FieldType::INT),
-                ("numberOfLeadingZeros", FieldType::INT),
-                ("numberOfTrailingZeros", FieldType::INT),
+                (UnqualifiedName::VALUEOF, FieldType::Ref(RefType::INTEGER)),
+                (UnqualifiedName::BITCOUNT, FieldType::INT),
+                (UnqualifiedName::NUMBEROFLEADINGZEROS, FieldType::INT),
+                (UnqualifiedName::NUMBEROFTRAILINGZEROS, FieldType::INT),
             ] {
                 java_lang_integer.add_method(
                     true,
@@ -228,12 +225,12 @@ impl ClassGraph {
                 );
             }
             for name in vec![
-                "compare",
-                "compareUnsigned",
-                "divideUnsigned",
-                "remainderUnsigned",
-                "rotateLeft",
-                "rotateRight",
+                UnqualifiedName::COMPARE,
+                UnqualifiedName::COMPAREUNSIGNED,
+                UnqualifiedName::DIVIDEUNSIGNED,
+                UnqualifiedName::REMAINDERUNSIGNED,
+                UnqualifiedName::ROTATELEFT,
+                UnqualifiedName::ROTATERIGHT,
             ] {
                 java_lang_integer.add_method(
                     true,
@@ -244,7 +241,7 @@ impl ClassGraph {
                     },
                 );
             }
-            for name in vec!["MAX_VALUE", "MIN_VALUE"] {
+            for name in vec![UnqualifiedName::MAXVALUE, UnqualifiedName::MINVALUE] {
                 java_lang_integer.add_field(true, name, FieldType::INT)
             }
         }
@@ -253,16 +250,24 @@ impl ClassGraph {
         {
             let java_lang_float = self
                 .classes
-                .entry(Cow::Borrowed(RefType::FLOAT_NAME))
-                .or_insert(ClassData::new(RefType::NUMBER_NAME, false));
+                .entry(BinaryName::FLOAT)
+                .or_insert(ClassData::new(BinaryName::NUMBER, false));
             for (name, input_ty, output_ty) in vec![
                 (
-                    "valueOf",
+                    UnqualifiedName::VALUEOF,
                     FieldType::FLOAT,
-                    FieldType::object(RefType::FLOAT_NAME),
+                    FieldType::Ref(RefType::FLOAT),
                 ),
-                ("floatToRawIntBits", FieldType::FLOAT, FieldType::INT),
-                ("intBitsToFloat", FieldType::INT, FieldType::FLOAT),
+                (
+                    UnqualifiedName::FLOATTORAWINTBITS,
+                    FieldType::FLOAT,
+                    FieldType::INT,
+                ),
+                (
+                    UnqualifiedName::INTBITSTOFLOAT,
+                    FieldType::INT,
+                    FieldType::FLOAT,
+                ),
             ] {
                 java_lang_float.add_method(
                     true,
@@ -273,7 +278,7 @@ impl ClassGraph {
                     },
                 );
             }
-            for name in vec!["max", "min"] {
+            for name in vec![UnqualifiedName::MAX, UnqualifiedName::MIN] {
                 java_lang_float.add_method(
                     true,
                     name,
@@ -284,11 +289,11 @@ impl ClassGraph {
                 );
             }
             for name in vec![
-                "MAX_VALUE",
-                "MIN_VALUE",
-                "NaN",
-                "NEGATIVE_INFINITY",
-                "POSITIVE_INFINITY",
+                UnqualifiedName::MAXVALUE,
+                UnqualifiedName::MINVALUE,
+                UnqualifiedName::NAN,
+                UnqualifiedName::NEGATIVEINFINITY,
+                UnqualifiedName::POSITIVEINFINITY,
             ] {
                 java_lang_float.add_field(true, name, FieldType::FLOAT)
             }
@@ -298,13 +303,13 @@ impl ClassGraph {
         {
             let java_lang_long = self
                 .classes
-                .entry(Cow::Borrowed(RefType::LONG_NAME))
-                .or_insert(ClassData::new(RefType::NUMBER_NAME, false));
+                .entry(BinaryName::LONG)
+                .or_insert(ClassData::new(BinaryName::NUMBER, false));
             for (name, output_ty) in vec![
-                ("valueOf", FieldType::object(RefType::LONG_NAME)),
-                ("bitCount", FieldType::INT),
-                ("numberOfLeadingZeros", FieldType::INT),
-                ("numberOfTrailingZeros", FieldType::INT),
+                (UnqualifiedName::VALUEOF, FieldType::Ref(RefType::LONG)),
+                (UnqualifiedName::BITCOUNT, FieldType::INT),
+                (UnqualifiedName::NUMBEROFLEADINGZEROS, FieldType::INT),
+                (UnqualifiedName::NUMBEROFTRAILINGZEROS, FieldType::INT),
             ] {
                 java_lang_long.add_method(
                     true,
@@ -317,32 +322,32 @@ impl ClassGraph {
             }
             for (name, input_tys, output_ty) in vec![
                 (
-                    "compare",
+                    UnqualifiedName::COMPARE,
                     vec![FieldType::LONG, FieldType::LONG],
                     FieldType::INT,
                 ),
                 (
-                    "compareUnsigned",
+                    UnqualifiedName::COMPAREUNSIGNED,
                     vec![FieldType::LONG, FieldType::LONG],
                     FieldType::INT,
                 ),
                 (
-                    "divideUnsigned",
+                    UnqualifiedName::DIVIDEUNSIGNED,
                     vec![FieldType::LONG, FieldType::LONG],
                     FieldType::LONG,
                 ),
                 (
-                    "remainderUnsigned",
+                    UnqualifiedName::REMAINDERUNSIGNED,
                     vec![FieldType::LONG, FieldType::LONG],
                     FieldType::LONG,
                 ),
                 (
-                    "rotateLeft",
+                    UnqualifiedName::ROTATELEFT,
                     vec![FieldType::LONG, FieldType::INT],
                     FieldType::LONG,
                 ),
                 (
-                    "rotateRight",
+                    UnqualifiedName::ROTATERIGHT,
                     vec![FieldType::LONG, FieldType::INT],
                     FieldType::LONG,
                 ),
@@ -356,7 +361,7 @@ impl ClassGraph {
                     },
                 );
             }
-            for name in vec!["MAX_VALUE", "MIN_VALUE"] {
+            for name in vec![UnqualifiedName::MAXVALUE, UnqualifiedName::MINVALUE] {
                 java_lang_long.add_field(true, name, FieldType::LONG)
             }
         }
@@ -365,16 +370,24 @@ impl ClassGraph {
         {
             let java_lang_double = self
                 .classes
-                .entry(Cow::Borrowed(RefType::DOUBLE_NAME))
-                .or_insert(ClassData::new(RefType::NUMBER_NAME, false));
+                .entry(BinaryName::DOUBLE)
+                .or_insert(ClassData::new(BinaryName::NUMBER, false));
             for (name, input_ty, output_ty) in vec![
                 (
-                    "valueOf",
+                    UnqualifiedName::VALUEOF,
                     FieldType::DOUBLE,
-                    FieldType::object(RefType::DOUBLE_NAME),
+                    FieldType::Ref(RefType::DOUBLE),
                 ),
-                ("doubleToRawLongBits", FieldType::DOUBLE, FieldType::LONG),
-                ("longBitsToDouble", FieldType::LONG, FieldType::DOUBLE),
+                (
+                    UnqualifiedName::DOUBLETORAWLONGBITS,
+                    FieldType::DOUBLE,
+                    FieldType::LONG,
+                ),
+                (
+                    UnqualifiedName::LONGBITSTODOUBLE,
+                    FieldType::LONG,
+                    FieldType::DOUBLE,
+                ),
             ] {
                 java_lang_double.add_method(
                     true,
@@ -385,7 +398,7 @@ impl ClassGraph {
                     },
                 );
             }
-            for name in vec!["max", "min"] {
+            for name in vec![UnqualifiedName::MAX, UnqualifiedName::MIN] {
                 java_lang_double.add_method(
                     true,
                     name,
@@ -396,11 +409,11 @@ impl ClassGraph {
                 );
             }
             for name in vec![
-                "MAX_VALUE",
-                "MIN_VALUE",
-                "NaN",
-                "NEGATIVE_INFINITY",
-                "POSITIVE_INFINITY",
+                UnqualifiedName::MAXVALUE,
+                UnqualifiedName::MINVALUE,
+                UnqualifiedName::NAN,
+                UnqualifiedName::NEGATIVEINFINITY,
+                UnqualifiedName::POSITIVEINFINITY,
             ] {
                 java_lang_double.add_field(true, name, FieldType::FLOAT)
             }
@@ -410,9 +423,14 @@ impl ClassGraph {
         {
             let java_lang_math = self
                 .classes
-                .entry(Cow::Borrowed(RefType::MATH_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
-            for name in vec!["ceil", "floor", "sqrt", "rint"] {
+                .entry(BinaryName::MATH)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            for name in vec![
+                UnqualifiedName::CEIL,
+                UnqualifiedName::FLOOR,
+                UnqualifiedName::SQRT,
+                UnqualifiedName::RINT,
+            ] {
                 java_lang_math.add_method(
                     true,
                     name,
@@ -422,19 +440,27 @@ impl ClassGraph {
                     },
                 );
             }
-            for input_output_ty in vec![FieldType::FLOAT, FieldType::DOUBLE] {
+            for input_output_ty in &[FieldType::FLOAT, FieldType::DOUBLE] {
                 java_lang_math.add_method(
                     true,
-                    "copySign",
+                    UnqualifiedName::COPYSIGN,
                     MethodDescriptor {
                         parameters: vec![input_output_ty.clone(), input_output_ty.clone()],
-                        return_type: Some(input_output_ty),
+                        return_type: Some(input_output_ty.clone()),
+                    },
+                );
+                java_lang_math.add_method(
+                    true,
+                    UnqualifiedName::ABS,
+                    MethodDescriptor {
+                        parameters: vec![input_output_ty.clone()],
+                        return_type: Some(input_output_ty.clone()),
                     },
                 );
             }
             java_lang_math.add_method(
                 true,
-                "toIntExact",
+                UnqualifiedName::TOINTEXACT,
                 MethodDescriptor {
                     parameters: vec![FieldType::LONG],
                     return_type: Some(FieldType::INT),
@@ -449,13 +475,13 @@ impl ClassGraph {
         {
             let java_lang_throwable = self
                 .classes
-                .entry(Cow::Borrowed(RefType::THROWABLE_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+                .entry(BinaryName::THROWABLE)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
             java_lang_throwable.add_method(
                 false,
-                "<init>",
+                UnqualifiedName::INIT,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::STRING)],
                     return_type: None,
                 },
             );
@@ -465,13 +491,13 @@ impl ClassGraph {
         {
             let java_lang_error = self
                 .classes
-                .entry(Cow::Borrowed(RefType::ERROR_NAME))
-                .or_insert(ClassData::new(RefType::THROWABLE_NAME, false));
+                .entry(BinaryName::ERROR)
+                .or_insert(ClassData::new(BinaryName::THROWABLE, false));
             java_lang_error.add_method(
                 false,
-                "<init>",
+                UnqualifiedName::INIT,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::STRING)],
                     return_type: None,
                 },
             );
@@ -481,13 +507,13 @@ impl ClassGraph {
         {
             let java_lang_assertionerror = self
                 .classes
-                .entry(Cow::Borrowed(RefType::ASSERTION_NAME))
-                .or_insert(ClassData::new(RefType::ERROR_NAME, false));
+                .entry(BinaryName::ASSERTIONERROR)
+                .or_insert(ClassData::new(BinaryName::ERROR, false));
             java_lang_assertionerror.add_method(
                 false,
-                "<init>",
+                UnqualifiedName::INIT,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::STRING)],
                     return_type: None,
                 },
             );
@@ -497,13 +523,13 @@ impl ClassGraph {
         {
             let java_lang_error = self
                 .classes
-                .entry(Cow::Borrowed(RefType::EXCEPTION_NAME))
-                .or_insert(ClassData::new(RefType::THROWABLE_NAME, false));
+                .entry(BinaryName::EXCEPTION)
+                .or_insert(ClassData::new(BinaryName::THROWABLE, false));
             java_lang_error.add_method(
                 false,
-                "<init>",
+                UnqualifiedName::INIT,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::STRING)],
                     return_type: None,
                 },
             );
@@ -513,13 +539,13 @@ impl ClassGraph {
         {
             let java_lang_error = self
                 .classes
-                .entry(Cow::Borrowed(RefType::RUNTIMEEXCEPTION_NAME))
-                .or_insert(ClassData::new(RefType::EXCEPTION_NAME, false));
+                .entry(BinaryName::RUNTIMEEXCEPTION)
+                .or_insert(ClassData::new(BinaryName::EXCEPTION, false));
             java_lang_error.add_method(
                 false,
-                "<init>",
+                UnqualifiedName::INIT,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::STRING)],
                     return_type: None,
                 },
             );
@@ -529,13 +555,13 @@ impl ClassGraph {
         {
             let java_lang_error = self
                 .classes
-                .entry(Cow::Borrowed(RefType::ARITHMETIC_NAME))
-                .or_insert(ClassData::new(RefType::RUNTIMEEXCEPTION_NAME, false));
+                .entry(BinaryName::ARITHMETICEXCEPTION)
+                .or_insert(ClassData::new(BinaryName::RUNTIMEEXCEPTION, false));
             java_lang_error.add_method(
                 false,
-                "<init>",
+                UnqualifiedName::INIT,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::STRING_CLASS)],
+                    parameters: vec![FieldType::Ref(RefType::STRING)],
                     return_type: None,
                 },
             );
@@ -548,11 +574,11 @@ impl ClassGraph {
         {
             let java_util_arrays = self
                 .classes
-                .entry(Cow::Borrowed(RefType::ARRAYS_NAME))
-                .or_insert(ClassData::new(RefType::OBJECT_NAME, false));
+                .entry(BinaryName::ARRAYS)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
             java_util_arrays.add_method(
                 true,
-                "copyOf",
+                UnqualifiedName::COPYOF,
                 MethodDescriptor {
                     parameters: vec![FieldType::array(FieldType::OBJECT), FieldType::INT],
                     return_type: Some(FieldType::array(FieldType::OBJECT)),
@@ -560,7 +586,7 @@ impl ClassGraph {
             );
             java_util_arrays.add_method(
                 true,
-                "fill",
+                UnqualifiedName::FILL,
                 MethodDescriptor {
                     parameters: vec![FieldType::array(FieldType::OBJECT), FieldType::OBJECT],
                     return_type: None,
@@ -573,26 +599,25 @@ impl ClassGraph {
 // TODO: should we track subclasses?
 pub struct ClassData {
     /// Superclass is only ever `null` for `java/lang/Object` itself
-    pub superclass: Option<Cow<'static, str>>,
+    pub superclass: Option<BinaryName>,
 
     /// Interfaces implemented (or super-interfaces)
-    pub interfaces: HashSet<Cow<'static, str>>,
+    pub interfaces: HashSet<BinaryName>,
 
     /// Is this an interface?
     pub is_interface: bool,
 
     /// Methods
-    pub methods: HashMap<Cow<'static, str>, HashMap<MethodDescriptor, bool>>,
+    pub methods: HashMap<UnqualifiedName, HashMap<MethodDescriptor, bool>>,
 
     /// Fields
-    pub fields: HashMap<Cow<'static, str>, (bool, FieldType)>,
+    pub fields: HashMap<UnqualifiedName, (bool, FieldType)>,
 }
 
 impl ClassData {
-    pub fn new<S: Into<Cow<'static, str>>>(superclass: S, is_interface: bool) -> ClassData {
-        let superclass = Some(superclass.into());
+    pub fn new(superclass: BinaryName, is_interface: bool) -> ClassData {
         ClassData {
-            superclass,
+            superclass: Some(superclass),
             interfaces: HashSet::new(),
             is_interface,
             methods: HashMap::new(),
@@ -600,27 +625,22 @@ impl ClassData {
         }
     }
 
-    pub fn add_interfaces<S>(&mut self, interfaces: impl IntoIterator<Item = S>)
-    where
-        S: Into<Cow<'static, str>>,
-    {
-        self.interfaces
-            .extend(interfaces.into_iter().map(|s| s.into()));
+    pub fn add_interfaces(&mut self, interfaces: impl IntoIterator<Item = BinaryName>) {
+        self.interfaces.extend(interfaces);
     }
 
-    pub fn add_field<S>(&mut self, is_static: bool, name: S, descriptor: FieldType)
-    where
-        S: Into<Cow<'static, str>>,
-    {
-        self.fields.insert(name.into(), (is_static, descriptor));
+    pub fn add_field(&mut self, is_static: bool, name: UnqualifiedName, descriptor: FieldType) {
+        self.fields.insert(name, (is_static, descriptor));
     }
 
-    pub fn add_method<S>(&mut self, is_static: bool, name: S, descriptor: MethodDescriptor)
-    where
-        S: Into<Cow<'static, str>>,
-    {
+    pub fn add_method(
+        &mut self,
+        is_static: bool,
+        name: UnqualifiedName,
+        descriptor: MethodDescriptor,
+    ) {
         self.methods
-            .entry(name.into())
+            .entry(name)
             .or_insert(HashMap::new())
             .insert(descriptor, is_static);
     }

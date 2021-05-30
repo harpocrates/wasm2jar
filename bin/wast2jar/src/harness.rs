@@ -81,12 +81,16 @@ impl<'a> TestHarness<'a> {
     }
 
     fn visit_directive(&mut self, directive: WastDirective<'a>) -> Result<(), TestError> {
+        use jvm::Name;
+
         match directive {
             WastDirective::Module(module) => {
                 self.end_java_harness()?;
                 let module = QuoteModule::Module(module);
                 for (class_name, class) in self.visit_module(module)? {
-                    let class_file = self.output_directory.join(format!("{}.class", class_name));
+                    let class_file = self
+                        .output_directory
+                        .join(format!("{}.class", class_name.as_str()));
                     class
                         .save_to_path(&class_file, true)
                         .map_err(|err| translate::Error::BytecodeGen(jvm::Error::IoError(err)))?;
@@ -97,7 +101,9 @@ impl<'a> TestHarness<'a> {
                 self.end_java_harness()?;
                 let module = QuoteModule::Quote(source);
                 for (class_name, class) in self.visit_module(module)? {
-                    let class_file = self.output_directory.join(format!("{}.class", class_name));
+                    let class_file = self
+                        .output_directory
+                        .join(format!("{}.class", class_name.as_str()));
                     class
                         .save_to_path(&class_file, true)
                         .map_err(|err| translate::Error::BytecodeGen(jvm::Error::IoError(err)))?;
@@ -324,7 +330,7 @@ impl<'a> TestHarness<'a> {
     fn visit_module(
         &mut self,
         module: QuoteModule<'a>,
-    ) -> Result<Vec<(String, jvm::ClassFile)>, TestError> {
+    ) -> Result<Vec<(jvm::BinaryName, jvm::ClassFile)>, TestError> {
         let id: Option<Id<'a>> = match &module {
             QuoteModule::Module(Module { id, .. }) => *id,
             QuoteModule::Quote(_) => None,
@@ -340,7 +346,7 @@ impl<'a> TestHarness<'a> {
         self.latest_module = Some(name.clone());
 
         // Translate the module
-        let settings = translate::Settings::new(name);
+        let settings = translate::Settings::new(name)?;
         let wasm_bytes: Vec<u8> = match module {
             QuoteModule::Module(mut module) => module.encode()?,
             QuoteModule::Quote(wat_bytes) => {
@@ -354,11 +360,12 @@ impl<'a> TestHarness<'a> {
             }
         };
 
-        let translation_result = || -> Result<Vec<(String, jvm::ClassFile)>, translate::Error> {
-            let mut translator = translate::ModuleTranslator::new(settings)?;
-            translator.parse_module(&wasm_bytes)?;
-            translator.result()
-        };
+        let translation_result =
+            || -> Result<Vec<(jvm::BinaryName, jvm::ClassFile)>, translate::Error> {
+                let mut translator = translate::ModuleTranslator::new(settings)?;
+                translator.parse_module(&wasm_bytes)?;
+                translator.result()
+            };
 
         // TODO: catch should be removed once `wasm2jar` doesn't use `todo`
         match catch_unwind(translation_result) {

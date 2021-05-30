@@ -6,6 +6,7 @@ pub enum Error {
     BytecodeGen(jvm::Error),
     WasmParser(wasmparser::BinaryReaderError),
     UnsupportedType(wasm::BadType),
+    MalformedName(String),
     LocalsOverflow,
 }
 

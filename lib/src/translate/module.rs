@@ -3,10 +3,10 @@ use super::{
     Settings, Table, UtilityClass,
 };
 use crate::jvm::{
-    BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile, ClassGraph, CodeBuilder,
-    ConstantIndex, Descriptor, FieldAccessFlags, FieldType, HandleKind, InnerClass,
+    BinaryName, BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile, ClassGraph,
+    CodeBuilder, ConstantIndex, Descriptor, FieldAccessFlags, FieldType, HandleKind, InnerClass,
     InnerClassAccessFlags, InnerClasses, Instruction, InvokeType, MethodAccessFlags,
-    MethodDescriptor, NestHost, NestMembers, RefType, Width,
+    MethodDescriptor, Name, NestHost, NestMembers, RefType, UnqualifiedName, Width,
 };
 use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourcesExt};
 use std::cell::RefCell;
@@ -59,7 +59,7 @@ impl<'a> ModuleTranslator<'a> {
         let class = ClassBuilder::new(
             ClassAccessFlags::PUBLIC | ClassAccessFlags::SUPER,
             settings.output_full_class_name.clone(),
-            RefType::OBJECT_NAME.to_string(),
+            BinaryName::OBJECT,
             false,
             vec![],
             class_graph.clone(),
@@ -99,13 +99,16 @@ impl<'a> ModuleTranslator<'a> {
         class_graph: Rc<RefCell<ClassGraph>>,
         part_idx: usize,
     ) -> Result<ClassBuilder, Error> {
+        let name = settings
+            .part_short_class_name
+            .concat(&UnqualifiedName::number(part_idx));
         let mut part = ClassBuilder::new(
             ClassAccessFlags::SYNTHETIC | ClassAccessFlags::SUPER,
-            format!(
-                "{}${}{}",
-                settings.output_full_class_name, settings.part_short_class_name, part_idx
-            ),
-            RefType::OBJECT_NAME.to_string(),
+            settings
+                .output_full_class_name
+                .concat(&UnqualifiedName::DOLLAR)
+                .concat(&name),
+            BinaryName::OBJECT,
             false,
             vec![],
             class_graph.clone(),
@@ -114,12 +117,11 @@ impl<'a> ModuleTranslator<'a> {
         // Add the `NestHost` and `InnerClasses` attributes
         let (nest_host, inner_classes): (NestHost, InnerClasses) = {
             let mut constants = part.constants();
-            let outer_class_name = constants.get_utf8(&settings.output_full_class_name)?;
+            let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
-            let inner_class_name = constants.get_utf8(part.class_name())?;
+            let inner_class_name = constants.get_utf8(part.class_name().as_str())?;
             let inner_class = constants.get_class(inner_class_name)?;
-            let inner_name =
-                constants.get_utf8(&format!("{}{}", settings.part_short_class_name, part_idx))?;
+            let inner_name = constants.get_utf8(name.as_str())?;
             let inner_class_attr = InnerClass {
                 inner_class,
                 outer_class,
@@ -193,10 +195,9 @@ impl<'a> ModuleTranslator<'a> {
 
         let mut method_builder = self.current_part.start_method(
             MethodAccessFlags::STATIC,
-            format!(
-                "{}{}",
-                self.settings.wasm_function_name_prefix, self.current_func_idx
-            ),
+            self.settings
+                .wasm_function_name_prefix
+                .concat(&UnqualifiedName::number(self.current_func_idx as usize)),
             method_descriptor,
         )?;
 
@@ -226,9 +227,13 @@ impl<'a> ModuleTranslator<'a> {
                 imported: None,
                 exported: false,
             };
+            let field_name = self
+                .settings
+                .wasm_global_name_prefix
+                .concat(&UnqualifiedName::number(self.globals.len()));
             let global = Global {
                 origin,
-                field_name: format!("global_{}", self.globals.len()),
+                field_name,
                 global_type: StackType::from_general(ty.content_type)?,
                 mutable: ty.mutable,
                 initial: Some(init_expr),
@@ -284,7 +289,7 @@ impl<'a> ModuleTranslator<'a> {
         // TODO: this is not the name we want
         let name = match import.field {
             None => unimplemented!(),
-            Some(name) => name.to_owned(),
+            Some(name) => UnqualifiedName::from_string(name.to_owned()).unwrap(),
         };
 
         match import.ty {
@@ -320,9 +325,13 @@ impl<'a> ModuleTranslator<'a> {
                 imported: None,
                 exported: false,
             };
+            let field_name = self
+                .settings
+                .wasm_table_name_prefix
+                .concat(&UnqualifiedName::number(self.tables.len()));
             self.tables.push(Table {
                 origin,
-                field_name: format!("table_{}", self.tables.len()),
+                field_name,
                 table_type: TableType::from_general(table.element_type)?,
                 limits: table.limits,
             });
@@ -362,7 +371,9 @@ impl<'a> ModuleTranslator<'a> {
                         .tables
                         .get_mut(export.index as usize)
                         .expect("Exporting function that doesn't exist");
-                    table.field_name = self.settings.renamer.rename_table(export.field);
+                    let name: String = self.settings.renamer.rename_table(export.field);
+                    table.field_name =
+                        UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
                     table.origin.exported = true;
                 }
 
@@ -371,7 +382,9 @@ impl<'a> ModuleTranslator<'a> {
                         .globals
                         .get_mut(export.index as usize)
                         .expect("Exporting global that ddoesn't exist");
-                    global.field_name = self.settings.renamer.rename_table(export.field);
+                    let name: String = self.settings.renamer.rename_global(export.field);
+                    global.field_name =
+                        UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
                     global.origin.exported = true;
                 }
 
@@ -399,9 +412,10 @@ impl<'a> ModuleTranslator<'a> {
                         self.settings.output_full_class_name.clone(),
                     ));
 
+                    let name: String = self.settings.renamer.rename_function(export.field);
                     let mut method_builder = self.class.start_method(
                         MethodAccessFlags::PUBLIC,
-                        self.settings.renamer.rename_function(export.field),
+                        UnqualifiedName::from_string(name).map_err(Error::MalformedName)?,
                         export_descriptor.clone(),
                     )?;
 
@@ -419,11 +433,11 @@ impl<'a> ModuleTranslator<'a> {
                     // Call the implementation
                     method_builder.code.invoke_explicit(
                         InvokeType::Static,
-                        self.current_part.class_name().to_owned(),
-                        format!(
-                            "{}{}",
-                            self.settings.wasm_function_name_prefix, export.index
-                        ),
+                        self.current_part.class_name(),
+                        &self
+                            .settings
+                            .wasm_function_name_prefix
+                            .concat(&UnqualifiedName::number(export.index as usize)),
                         &underlying_descriptor,
                     )?;
                     method_builder.code.return_(export_descriptor.return_type)?;
@@ -460,7 +474,7 @@ impl<'a> ModuleTranslator<'a> {
     pub fn generate_constructor(&mut self) -> Result<(), Error> {
         let mut method_builder = self.class.start_method(
             MethodAccessFlags::PUBLIC,
-            String::from("<init>"),
+            UnqualifiedName::INIT,
             MethodDescriptor {
                 parameters: vec![],
                 return_type: None,
@@ -469,7 +483,7 @@ impl<'a> ModuleTranslator<'a> {
         let jvm_code = &mut method_builder.code;
 
         jvm_code.push_instruction(Instruction::ALoad(0))?;
-        jvm_code.invoke(RefType::OBJECT_NAME, "<init>")?;
+        jvm_code.invoke(&BinaryName::OBJECT, &UnqualifiedName::INIT)?;
 
         // Initial table arrays
         for table in &self.tables {
@@ -479,8 +493,8 @@ impl<'a> ModuleTranslator<'a> {
                     jvm_code.const_int(table.limits.initial as i32)?; // TODO: error if `u32` is too big
                     jvm_code.new_ref_array(&table.table_type.ref_type())?;
                     jvm_code.access_field(
-                        self.settings.output_full_class_name.clone(),
-                        table.field_name.clone(),
+                        &self.settings.output_full_class_name,
+                        &table.field_name,
                         AccessMode::Write,
                     )?;
                 } else {
@@ -497,8 +511,8 @@ impl<'a> ModuleTranslator<'a> {
                         jvm_code.push_instruction(Instruction::ALoad(0))?;
                         self.translate_init_expr(jvm_code, init_expr)?;
                         jvm_code.access_field(
-                            self.settings.output_full_class_name.clone(),
-                            global.field_name.clone(),
+                            &self.settings.output_full_class_name,
+                            &global.field_name,
                             AccessMode::Write,
                         )?;
                     }
@@ -520,8 +534,8 @@ impl<'a> ModuleTranslator<'a> {
                     // Load onto the stack the table array
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
                     jvm_code.access_field(
-                        self.settings.output_full_class_name.clone(),
-                        table.field_name.clone(),
+                        &self.settings.output_full_class_name,
+                        &table.field_name,
                         AccessMode::Read,
                     )?;
 
@@ -611,9 +625,14 @@ impl<'a> ModuleTranslator<'a> {
     ) -> Result<(), Error> {
         let class_name = format!(
             "{}${}0",
-            settings.output_full_class_name, settings.part_short_class_name,
+            settings.output_full_class_name.as_str(),
+            settings.part_short_class_name.as_str(),
         );
-        let method_name = format!("{}{}", settings.wasm_function_name_prefix, function_index,);
+        let method_name = format!(
+            "{}{}",
+            settings.wasm_function_name_prefix.as_str(),
+            function_index,
+        );
         let mut method_type = validator
             .function_idx_type(function_index)?
             .method_descriptor();
@@ -643,7 +662,7 @@ impl<'a> ModuleTranslator<'a> {
     ///
     /// The first element in the output vector is the output class. The rest of the elements are
     /// the "part" inner classes.
-    pub fn result(mut self) -> Result<Vec<(String, ClassFile)>, Error> {
+    pub fn result(mut self) -> Result<Vec<(BinaryName, ClassFile)>, Error> {
         self.generate_exports()?;
         self.generate_constructor()?;
 
@@ -656,13 +675,16 @@ impl<'a> ModuleTranslator<'a> {
             let mut nest_members = vec![];
             let mut inner_class_attrs = vec![];
             let mut constants = self.class.constants();
-            let outer_class_name = constants.get_utf8(&self.settings.output_full_class_name)?;
+            let outer_class_name =
+                constants.get_utf8(self.settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
 
             // Utilities inner class
-            let utilities_class_name = constants.get_utf8(self.utilities.class.class_name())?;
+            let utilities_class_name =
+                constants.get_utf8(self.utilities.class.class_name().as_str())?;
             let utilities_class = constants.get_class(utilities_class_name)?;
-            let utilities_name = constants.get_utf8(self.settings.utilities_short_class_name)?;
+            let utilities_name =
+                constants.get_utf8(self.settings.utilities_short_class_name.as_str())?;
             nest_members.push(utilities_class);
             inner_class_attrs.push(InnerClass {
                 inner_class: utilities_class,
@@ -673,11 +695,12 @@ impl<'a> ModuleTranslator<'a> {
 
             // Part inner classes
             for (part_idx, part) in parts.iter().enumerate() {
-                let inner_class_name = constants.get_utf8(part.class_name())?;
+                let inner_class_name = constants.get_utf8(part.class_name().as_str())?;
                 let inner_class = constants.get_class(inner_class_name)?;
                 let inner_name = constants.get_utf8(&format!(
                     "{}{}",
-                    self.settings.part_short_class_name, part_idx
+                    self.settings.part_short_class_name.as_str(),
+                    part_idx
                 ))?;
                 nest_members.push(inner_class);
                 inner_class_attrs.push(InnerClass {

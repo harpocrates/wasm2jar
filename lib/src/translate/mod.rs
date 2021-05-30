@@ -14,6 +14,7 @@ pub use renamer::*;
 pub use settings::*;
 pub use utility::*;
 
+use crate::jvm::UnqualifiedName;
 use crate::wasm::{StackType, TableType};
 use wasmparser::{ElementItem, ElementKind, FuncType, InitExpr, ResizableLimits};
 
@@ -48,54 +49,54 @@ impl MemberOrigin {
 #[derive(Debug)]
 pub struct Table {
     /// Where is the table defined?
-    origin: MemberOrigin,
+    pub origin: MemberOrigin,
 
     /// Name of the method in the class (if exported, this matches the export name)
-    field_name: String,
+    pub field_name: UnqualifiedName,
 
     /// Table type
-    table_type: TableType,
+    pub table_type: TableType,
 
     /// Table limits
-    limits: ResizableLimits,
+    pub limits: ResizableLimits,
 }
 
 pub struct Global<'a> {
     /// Where is the table defined?
-    origin: MemberOrigin,
+    pub origin: MemberOrigin,
 
     /// Name of the method in the class (if exported, this matches the export name)
-    field_name: String,
+    pub field_name: UnqualifiedName,
 
     /// Global type
-    global_type: StackType,
+    pub global_type: StackType,
 
     /// Is the global mutable?
-    mutable: bool,
+    pub mutable: bool,
 
     /// Initial value
-    initial: Option<InitExpr<'a>>,
+    pub initial: Option<InitExpr<'a>>,
 }
 
 pub struct Element<'a> {
     /// Type of element section
-    kind: ElementKind<'a>,
+    pub kind: ElementKind<'a>,
 
     /// Element type
-    element_type: TableType,
+    pub element_type: TableType,
 
     /// Entries in the element
-    items: Vec<ElementItem>,
+    pub items: Vec<ElementItem>,
 }
 
 /// WASM functions are represented as methods
 pub struct Function {
     /// Where is the function defined?
-    origin: MemberOrigin,
+    pub origin: MemberOrigin,
 
     /// Name of the method in the class
-    method_name: String,
+    pub method_name: UnqualifiedName,
 
     /// Function type
-    func_type: FuncType,
+    pub func_type: FuncType,
 }

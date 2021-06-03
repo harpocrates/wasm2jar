@@ -103,7 +103,7 @@ pub enum TableType {
 }
 
 impl TableType {
-    /// Convert a stack type into the corresponding JVM reference typ
+    /// Convert a stack type into the corresponding JVM reference type
     pub const fn ref_type(self) -> RefType {
         match self {
             TableType::FuncRef => RefType::METHODHANDLE,

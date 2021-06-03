@@ -1,5 +1,5 @@
 use super::{
-    AccessMode, CodeBuilderExts, Element, Error, FunctionTranslator, Global, MemberOrigin,
+    AccessMode, CodeBuilderExts, Element, Error, FunctionTranslator, Global, MemberOrigin, Memory,
     Settings, Table, UtilityClass,
 };
 use crate::jvm::{
@@ -13,8 +13,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wasmparser::{
     ElementItem, ElementKind, ElementSectionReader, Export, ExportSectionReader, ExternalKind,
-    FunctionBody, GlobalSectionReader, Import, ImportSectionReader, InitExpr, Operator, Parser,
-    Payload, TableSectionReader, Validator,
+    FunctionBody, GlobalSectionReader, Import, ImportSectionReader, InitExpr, MemorySectionReader,
+    MemoryType, Operator, Parser, Payload, TableSectionReader, Validator, Data, DataSectionReader,
+    DataKind,
 };
 
 pub struct ModuleTranslator<'a> {
@@ -25,6 +26,7 @@ pub struct ModuleTranslator<'a> {
     class: ClassBuilder,
     previous_parts: Vec<ClassBuilder>,
     current_part: ClassBuilder,
+    fields_generated: bool,
 
     /// Utility class (just a carrier for whatever helper methods we may want)
     utilities: UtilityClass,
@@ -35,11 +37,17 @@ pub struct ModuleTranslator<'a> {
     /// Populated when we visit tables
     tables: Vec<Table>,
 
+    /// Populated when we visit memories
+    memories: Vec<Memory>,
+
     /// Populated when we visit globals
     globals: Vec<Global<'a>>,
 
     /// Populated when we visit elements
     elements: Vec<Element<'a>>,
+
+    /// Populated when we visit datas
+    datas: Vec<Data<'a>>,
 
     /// Every time we see a new function, this gets incremented
     current_func_idx: u32,
@@ -54,6 +62,7 @@ impl<'a> ModuleTranslator<'a> {
         class_graph.insert_lang_types();
         class_graph.insert_error_types();
         class_graph.insert_util_types();
+        class_graph.insert_buffer_types();
         let class_graph = Rc::new(RefCell::new(class_graph));
 
         let class = ClassBuilder::new(
@@ -73,12 +82,15 @@ impl<'a> ModuleTranslator<'a> {
             class_graph,
             class,
             previous_parts: vec![],
+            fields_generated: false,
             current_part,
             utilities,
             exports: vec![],
             tables: vec![],
+            memories: vec![],
             globals: vec![],
             elements: vec![],
+            datas: vec![],
             current_func_idx: 0,
         })
     }
@@ -139,6 +151,15 @@ impl<'a> ModuleTranslator<'a> {
     /// Process one payload
     pub fn process_payload(&mut self, payload: Payload<'a>) -> Result<(), Error> {
         log::trace!("Payload {:?}", payload);
+
+        // TODO: find a better place to trigger generation of this code
+        if !self.fields_generated && matches!(&payload, Payload::CodeSectionStart { .. } | Payload::ModuleSectionStart { .. } | Payload::End) {
+            self.generate_table_fields()?;
+            self.generate_memory_fields()?;
+            self.generate_global_fields()?;
+            self.fields_generated = true
+        }
+
         match payload {
             Payload::Version { num, range } => self.validator.version(num, &range)?,
             Payload::TypeSection(section) => self.validator.type_section(&section)?,
@@ -146,7 +167,7 @@ impl<'a> ModuleTranslator<'a> {
             Payload::AliasSection(section) => self.validator.alias_section(&section)?,
             Payload::InstanceSection(section) => self.validator.instance_section(&section)?,
             Payload::TableSection(section) => self.visit_tables(section)?,
-            Payload::MemorySection(section) => self.validator.memory_section(&section)?,
+            Payload::MemorySection(section) => self.visit_memories(section)?,
             Payload::EventSection(section) => self.validator.event_section(&section)?,
             Payload::GlobalSection(section) => self.visit_globals(section)?,
             Payload::ExportSection(section) => self.visit_exports(section)?,
@@ -156,13 +177,9 @@ impl<'a> ModuleTranslator<'a> {
             Payload::DataCountSection { count, range } => {
                 self.validator.data_count_section(count, &range)?
             }
-            Payload::DataSection(section) => self.validator.data_section(&section)?,
+            Payload::DataSection(section) => self.visit_datas(section)?,
             Payload::CustomSection { .. } => (),
             Payload::CodeSectionStart { count, range, .. } => {
-                // TODO: generating table fields here is not quite correct since it means that a
-                // module without code won't get tables generated
-                self.generate_table_fields()?;
-                self.generate_global_fields()?;
                 self.validator.code_section_start(count, &range)?
             }
             Payload::CodeSectionEntry(function_body) => self.visit_function_body(function_body)?,
@@ -207,6 +224,7 @@ impl<'a> ModuleTranslator<'a> {
             &mut self.utilities,
             &mut method_builder.code,
             &self.tables,
+            &self.memories,
             &self.globals,
             function_body,
             validator,
@@ -357,6 +375,50 @@ impl<'a> ModuleTranslator<'a> {
         Ok(())
     }
 
+    /// Visit the memories section
+    fn visit_memories(&mut self, memories: MemorySectionReader<'a>) -> Result<(), Error> {
+        self.validator.memory_section(&memories)?;
+        for memory in memories {
+            let memory = memory?;
+            let origin = MemberOrigin {
+                imported: None,
+                exported: false,
+            };
+            let field_name = self
+                .settings
+                .wasm_memory_name_prefix
+                .concat(&UnqualifiedName::number(self.memories.len()));
+            self.memories.push(Memory {
+                origin,
+                field_name,
+                memory_type: memory,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Generate the fields associated with memories
+    fn generate_memory_fields(&mut self) -> Result<(), Error> {
+        for memory in &self.memories {
+            match memory.memory_type {
+                MemoryType::M64 { .. } => todo!("64-bit memory"),
+                _ if !memory.origin.is_internal() => todo!("exported/imported memories"),
+                MemoryType::M32 { shared: true, .. } => todo!("shared memory"),
+                MemoryType::M32 { shared: false, .. } => {
+                    // TODO: if the limits on the memory constrain it to never grow, make the field final
+                    self.class.add_field(
+                        FieldAccessFlags::PRIVATE,
+                        memory.field_name.clone(),
+                        RefType::Object(BinaryName::BYTEBUFFER).render(),
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Visit the exports
     ///
     /// The actual processing of the exports is in `generate_exports`, since the module resources
@@ -375,6 +437,17 @@ impl<'a> ModuleTranslator<'a> {
                     table.field_name =
                         UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
                     table.origin.exported = true;
+                }
+
+                ExternalKind::Memory => {
+                    let memory: &mut Memory = self
+                        .memories
+                        .get_mut(export.index as usize)
+                        .expect("Exporting memory that ddoesn't exist");
+                    let name: String = self.settings.renamer.rename_memory(export.field);
+                    memory.field_name =
+                        UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
+                    memory.origin.exported = true;
                 }
 
                 ExternalKind::Global => {
@@ -470,6 +543,15 @@ impl<'a> ModuleTranslator<'a> {
         Ok(())
     }
 
+    /// Visit the datas section
+    fn visit_datas(&mut self, datas: DataSectionReader<'a>) -> Result<(), Error> {
+        self.validator.data_section(&datas)?;
+        for data in datas.into_iter() {
+            self.datas.push(data?);
+        }
+        Ok(())
+    }
+
     /// Generate a constructor
     pub fn generate_constructor(&mut self) -> Result<(), Error> {
         let mut method_builder = self.class.start_method(
@@ -495,6 +577,30 @@ impl<'a> ModuleTranslator<'a> {
                     jvm_code.access_field(
                         &self.settings.output_full_class_name,
                         &table.field_name,
+                        AccessMode::Write,
+                    )?;
+                } else {
+                    todo!()
+                }
+            }
+        }
+
+        // Initialize memory
+        for memory in &self.memories {
+            if memory.origin.is_internal() {
+                if let MemoryType::M32 { limits, .. } = memory.memory_type {
+                    jvm_code.push_instruction(Instruction::ALoad(0))?;
+                    jvm_code.const_int((limits.initial * 65536) as i32)?; // TODO: error if too big
+                    jvm_code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::ALLOCATE)?;
+                    jvm_code.access_field(
+                        &BinaryName::BYTEORDER,
+                        &UnqualifiedName::LITTLEENDIAN,
+                        AccessMode::Read,
+                    )?;
+                    jvm_code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::ORDER)?;
+                    jvm_code.access_field(
+                        &self.settings.output_full_class_name,
+                        &memory.field_name,
                         AccessMode::Write,
                     )?;
                 } else {
@@ -566,6 +672,52 @@ impl<'a> ModuleTranslator<'a> {
                     jvm_code.push_instruction(Instruction::IKill(1))?;
                 } else {
                     todo!()
+                }
+            }
+        }
+
+        // Initialize active data
+        for data in &self.datas {
+            if let DataKind::Active {
+                memory_index,
+                init_expr,
+            } = data.kind
+            {
+                let memory = &self.memories[memory_index as usize];
+                if memory.origin.is_internal() {
+                    // Load onto the stack the memory bytebuffer
+                    jvm_code.push_instruction(Instruction::ALoad(0))?;
+                    jvm_code.access_field(
+                        &self.settings.output_full_class_name,
+                        &memory.field_name,
+                        AccessMode::Read,
+                    )?;
+
+                    // Set the starting offset for the buffer
+                    jvm_code.push_instruction(Instruction::Dup)?;
+                    self.translate_init_expr(jvm_code, &init_expr)?;
+                    jvm_code.invoke(&BinaryName::BUFFER, &UnqualifiedName::POSITION)?;
+                    jvm_code.push_instruction(Instruction::Pop)?;
+
+                    for chunk in data.data.chunks(u16::MAX as usize) {
+                        jvm_code.const_string(chunk.iter().map(|&c| c as char).collect::<String>())?;
+                        jvm_code.const_string("ISO-8859-1")?;
+                        jvm_code.invoke(&BinaryName::STRING, &UnqualifiedName::GETBYTES)?;
+                        jvm_code.invoke_explicit(
+                            InvokeType::Virtual,
+                            &BinaryName::BYTEBUFFER,
+                            &UnqualifiedName::PUT,
+                            &MethodDescriptor {
+                                parameters: vec![FieldType::array(FieldType::BYTE)],
+                                return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+                            },
+                        )?;
+                    }
+
+                    // Kill the local variable, drop the bytebuffer
+                    jvm_code.push_instruction(Instruction::Pop)?;
+                } else {
+                    todo!("Initialize non-internal memory")
                 }
             }
         }

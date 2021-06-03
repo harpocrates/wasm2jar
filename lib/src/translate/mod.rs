@@ -16,7 +16,7 @@ pub use utility::*;
 
 use crate::jvm::UnqualifiedName;
 use crate::wasm::{StackType, TableType};
-use wasmparser::{ElementItem, ElementKind, FuncType, InitExpr, ResizableLimits};
+use wasmparser::{ElementItem, ElementKind, FuncType, InitExpr, MemoryType, ResizableLimits};
 
 /// Visibility of different importable/exportable entities in the WASM module
 #[derive(Debug)]
@@ -61,11 +61,23 @@ pub struct Table {
     pub limits: ResizableLimits,
 }
 
+#[derive(Debug)]
+pub struct Memory {
+    /// Where is the memory defined?
+    pub origin: MemberOrigin,
+
+    /// Name of the field in the class (if exported, this matches the export name)
+    pub field_name: UnqualifiedName,
+
+    /// Memory type
+    pub memory_type: MemoryType,
+}
+
 pub struct Global<'a> {
     /// Where is the table defined?
     pub origin: MemberOrigin,
 
-    /// Name of the method in the class (if exported, this matches the export name)
+    /// Name of the field in the class (if exported, this matches the export name)
     pub field_name: UnqualifiedName,
 
     /// Global type

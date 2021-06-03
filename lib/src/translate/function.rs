@@ -1,10 +1,10 @@
 use super::{
-    AccessMode, BranchCond, CodeBuilderExts, Error, Global, Settings, Table, UtilityClass,
+    AccessMode, BranchCond, CodeBuilderExts, Error, Global, Memory, Settings, Table, UtilityClass,
     UtilityMethod,
 };
 use crate::jvm::{
     BinaryName, BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
-    MethodDescriptor, OffsetVec, OrdComparison, RefType, UnqualifiedName, Width,
+    MethodDescriptor, OffsetVec, OrdComparison, RefType, UnqualifiedName, Width, BaseType, ShiftType
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::ops::Not;
-use wasmparser::{BrTable, FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType};
+use wasmparser::{BrTable, FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType, MemoryImmediate};
 
 /// Context for translating a WASM function into a JVM one
 pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
@@ -31,6 +31,9 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
 
     /// Tables
     wasm_tables: &'b [Table],
+
+    /// Memories
+    wasm_memories: &'b [Memory],
 
     /// Globals
     wasm_globals: &'b [Global<'a>],
@@ -65,6 +68,7 @@ where
         utilities: &'b mut UtilityClass,
         jvm_code: &'b mut B,
         wasm_tables: &'b [Table],
+        wasm_memories: &'b [Memory],
         wasm_globals: &'b [Global<'a>],
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<R>,
@@ -84,6 +88,7 @@ where
             jvm_code,
             jvm_locals,
             wasm_tables,
+            wasm_memories,
             wasm_globals,
             wasm_validator,
             wasm_prev_operand_stack_height: 0,
@@ -261,29 +266,100 @@ where
             Operator::TableFill { .. } => todo!(),
 
             // Memory Instructions
-            Operator::I32Load { .. } => todo!(),
-            Operator::I64Load { .. } => todo!(),
-            Operator::F32Load { .. } => todo!(),
-            Operator::F64Load { .. } => todo!(),
-            Operator::I32Load8S { .. } => todo!(),
-            Operator::I32Load8U { .. } => todo!(),
-            Operator::I32Load16S { .. } => todo!(),
-            Operator::I32Load16U { .. } => todo!(),
-            Operator::I64Load8S { .. } => todo!(),
-            Operator::I64Load8U { .. } => todo!(),
-            Operator::I64Load16S { .. } => todo!(),
-            Operator::I64Load16U { .. } => todo!(),
-            Operator::I64Load32S { .. } => todo!(),
-            Operator::I64Load32U { .. } => todo!(),
-            Operator::I32Store { .. } => todo!(),
-            Operator::I64Store { .. } => todo!(),
-            Operator::F32Store { .. } => todo!(),
-            Operator::F64Store { .. } => todo!(),
-            Operator::I32Store8 { .. } => todo!(),
-            Operator::I32Store16 { .. } => todo!(),
-            Operator::I64Store8 { .. } => todo!(),
-            Operator::I64Store16 { .. } => todo!(),
-            Operator::I64Store32 { .. } => todo!(),
+            Operator::I32Load { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETINT, BaseType::Int)?;
+            }
+            Operator::I64Load { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETLONG, BaseType::Long)?;
+            }
+            Operator::F32Load { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETFLOAT, BaseType::Float)?;
+            }
+            Operator::F64Load { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETDOUBLE, BaseType::Double)?;
+            }
+            Operator::I32Load8S { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GET, BaseType::Byte)?;
+            }
+            Operator::I32Load8U { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GET, BaseType::Byte)?;
+                self.jvm_code.const_int(0xFF)?;
+                self.jvm_code.push_instruction(Instruction::IAnd)?;
+            }
+            Operator::I32Load16S { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETSHORT, BaseType::Short)?;
+            }
+            Operator::I32Load16U { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETSHORT, BaseType::Short)?;
+                self.jvm_code.const_int(0xFFFF)?;
+                self.jvm_code.push_instruction(Instruction::IAnd)?;
+            }
+            Operator::I64Load8S { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GET, BaseType::Byte)?;
+                self.jvm_code.push_instruction(Instruction::I2L)?;
+            }
+            Operator::I64Load8U { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GET, BaseType::Byte)?;
+                self.jvm_code.const_int(0xFF)?;
+                self.jvm_code.push_instruction(Instruction::IAnd)?;
+                self.jvm_code.push_instruction(Instruction::I2L)?;
+            }
+            Operator::I64Load16S { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETSHORT, BaseType::Short)?;
+                self.jvm_code.push_instruction(Instruction::I2L)?;
+            }
+            Operator::I64Load16U { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETSHORT, BaseType::Short)?;
+                self.jvm_code.const_int(0xFFFF)?;
+                self.jvm_code.push_instruction(Instruction::IAnd)?;
+                self.jvm_code.push_instruction(Instruction::I2L)?;
+            }
+            Operator::I64Load32S { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETINT, BaseType::Int)?;
+                self.jvm_code.push_instruction(Instruction::I2L)?;
+            }
+            Operator::I64Load32U { memarg } => {
+                self.visit_memory_load(memarg, &UnqualifiedName::GETINT, BaseType::Int)?;
+                self.jvm_code.push_instruction(Instruction::I2L)?;
+                self.jvm_code.const_long(0xFFFFFFFF)?;
+                self.jvm_code.push_instruction(Instruction::LAnd)?;
+            }
+            Operator::I32Store { memarg } => {
+                self.visit_memory_store(memarg, &UnqualifiedName::PUTINT, BaseType::Int)?;
+            }
+            Operator::I64Store { memarg } => {
+                self.visit_memory_store(memarg, &UnqualifiedName::PUTLONG, BaseType::Long)?;
+            }
+            Operator::F32Store { memarg } => {
+                self.visit_memory_store(memarg, &UnqualifiedName::PUTFLOAT, BaseType::Float)?;
+            }
+            Operator::F64Store { memarg } => {
+                self.visit_memory_store(memarg, &UnqualifiedName::PUTDOUBLE, BaseType::Double)?;
+            }
+            Operator::I32Store8 { memarg } => {
+                self.visit_memory_store(memarg, &UnqualifiedName::PUT, BaseType::Byte)?;
+            }
+            Operator::I32Store16 { memarg } => {
+                self.visit_memory_store(memarg, &UnqualifiedName::PUTSHORT, BaseType::Short)?;
+            }
+            Operator::I64Store8 { memarg } => {
+                self.jvm_code.const_long(0xFF)?;
+                self.jvm_code.push_instruction(Instruction::LAnd)?;
+                self.jvm_code.push_instruction(Instruction::L2I)?;
+                self.visit_memory_store(memarg, &UnqualifiedName::PUT, BaseType::Byte)?;
+            }
+            Operator::I64Store16 { memarg } => {
+                self.jvm_code.const_long(0xFFFF)?;
+                self.jvm_code.push_instruction(Instruction::LAnd)?;
+                self.jvm_code.push_instruction(Instruction::L2I)?;
+                self.visit_memory_store(memarg, &UnqualifiedName::PUTSHORT, BaseType::Short)?;
+            }
+            Operator::I64Store32 { memarg } => {
+                self.jvm_code.const_long(0xFFFFFFF)?;
+                self.jvm_code.push_instruction(Instruction::LAnd)?;
+                self.jvm_code.push_instruction(Instruction::L2I)?;
+                self.visit_memory_store(memarg, &UnqualifiedName::PUTINT, BaseType::Int)?;
+            }
             Operator::MemorySize { .. } => todo!(),
             Operator::MemoryGrow { .. } => todo!(),
             Operator::MemoryInit { .. } => todo!(),
@@ -1055,6 +1131,13 @@ where
     fn visit_branch_table(&mut self, table: BrTable) -> Result<(), Error> {
         self.wasm_prev_operand_stack_height -= 1;
 
+        // If there are no cases apart from the default, we cannot use `tableswitch`
+        if table.is_empty() {
+            self.jvm_code.push_instruction(Instruction::Pop)?;
+            self.visit_branch(table.targets().next().expect("at least one default branch")?.0)?;
+            return Ok(())
+        }
+
         // Labels to go to for each entry in the branch table. The last label is the default.
         let mut table_switch_targets = vec![];
 
@@ -1327,7 +1410,7 @@ where
         self.jvm_code
             .push_instruction(Instruction::IStore(idx_offset))?;
 
-        for stack_value in expected.iter().rev() {
+        for stack_value in expected.iter() {
             // Put onto the top of stack the next element in the array
             self.jvm_code
                 .push_instruction(Instruction::ALoad(arr_offset))?;
@@ -1546,9 +1629,112 @@ where
                 AccessMode::Read,
             )?;
             self.jvm_code.push_instruction(Instruction::ArrayLength)?;
+            self.jvm_code.const_int(16)?;
+            self.jvm_code.push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
         } else {
             todo!()
         }
+
+        Ok(())
+    }
+
+    fn visit_memory_load(
+        &mut self,
+        memarg: MemoryImmediate,
+        load: &UnqualifiedName,
+        ty: BaseType,
+    ) -> Result<(), Error> {
+        let memory = &self.wasm_memories[memarg.memory as usize];
+
+        // Adjust the offset
+        if memarg.offset != 0 {
+            self.jvm_code.const_int(memarg.offset as i32)?; // TODO: overflow
+            self.jvm_code.push_instruction(Instruction::IAdd)?;
+        }
+
+        // Load the memory
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        self.jvm_code.push_instruction(Instruction::ALoad(this_off))?;
+        self.jvm_code.access_field(
+            &self.settings.output_full_class_name,
+            &memory.field_name,
+            AccessMode::Read,
+        )?;
+
+        // Re-order the stack and call the get function
+        self.jvm_code.push_instruction(Instruction::Swap)?;
+        self.jvm_code.invoke_explicit(
+            InvokeType::Virtual,
+            &BinaryName::BYTEBUFFER,
+            load,
+            &MethodDescriptor {
+                parameters: vec![FieldType::INT],
+                return_type: Some(FieldType::Base(ty)),
+            },
+        )?;
+
+        Ok(())
+    }
+
+    fn visit_memory_store(
+        &mut self,
+        memarg: MemoryImmediate,
+        store: &UnqualifiedName,
+        ty: BaseType,
+    ) -> Result<(), Error> {
+        let memory = &self.wasm_memories[memarg.memory as usize];
+
+        // Adjust the offset
+        if memarg.offset != 0 {
+            self.jvm_code.const_int(memarg.offset as i32)?; // TODO: overflow
+            self.jvm_code.push_instruction(Instruction::IAdd)?;
+        }
+
+        if ty.width() == 1 {
+            // Load the memory
+            let this_off = self.jvm_locals.lookup_this()?.0;
+            self.jvm_code.push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code.access_field(
+                &self.settings.output_full_class_name,
+                &memory.field_name,
+                AccessMode::Read,
+            )?;
+
+            // Re-order the stack
+            self.jvm_code.push_instruction(Instruction::DupX2)?;
+            self.jvm_code.push_instruction(Instruction::Pop)?;
+        } else {
+            // Stash the value being stored
+            let off = self.jvm_locals.push_local(FieldType::Base(ty))?;
+            self.jvm_code.set_local(off, &FieldType::Base(ty))?;
+
+            // Load the memory
+            let this_off = self.jvm_locals.lookup_this()?.0;
+            self.jvm_code.push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code.access_field(
+                &self.settings.output_full_class_name,
+                &memory.field_name,
+                AccessMode::Read,
+            )?;
+
+            // Re-order the stack
+            self.jvm_code.push_instruction(Instruction::Swap)?;
+            self.jvm_code.get_local(off, &FieldType::Base(ty))?;
+            let (off, ty) = self.jvm_locals.pop_local()?;
+            self.jvm_code.kill_local(off, ty)?;
+        }
+
+        // Call the store function
+        self.jvm_code.invoke_explicit(
+            InvokeType::Virtual,
+            &BinaryName::BYTEBUFFER,
+            store,
+            &MethodDescriptor {
+                parameters: vec![FieldType::INT, FieldType::Base(ty)],
+                return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+            },
+        )?;
+        self.jvm_code.push_instruction(Instruction::Pop)?;
 
         Ok(())
     }

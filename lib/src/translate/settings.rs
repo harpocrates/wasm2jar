@@ -19,6 +19,9 @@ pub struct Settings {
     /// Table name prefix (eg. `table`)
     pub wasm_table_name_prefix: UnqualifiedName,
 
+    /// Memory name prefix (eg. `memory`)
+    pub wasm_memory_name_prefix: UnqualifiedName,
+
     /// Inner utilities class name
     pub utilities_short_class_name: UnqualifiedName,
 
@@ -104,6 +107,7 @@ impl Settings {
             wasm_function_name_prefix: make_name("func")?,
             wasm_global_name_prefix: make_name("global")?,
             wasm_table_name_prefix: make_name("table")?,
+            wasm_memory_name_prefix: make_name("memory")?,
             utilities_short_class_name: make_name("Utils")?,
             part_short_class_name: make_name("Part")?,
             funcref_array_table_field_name: make_name("funcref_tables")?,

@@ -320,7 +320,8 @@ impl<'a> TestHarness<'a> {
                 harness.close_curly_block()?;
             }
 
-            _ => todo!(),
+            WastDirective::AssertUnlinkable { .. } => todo!("AssertUnlinkable"),
+            WastDirective::Register { .. } => todo!("Register"),
         }
 
         Ok(())
@@ -392,7 +393,7 @@ impl<'a> TestHarness<'a> {
         expecting_invalid: bool, // otherwise it` is expecting malformed
     ) -> Result<(), TestError> {
         match self.visit_module(module) {
-            Err(TestError::Translation(translate::Error::WasmParser(err))) if expecting_invalid => {
+            Err(TestError::Translation(translate::Error::WasmParser(err))) => {
                 let message = err.message();
                 if !message.starts_with(expecting_message) {
                     log::error!(

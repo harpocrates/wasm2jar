@@ -149,7 +149,7 @@ impl ClassGraph {
                 UnqualifiedName::GETBYTES,
                 MethodDescriptor {
                     parameters: vec![FieldType::Ref(RefType::STRING)],
-                    return_type: None,
+                    return_type: Some(FieldType::array(FieldType::BYTE)),
                 },
             );
         }
@@ -590,6 +590,143 @@ impl ClassGraph {
                 MethodDescriptor {
                     parameters: vec![FieldType::array(FieldType::OBJECT), FieldType::OBJECT],
                     return_type: None,
+                },
+            );
+        }
+    }
+
+    pub fn insert_buffer_types(&mut self) {
+        // java.nio.Buffer
+        {
+            let java_nio_buffer = self
+                .classes
+                .entry(BinaryName::BUFFER)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_nio_buffer.add_method(
+                false,
+                UnqualifiedName::POSITION,
+                MethodDescriptor {
+                    parameters: vec![FieldType::INT],
+                    return_type: Some(FieldType::object(BinaryName::BUFFER)),
+                },
+            );
+            java_nio_buffer.add_method(
+                false,
+                UnqualifiedName::CAPACITY,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: Some(FieldType::INT),
+                },
+            );
+        }
+
+        // java.nio.ByteOrder
+        {
+            let java_nio_byteorder = self
+                .classes
+                .entry(BinaryName::BYTEORDER)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_nio_byteorder.add_field(
+                true,
+                UnqualifiedName::BIGENDIAN,
+                FieldType::object(BinaryName::BYTEORDER),
+            );
+            java_nio_byteorder.add_field(
+                true,
+                UnqualifiedName::LITTLEENDIAN,
+                FieldType::object(BinaryName::BYTEORDER),
+            );
+        }
+
+        // java.nio.ByteBuffer
+        {
+            let java_nio_bytebuffer = self
+                .classes
+                .entry(BinaryName::BYTEBUFFER)
+                .or_insert(ClassData::new(BinaryName::BUFFER, false));
+            java_nio_bytebuffer.add_method(
+                true,
+                UnqualifiedName::ALLOCATE,
+                MethodDescriptor {
+                    parameters: vec![FieldType::INT],
+                    return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+                },
+            );
+            java_nio_bytebuffer.add_method(
+                true,
+                UnqualifiedName::ALLOCATEDIRECT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::INT],
+                    return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+                },
+            );
+            for (get_name, put_name, typ) in vec![
+                (UnqualifiedName::GET, UnqualifiedName::PUT, FieldType::BYTE),
+                (
+                    UnqualifiedName::GETDOUBLE,
+                    UnqualifiedName::PUTDOUBLE,
+                    FieldType::DOUBLE,
+                ),
+                (
+                    UnqualifiedName::GETFLOAT,
+                    UnqualifiedName::PUTFLOAT,
+                    FieldType::FLOAT,
+                ),
+                (
+                    UnqualifiedName::GETINT,
+                    UnqualifiedName::PUTINT,
+                    FieldType::INT,
+                ),
+                (
+                    UnqualifiedName::GETLONG,
+                    UnqualifiedName::PUTLONG,
+                    FieldType::LONG,
+                ),
+                (
+                    UnqualifiedName::GETSHORT,
+                    UnqualifiedName::PUTSHORT,
+                    FieldType::SHORT,
+                ),
+            ] {
+                java_nio_bytebuffer.add_method(
+                    false,
+                    get_name,
+                    MethodDescriptor {
+                        parameters: vec![FieldType::INT],
+                        return_type: Some(typ.clone()),
+                    },
+                );
+                java_nio_bytebuffer.add_method(
+                    false,
+                    put_name,
+                    MethodDescriptor {
+                        parameters: vec![FieldType::INT, typ],
+                        return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+                    },
+                );
+            }
+            java_nio_bytebuffer.add_method(
+                false,
+                UnqualifiedName::PUT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::object(BinaryName::BYTEBUFFER)],
+                    return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+                },
+            );
+            java_nio_bytebuffer.add_method(
+                false,
+                UnqualifiedName::PUT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::array(FieldType::BYTE)],
+                    return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+                },
+            );
+            java_nio_bytebuffer.add_method(
+                false,
+                UnqualifiedName::ORDER,
+                MethodDescriptor {
+                    parameters: vec![FieldType::object(BinaryName::BYTEORDER)],
+                    return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
                 },
             );
         }

@@ -7,6 +7,9 @@ pub trait Renamer {
     /// Rename a table's unqualified name
     fn rename_table(&mut self, name: &str) -> String;
 
+    /// Rename a memory's unqualified name
+    fn rename_memory(&mut self, name: &str) -> String;
+
     /// Rename a global's unqualified name
     fn rename_global(&mut self, name: &str) -> String;
 }
@@ -16,6 +19,10 @@ pub struct IdentityRenamer;
 
 impl Renamer for IdentityRenamer {
     fn rename_function(&mut self, name: &str) -> String {
+        name.to_owned()
+    }
+
+    fn rename_memory(&mut self, name: &str) -> String {
         name.to_owned()
     }
 
@@ -133,6 +140,10 @@ impl Renamer for JavaRenamer {
     }
 
     fn rename_table(&mut self, name: &str) -> String {
+        self.rename(name)
+    }
+
+    fn rename_memory(&mut self, name: &str) -> String {
         self.rename(name)
     }
 

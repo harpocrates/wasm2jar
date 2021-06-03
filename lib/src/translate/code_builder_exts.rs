@@ -4,6 +4,7 @@ use crate::jvm::{
     UnqualifiedName, Width,
 };
 use std::ops::Not;
+use std::borrow::Cow;
 
 pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// Zero initialize a local variable
@@ -46,7 +47,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     }
 
     /// Push a constant string to the stack
-    fn const_string(&mut self, string: &'static str) -> Result<(), Error> {
+    fn const_string(&mut self, string: impl Into<Cow<'static, str>>) -> Result<(), Error> {
         let str_idx = {
             let mut constants = self.constants();
             let utf8_idx = constants.get_utf8(string)?;

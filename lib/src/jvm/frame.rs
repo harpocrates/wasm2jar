@@ -909,6 +909,12 @@ fn interpret_instruction(
                     &VType::from(expected_arg_type.clone()),
                 );
                 if !compatible {
+                    log::error!(
+                        "Incompatible argument types: found {:?} but expected {:?} (for {})",
+                        found_arg_type,
+                        expected_arg_type,
+                        desc.render(),
+                    );
                     return Err(VerifierErrorKind::InvalidType);
                 }
             }

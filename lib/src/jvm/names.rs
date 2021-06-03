@@ -126,8 +126,12 @@ impl UnqualifiedName {
 
     // JDK names
     pub const ABS: Self = Self::name("abs");
+    pub const ALLOCATE: Self = Self::name("allocate");
+    pub const ALLOCATEDIRECT: Self = Self::name("allocateDirect");
+    pub const BIGENDIAN: Self = Self::name("BIG_ENDIAN");
     pub const BITCOUNT: Self = Self::name("bitCount");
     pub const BYTEVALUE: Self = Self::name("byteValue");
+    pub const CAPACITY: Self = Self::name("capacity");
     pub const CEIL: Self = Self::name("ceil");
     pub const COMPARE: Self = Self::name("compare");
     pub const COMPAREUNSIGNED: Self = Self::name("compareUnsigned");
@@ -141,11 +145,18 @@ impl UnqualifiedName {
     pub const FLOATTORAWINTBITS: Self = Self::name("floatToRawIntBits");
     pub const FLOATVALUE: Self = Self::name("floatValue");
     pub const FLOOR: Self = Self::name("floor");
+    pub const GET: Self = Self::name("get");
     pub const GETBYTES: Self = Self::name("getBytes");
+    pub const GETDOUBLE: Self = Self::name("getDouble");
+    pub const GETFLOAT: Self = Self::name("getFloat");
+    pub const GETINT: Self = Self::name("getInt");
+    pub const GETLONG: Self = Self::name("getLong");
+    pub const GETSHORT: Self = Self::name("getShort");
     pub const HASHCODE: Self = Self::name("hashCode");
     pub const INTBITSTOFLOAT: Self = Self::name("intBitsToFloat");
     pub const INTVALUE: Self = Self::name("intValue");
     pub const LENGTH: Self = Self::name("length");
+    pub const LITTLEENDIAN: Self = Self::name("LITTLE_ENDIAN");
     pub const LONGBITSTODOUBLE: Self = Self::name("longBitsToDouble");
     pub const LONGVALUE: Self = Self::name("longValue");
     pub const MAX: Self = Self::name("max");
@@ -156,7 +167,15 @@ impl UnqualifiedName {
     pub const NEGATIVEINFINITY: Self = Self::name("NEGATIVE_INFINITY");
     pub const NUMBEROFLEADINGZEROS: Self = Self::name("numberOfLeadingZeros");
     pub const NUMBEROFTRAILINGZEROS: Self = Self::name("numberOfTrailingZeros");
+    pub const ORDER: Self = Self::name("order");
+    pub const POSITION: Self = Self::name("position");
     pub const POSITIVEINFINITY: Self = Self::name("POSITIVE_INFINITY");
+    pub const PUT: Self = Self::name("put");
+    pub const PUTDOUBLE: Self = Self::name("putDouble");
+    pub const PUTFLOAT: Self = Self::name("putFloat");
+    pub const PUTINT: Self = Self::name("putInt");
+    pub const PUTLONG: Self = Self::name("putLong");
+    pub const PUTSHORT: Self = Self::name("putShort");
     pub const REMAINDERUNSIGNED: Self = Self::name("remainderUnsigned");
     pub const RINT: Self = Self::name("rint");
     pub const ROTATELEFT: Self = Self::name("rotateLeft");
@@ -221,10 +240,14 @@ impl BinaryName {
     pub const ARITHMETICEXCEPTION: Self = Self::name("java/lang/ArithmeticException");
     pub const ARRAYS: Self = Self::name("java/util/Arrays");
     pub const ASSERTIONERROR: Self = Self::name("java/lang/AssertionError");
+    pub const BUFFER: Self = Self::name("java/nio/Buffer");
+    pub const BYTEBUFFER: Self = Self::name("java/nio/ByteBuffer");
+    pub const BYTEORDER: Self = Self::name("java/nio/ByteOrder");
     pub const CALLSITE: Self = Self::name("java/lang/invoke/CallSite");
     pub const CHARSEQUENCE: Self = Self::name("java/lang/CharSequence");
     pub const CLASS: Self = Self::name("java/lang/Class");
     pub const CLONEABLE: Self = Self::name("java/lang/Cloneable");
+    pub const CONSTANTCALLSITE: Self = Self::name("java/lang/invoke/ConstantCallSite");
     pub const DOUBLE: Self = Self::name("java/lang/Double");
     pub const ERROR: Self = Self::name("java/lang/Error");
     pub const EXCEPTION: Self = Self::name("java/lang/Exception");
@@ -235,6 +258,7 @@ impl BinaryName {
     pub const METHODHANDLE_LOOKUP: Self = Self::name("java/lang/invoke/MethodHandle$Lookup");
     pub const METHODHANDLE: Self = Self::name("java/lang/invoke/MethodHandle");
     pub const METHODTYPE: Self = Self::name("java/lang/invoke/MethodType");
+    pub const MUTABLECALLSITE: Self = Self::name("java/lang/invoke/MutableCallSite");
     pub const NUMBER: Self = Self::name("java/lang/Number");
     pub const OBJECT: Self = Self::name("java/lang/Object");
     pub const RUNTIMEEXCEPTION: Self = Self::name("java/lang/RuntimeException");

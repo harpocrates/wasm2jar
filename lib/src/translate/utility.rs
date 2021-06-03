@@ -497,6 +497,7 @@ impl UtilityClass {
         let cls_idx = code.get_class_idx(&RefType::ASSERTIONERROR)?;
         code.push_instruction(Instruction::New(cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
+        code.const_string("unreachable")?;
         code.invoke(&BinaryName::ASSERTIONERROR, &UnqualifiedName::INIT)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 

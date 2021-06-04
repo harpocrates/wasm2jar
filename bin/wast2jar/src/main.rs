@@ -47,6 +47,13 @@ fn main() -> io::Result<()> {
                 .help("Sets the `javac` executable to use"),
         )
         .arg(
+            Arg::with_name("incremental")
+                .long("incremental")
+                .required(false)
+                .takes_value(false)
+                .help("Specifies to run in a more incremental (slower) modde"),
+        )
+        .arg(
             Arg::with_name("INPUT")
                 .help("Sets the input file or folder")
                 .required(true)
@@ -56,6 +63,7 @@ fn main() -> io::Result<()> {
 
     let input_path: PathBuf = PathBuf::from(matches.value_of_os("INPUT").unwrap());
     let output_path: PathBuf = PathBuf::from(matches.value_of_os("output").unwrap());
+    let incremental_mode: bool = matches.is_present("incremental");
 
     // Find all of the test cases
     let tests: Vec<PathBuf> = if input_path.is_file() {
@@ -74,7 +82,7 @@ fn main() -> io::Result<()> {
     let mut test_sub_directories: HashSet<String> = HashSet::new();
 
     // Go through them, one at a time
-    let mut _count_ok = 0;
+    let mut count_ok = 0;
     let mut count_fail = 0;
     let mut count_error = 0;
     let stdout = StandardStream::stdout(ColorChoice::Auto);
@@ -109,12 +117,12 @@ fn main() -> io::Result<()> {
         fs::create_dir_all(output_subdirectory)?;
 
         // Run the test
-        let outcome: TestOutcome = TestHarness::run(&output_subdirectory, &test)
+        let outcome: TestOutcome = TestHarness::run(&output_subdirectory, &test, incremental_mode)
             .map_or_else(TestOutcome::from, |_| TestOutcome::Ok);
 
         let (color, summary, message) = match outcome {
             TestOutcome::Ok => {
-                _count_ok += 1;
+                count_ok += 1;
                 (Color::Green, b"OK".as_ref(), None)
             }
             TestOutcome::Fail(msg) => {
@@ -144,6 +152,29 @@ fn main() -> io::Result<()> {
         s.write(b"]\n")?;
         s.reset()?;
         s.flush()?;
+    }
+
+    // Only print a summary when there is something to summarize
+    if count_ok + count_fail + count_error > 1 {
+        let mut s = stdout.lock();
+        s.write(b"\n")?;
+        s.write(b"Summary:\n")?;
+        for (color, count, message) in vec![
+            (Color::Green, count_ok, "OK"),
+            (Color::Yellow, count_error, "ERROR"),
+            (Color::Red, count_fail, "FAILED"),
+        ] {
+            if count > 0 {
+                s.write(b" - ")?;
+                s.write(count.to_string().as_bytes())?;
+                s.write(b" ")?;
+                s.set_color(ColorSpec::new().set_fg(Some(color)))?;
+                s.write(message.as_bytes())?;
+                s.reset()?;
+                s.write(b"\n")?;
+                s.flush()?;
+            }
+        }
     }
 
     // Exit code

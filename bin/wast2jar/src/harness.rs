@@ -29,8 +29,9 @@ pub struct TestHarness<'a> {
     /// Number of Java harnesses we've created so far
     java_harness_idx: usize,
 
-    /// Current in-process harness file (classname, file)
-    latest_java_harness: Option<JavaHarness>,
+    /// Current in-process harness file and whether the modules in scope have changed since the
+    /// last access
+    latest_java_harness: Option<(JavaHarness, bool)>,
 
     /// Java class name of latest module (this is in `foo/baz/Bar` format)
     latest_module: Option<String>,
@@ -40,11 +41,19 @@ pub struct TestHarness<'a> {
 
     /// Last seen span
     pub latest_span: Span,
+
+    /// If set, each harness file gets compiled then run sequentiallly (slower, easier to look at
+    /// the output for debugging)
+    compile_and_run_incrementally: bool,
 }
 
 impl<'a> TestHarness<'a> {
     /// Run a test harness for a WAST file, operating entirely in the specified output directory
-    pub fn run<P, Q>(output_directory: P, wast_file: Q) -> Result<(), TestError>
+    pub fn run<P, Q>(
+        output_directory: P,
+        wast_file: Q,
+        compile_and_run_incrementally: bool,
+    ) -> Result<(), TestError>
     where
         P: AsRef<Path>,
         Q: AsRef<Path>,
@@ -64,12 +73,13 @@ impl<'a> TestHarness<'a> {
             latest_java_harness: None,
             translated_modules: HashMap::new(),
             latest_span: Span::from_offset(0),
+            compile_and_run_incrementally,
         };
 
         for directive in directives {
             harness.visit_directive(directive)?;
         }
-        harness.end_java_harness()?;
+        harness.end_java_harness(true)?;
 
         Ok(())
     }
@@ -85,7 +95,7 @@ impl<'a> TestHarness<'a> {
 
         match directive {
             WastDirective::Module(module) => {
-                self.end_java_harness()?;
+                self.end_java_harness(false)?;
                 let module = QuoteModule::Module(module);
                 for (class_name, class) in self.visit_module(module)? {
                     let class_file = self
@@ -98,7 +108,7 @@ impl<'a> TestHarness<'a> {
             }
 
             WastDirective::QuoteModule { source, .. } => {
-                self.end_java_harness()?;
+                self.end_java_harness(false)?;
                 let module = QuoteModule::Quote(source);
                 for (class_name, class) in self.visit_module(module)? {
                     let class_file = self
@@ -115,7 +125,7 @@ impl<'a> TestHarness<'a> {
                 message,
                 span,
             } => {
-                self.end_java_harness()?;
+                self.end_java_harness(false)?;
                 self.visit_module_expecting_error(module, span, message, false)?;
             }
 
@@ -124,7 +134,7 @@ impl<'a> TestHarness<'a> {
                 message,
                 span,
             } => {
-                self.end_java_harness()?;
+                self.end_java_harness(false)?;
                 let module = QuoteModule::Module(module);
                 self.visit_module_expecting_error(module, span, message, true)?;
             }
@@ -320,8 +330,12 @@ impl<'a> TestHarness<'a> {
                 harness.close_curly_block()?;
             }
 
-            WastDirective::AssertUnlinkable { .. } => todo!("AssertUnlinkable"),
-            WastDirective::Register { .. } => todo!("Register"),
+            WastDirective::AssertUnlinkable { .. } => {
+                return Err(TestError::IncompleteHarness("assert_unlinkable"))
+            }
+            WastDirective::Register { .. } => {
+                return Err(TestError::IncompleteHarness("register"))
+            }
         }
 
         Ok(())
@@ -396,13 +410,12 @@ impl<'a> TestHarness<'a> {
             Err(TestError::Translation(translate::Error::WasmParser(err))) => {
                 let message = err.message();
                 if !message.starts_with(expecting_message) {
-                    log::error!(
+                    log::warn!(
                         "{}: Expected invalid message {:?} but got {:?}",
                         self.pretty_span(span),
                         expecting_message,
                         message
                     );
-                    return Err(TestError::InvalidMessage(message.to_owned()));
                 }
             }
             Err(TestError::Wast(_)) if !expecting_invalid => (),
@@ -421,49 +434,72 @@ impl<'a> TestHarness<'a> {
             let class_name = format!("JavaHarness{}", self.java_harness_idx);
             let java_harness_file = self.output_directory.join(format!("{}.java", class_name));
 
-            let mut modules_in_scope = vec![];
-            for name in self.translated_modules.values() {
-                modules_in_scope.push((name.to_owned(), format!("mod_{}", name)));
-            }
-            if let Some(name) = self.latest_module.as_ref() {
-                modules_in_scope.push((name.to_owned(), String::from("current")));
-            }
+            let modules_in_scope = Self::modules_in_scope(
+                self.translated_modules.values(),
+                self.latest_module.as_ref(),
+            );
 
             self.java_harness_idx += 1;
             log::debug!("Starting fresh Java harness {:?}", &java_harness_file);
 
-            self.latest_java_harness = Some(JavaHarness::new(
-                class_name,
-                java_harness_file,
-                modules_in_scope,
-            )?);
+            let harness = JavaHarness::new(class_name, java_harness_file, modules_in_scope)?;
+            self.latest_java_harness = Some((harness, false));
         }
 
-        Ok(self.latest_java_harness.as_mut().unwrap().writer()?)
+        let (harness, scope_has_changed) = self.latest_java_harness.as_mut().unwrap();
+        if *scope_has_changed {
+            let modules_in_scope = Self::modules_in_scope(
+                self.translated_modules.values(),
+                self.latest_module.as_ref(),
+            );
+            harness.change_modules_in_scope(modules_in_scope)?;
+            *scope_has_changed = false;
+        }
+        Ok(harness.writer()?)
+    }
+
+    fn modules_in_scope<'b>(
+        past: impl Iterator<Item = &'b String>,
+        current: Option<&'b String>,
+    ) -> Vec<(String, String)> {
+        let mut modules_in_scope = vec![];
+        for name in past {
+            modules_in_scope.push((name.to_owned(), format!("mod_{}", name)));
+        }
+        if let Some(name) = current {
+            modules_in_scope.push((name.to_owned(), String::from("current")));
+        }
+        modules_in_scope
     }
 
     /// Close off the latest Java harness (if there is one) and compile + run it
-    fn end_java_harness(&mut self) -> Result<(), TestError> {
-        if let Some(harness) = self.latest_java_harness.take() {
-            let harness_name = harness.close()?;
+    fn end_java_harness(&mut self, end_of_harness: bool) -> Result<(), TestError> {
+        if self.compile_and_run_incrementally || end_of_harness {
+            if let Some((harness, _)) = self.latest_java_harness.take() {
+                let harness_name = harness.close()?;
 
-            log::debug!("Compiling Java harness {:?}", &harness_name);
-            let compile_output = Command::new("javac")
-                .current_dir(&self.output_directory)
-                .arg(&format!("{}.java", harness_name))
-                .output()?;
-            if !compile_output.status.success() {
-                return Err(TestError::JavacFailed(compile_output));
+                log::debug!("Compiling Java harness {:?}", &harness_name);
+                let compile_output = Command::new("javac")
+                    .current_dir(&self.output_directory)
+                    .arg(&format!("{}.java", harness_name))
+                    .output()?;
+                if !compile_output.status.success() {
+                    return Err(TestError::JavacFailed(compile_output));
+                }
+
+                log::debug!("Running Java harness {:?}", &harness_name);
+                let run_output = Command::new("java")
+                    .current_dir(&self.output_directory)
+                    .arg("-ea") // enable assertions
+                    .arg(&harness_name)
+                    .output()?;
+                if !run_output.status.success() {
+                    return Err(TestError::JavaFailed(run_output));
+                }
             }
-
-            log::debug!("Running Java harness {:?}", &harness_name);
-            let run_output = Command::new("java")
-                .current_dir(&self.output_directory)
-                .arg("-ea") // enable assertions
-                .arg(&harness_name)
-                .output()?;
-            if !run_output.status.success() {
-                return Err(TestError::JavaFailed(run_output));
+        } else {
+            if let Some((_, scope_has_changed)) = self.latest_java_harness.as_mut() {
+                *scope_has_changed = true;
             }
         }
 

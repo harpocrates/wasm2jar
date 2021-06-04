@@ -3,8 +3,8 @@ use crate::jvm::{
     Error, FieldType, Instruction, InvokeType, MethodDescriptor, Name, OrdComparison, RefType,
     UnqualifiedName, Width,
 };
-use std::ops::Not;
 use std::borrow::Cow;
+use std::ops::Not;
 
 pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// Zero initialize a local variable

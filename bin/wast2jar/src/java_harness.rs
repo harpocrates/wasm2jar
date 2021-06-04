@@ -19,6 +19,12 @@ pub struct JavaHarness {
 
     /// Number of tests in the latest method
     tests_in_latest_method: usize,
+
+    /// Number of test methods
+    test_methods_so_far: usize,
+
+    /// Number of run methods
+    run_methods_so_far: usize,
 }
 
 impl JavaHarness {
@@ -39,6 +45,8 @@ impl JavaHarness {
             modules_in_scope,
             methods_generated: vec![],
             tests_in_latest_method: 0,
+            test_methods_so_far: 0,
+            run_methods_so_far: 0,
         };
 
         // Class pre-amble
@@ -76,7 +84,8 @@ impl JavaHarness {
     }
 
     fn start_new_test_method(&mut self) -> io::Result<()> {
-        let method_name = Self::test_method_name(self.methods_generated.len());
+        let method_name = Self::test_method_name(self.test_methods_so_far);
+        self.test_methods_so_far += 1;
         self.writer
             .inline_code_fmt(format_args!("static boolean {}(", &method_name))?;
         self.methods_generated.push(method_name);
@@ -116,18 +125,33 @@ impl JavaHarness {
         Ok(())
     }
 
-    /// Close off the class and the undrlying writer and return the name of the harness
-    pub fn close(mut self) -> io::Result<String> {
+    /// Alters the list of modules in scope
+    pub fn change_modules_in_scope(
+        &mut self,
+        modules_in_scope: Vec<(String, String)>,
+    ) -> io::Result<()> {
+        self.create_next_run_method()?;
+        self.modules_in_scope = modules_in_scope;
+        self.start_new_test_method()?;
+
+        Ok(())
+    }
+
+    /// Create a `run{N}` method that call all of the test methods buffered up so far
+    fn create_next_run_method(&mut self) -> io::Result<()> {
         self.finish_current_test_method()?;
 
-        // Make the main method
+        // Make the `run` method
         self.writer.newline()?;
-        self.writer
-            .inline_code("public static void main(String[] args)")?;
+        self.writer.inline_code_fmt(format_args!(
+            "public static boolean run{}()",
+            self.run_methods_so_far
+        ))?;
         self.writer.open_curly_block()?;
         self.writer
             .inline_code_fmt(format_args!("boolean {} = false;", Self::FAILURE_VAR_NAME))?;
         self.writer.newline()?;
+        self.run_methods_so_far += 1;
 
         // Instantiate all of the modules in scope
         self.writer.newline()?;
@@ -142,7 +166,7 @@ impl JavaHarness {
 
         // Call all of the test methods in order
         self.writer.newline()?;
-        for test_method in self.methods_generated {
+        for test_method in std::mem::take(&mut self.methods_generated) {
             self.writer.inline_code_fmt(format_args!(
                 "{} = {}(",
                 Self::FAILURE_VAR_NAME,
@@ -165,14 +189,42 @@ impl JavaHarness {
             self.writer.newline()?;
         }
 
-        // Exit code based on whether we saw any errors
+        // Return whether something failed
         self.writer.newline()?;
+        self.writer
+            .inline_code_fmt(format_args!("return {};", Self::FAILURE_VAR_NAME))?;
+        self.writer.close_curly_block()?;
+
+        Ok(())
+    }
+
+    /// Close off the class and the undrlying writer and return the name of the harness
+    pub fn close(mut self) -> io::Result<String> {
+        self.create_next_run_method()?;
+
+        // Make a main method that has an exit code corresponding to the output of `run`
+        self.writer.newline()?;
+        self.writer
+            .inline_code("public static void main(String[] args)")?;
+        self.writer.open_curly_block()?;
+
+        self.writer
+            .inline_code_fmt(format_args!("boolean {} = false;", Self::FAILURE_VAR_NAME))?;
+        for idx in 0..self.run_methods_so_far {
+            self.writer.inline_code_fmt(format_args!(
+                "{failVar} = {failVar} || run{idx}();",
+                failVar = Self::FAILURE_VAR_NAME,
+                idx = idx,
+            ))?;
+            self.writer.newline()?;
+        }
+
         self.writer.inline_code_fmt(format_args!(
             "System.exit({} ? 1 : 0);",
             Self::FAILURE_VAR_NAME
         ))?;
-
         self.writer.close_curly_block()?;
+
         self.writer.close_curly_block()?;
         self.writer.close()?;
 

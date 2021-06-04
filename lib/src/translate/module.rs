@@ -12,10 +12,10 @@ use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourc
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasmparser::{
-    ElementItem, ElementKind, ElementSectionReader, Export, ExportSectionReader, ExternalKind,
-    FunctionBody, GlobalSectionReader, Import, ImportSectionReader, InitExpr, MemorySectionReader,
-    MemoryType, Operator, Parser, Payload, TableSectionReader, Validator, Data, DataSectionReader,
-    DataKind,
+    Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader, Export,
+    ExportSectionReader, ExternalKind, FunctionBody, GlobalSectionReader, Import,
+    ImportSectionReader, InitExpr, MemorySectionReader, MemoryType, Operator, Parser, Payload,
+    TableSectionReader, Validator,
 };
 
 pub struct ModuleTranslator<'a> {
@@ -153,7 +153,14 @@ impl<'a> ModuleTranslator<'a> {
         log::trace!("Payload {:?}", payload);
 
         // TODO: find a better place to trigger generation of this code
-        if !self.fields_generated && matches!(&payload, Payload::CodeSectionStart { .. } | Payload::ModuleSectionStart { .. } | Payload::End) {
+        if !self.fields_generated
+            && matches!(
+                &payload,
+                Payload::CodeSectionStart { .. }
+                    | Payload::ModuleSectionStart { .. }
+                    | Payload::End
+            )
+        {
             self.generate_table_fields()?;
             self.generate_memory_fields()?;
             self.generate_global_fields()?;
@@ -700,7 +707,8 @@ impl<'a> ModuleTranslator<'a> {
                     jvm_code.push_instruction(Instruction::Pop)?;
 
                     for chunk in data.data.chunks(u16::MAX as usize) {
-                        jvm_code.const_string(chunk.iter().map(|&c| c as char).collect::<String>())?;
+                        jvm_code
+                            .const_string(chunk.iter().map(|&c| c as char).collect::<String>())?;
                         jvm_code.const_string("ISO-8859-1")?;
                         jvm_code.invoke(&BinaryName::STRING, &UnqualifiedName::GETBYTES)?;
                         jvm_code.invoke_explicit(

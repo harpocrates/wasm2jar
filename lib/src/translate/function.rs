@@ -3,8 +3,9 @@ use super::{
     UtilityMethod,
 };
 use crate::jvm::{
-    BinaryName, BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction, InvokeType,
-    MethodDescriptor, OffsetVec, OrdComparison, RefType, UnqualifiedName, Width, BaseType, ShiftType
+    BaseType, BinaryName, BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction,
+    InvokeType, MethodDescriptor, OffsetVec, OrdComparison, RefType, ShiftType, UnqualifiedName,
+    Width,
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
@@ -13,7 +14,9 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::ops::Not;
-use wasmparser::{BrTable, FuncValidator, FunctionBody, Operator, Type, TypeOrFuncType, MemoryImmediate};
+use wasmparser::{
+    BrTable, FuncValidator, FunctionBody, MemoryImmediate, Operator, Type, TypeOrFuncType,
+};
 
 /// Context for translating a WASM function into a JVM one
 pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
@@ -259,11 +262,11 @@ where
             // Table instructions
             Operator::TableGet { table } => self.visit_table_get(table)?,
             Operator::TableSet { table } => self.visit_table_set(table)?,
-            Operator::TableInit { .. } => todo!(),
-            Operator::TableCopy { .. } => todo!(),
-            Operator::TableGrow { .. } => todo!(),
+            Operator::TableInit { .. } => todo!("table.init"),
+            Operator::TableCopy { .. } => todo!("table.copy"),
+            Operator::TableGrow { .. } => todo!("table.grow"),
             Operator::TableSize { table } => self.visit_table_size(table)?,
-            Operator::TableFill { .. } => todo!(),
+            Operator::TableFill { .. } => todo!("table.fill"),
 
             // Memory Instructions
             Operator::I32Load { memarg } => {
@@ -360,13 +363,13 @@ where
                 self.jvm_code.push_instruction(Instruction::L2I)?;
                 self.visit_memory_store(memarg, &UnqualifiedName::PUTINT, BaseType::Int)?;
             }
-            Operator::MemorySize { .. } => todo!(),
-            Operator::MemoryGrow { .. } => todo!(),
-            Operator::MemoryInit { .. } => todo!(),
-            Operator::MemoryCopy { .. } => todo!(),
-            Operator::MemoryFill { .. } => todo!(),
-            Operator::DataDrop { .. } => todo!(),
-            Operator::ElemDrop { .. } => todo!(),
+            Operator::MemorySize { .. } => todo!("memory.size"),
+            Operator::MemoryGrow { .. } => todo!("memory.grow"),
+            Operator::MemoryInit { .. } => todo!("memory.init"),
+            Operator::MemoryCopy { .. } => todo!("memory.copy"),
+            Operator::MemoryFill { .. } => todo!("memory.fill"),
+            Operator::DataDrop { .. } => todo!("data.drop"),
+            Operator::ElemDrop { .. } => todo!("elem.drop"),
 
             // Numeric Instructions
             Operator::I32Const { value } => self.jvm_code.const_int(value)?,
@@ -1134,8 +1137,14 @@ where
         // If there are no cases apart from the default, we cannot use `tableswitch`
         if table.is_empty() {
             self.jvm_code.push_instruction(Instruction::Pop)?;
-            self.visit_branch(table.targets().next().expect("at least one default branch")?.0)?;
-            return Ok(())
+            self.visit_branch(
+                table
+                    .targets()
+                    .next()
+                    .expect("at least one default branch")?
+                    .0,
+            )?;
+            return Ok(());
         }
 
         // Labels to go to for each entry in the branch table. The last label is the default.
@@ -1630,7 +1639,8 @@ where
             )?;
             self.jvm_code.push_instruction(Instruction::ArrayLength)?;
             self.jvm_code.const_int(16)?;
-            self.jvm_code.push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
+            self.jvm_code
+                .push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
         } else {
             todo!()
         }
@@ -1654,7 +1664,8 @@ where
 
         // Load the memory
         let this_off = self.jvm_locals.lookup_this()?.0;
-        self.jvm_code.push_instruction(Instruction::ALoad(this_off))?;
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
         self.jvm_code.access_field(
             &self.settings.output_full_class_name,
             &memory.field_name,
@@ -1693,7 +1704,8 @@ where
         if ty.width() == 1 {
             // Load the memory
             let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code.push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(this_off))?;
             self.jvm_code.access_field(
                 &self.settings.output_full_class_name,
                 &memory.field_name,
@@ -1710,7 +1722,8 @@ where
 
             // Load the memory
             let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code.push_instruction(Instruction::ALoad(this_off))?;
+            self.jvm_code
+                .push_instruction(Instruction::ALoad(this_off))?;
             self.jvm_code.access_field(
                 &self.settings.output_full_class_name,
                 &memory.field_name,

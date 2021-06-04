@@ -7,6 +7,7 @@ use wasm2jar::translate;
 pub enum TestError {
     Io(io::Error),
     Wast(wast::Error),
+    IncompleteHarness(&'static str),
     Translation(translate::Error),
     TranslationPanic(String),
     InvalidMessage(String),
@@ -48,6 +49,7 @@ impl From<TestError> for TestOutcome {
         match err {
             TestError::Io(io_err) => TestOutcome::Error(format!("IO - {:?}", io_err)),
             TestError::Wast(wast_err) => TestOutcome::Error(format!("WAST - {:?}", wast_err)),
+            TestError::IncompleteHarness(msg) => TestOutcome::Error(format!("Harness - {}", msg)),
             TestError::Translation(err) => TestOutcome::Fail(format!("Translation - {:?}", err)),
             TestError::InvalidMessage(err) => {
                 TestOutcome::Fail(format!("Incorrect invalid message - {:?}", err))

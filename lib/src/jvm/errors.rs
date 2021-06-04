@@ -29,7 +29,7 @@ pub enum Error {
 
     /// Error trying to verify
     VerifierError {
-        instruction: Instruction,
+        instruction: String, //  Instruction<'a>
         kind: VerifierErrorKind,
     },
     VerifierBranchingError {
@@ -40,8 +40,8 @@ pub enum Error {
     /// A label needs to have incompatible frames
     IncompatibleFrames(
         SynLabel,
-        Frame<RefType, (RefType, Offset)>,
-        Frame<RefType, (RefType, Offset)>,
+        Frame<String, String>,
+        Frame<String, String>,
     ),
 
     /// A particular offset has two conflicting frames
@@ -66,8 +66,8 @@ pub enum VerifierErrorKind {
     MissingConstant(ConstantIndex),
     NotLoadableConstant(Constant),
     IncompatibleTypes(
-        VerificationType<RefType, (RefType, Offset)>,
-        VerificationType<RefType, (RefType, Offset)>,
+        VerificationType<String, (String, Offset)>,
+        VerificationType<String, (String, Offset)>,
     ),
     BadDescriptor(String),
 }

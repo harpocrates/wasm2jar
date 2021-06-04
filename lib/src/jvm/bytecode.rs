@@ -20,7 +20,7 @@ use std::ops::Not;
 
 /// Non-branching JVM bytecode instruction
 #[derive(Clone, Debug)]
-pub enum Instruction {
+pub enum Instruction<'a> {
     Nop,
     AConstNull,
     IConstM1,
@@ -64,7 +64,7 @@ pub enum Instruction {
     FKill(u16),
     DKill(u16),
     AKill(u16),
-    AHint(RefType), // hint for the verifier to infer a more general type
+    AHint(RefType<'a>), // hint for the verifier to infer a more general type
     IAStore,
     LAStore,
     FAStore,
@@ -147,7 +147,7 @@ pub enum Instruction {
     InstanceOf(ClassConstantIndex),
 }
 
-impl Width for Instruction {
+impl Width for Instruction<'_> {
     fn width(&self) -> usize {
         match self {
           Instruction::IKill(_)
@@ -316,7 +316,7 @@ impl Width for Instruction {
     }
 }
 
-impl Serialize for Instruction {
+impl Serialize for Instruction<'_> {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
         /* The load/store instructions follow the same pattern:
          *

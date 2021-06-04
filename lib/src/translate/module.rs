@@ -6,47 +6,48 @@ use crate::jvm::{
     BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile, ClassGraph, CodeBuilder,
     ConstantIndex, Descriptor, FieldAccessFlags, FieldType, HandleKind, InnerClass,
     InnerClassAccessFlags, InnerClasses, Instruction, InvokeType, MethodAccessFlags,
-    MethodDescriptor, NestHost, NestMembers, RefType, Width,
+    MethodDescriptor, NestHost, NestMembers, RefType, Width, BinaryName, UnqualifiedName
 };
 use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourcesExt};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::convert::TryFrom;
 use wasmparser::{
     ElementItem, ElementKind, ElementSectionReader, Export, ExportSectionReader, ExternalKind,
     FunctionBody, GlobalSectionReader, Import, ImportSectionReader, InitExpr, Operator, Parser,
     Payload, TableSectionReader, Validator,
 };
 
-pub struct ModuleTranslator<'a> {
-    settings: Settings,
+pub struct ModuleTranslator<'wasm, 'jvm> {
+    settings: Settings<'jvm>,
     validator: Validator,
     #[allow(dead_code)]
-    class_graph: Rc<RefCell<ClassGraph>>,
-    class: ClassBuilder,
-    previous_parts: Vec<ClassBuilder>,
-    current_part: ClassBuilder,
+    class_graph: Rc<RefCell<ClassGraph<'jvm>>>,
+    class: ClassBuilder<'jvm>,
+    previous_parts: Vec<ClassBuilder<'jvm>>,
+    current_part: ClassBuilder<'jvm>,
 
     /// Utility class (just a carrier for whatever helper methods we may want)
-    utilities: UtilityClass,
+    utilities: UtilityClass<'jvm>,
 
     /// Populated when we visit exports
-    exports: Vec<Export<'a>>,
+    exports: Vec<Export<'wasm>>,
 
     /// Populated when we visit tables
-    tables: Vec<Table>,
+    tables: Vec<Table<'jvm>>,
 
     /// Populated when we visit globals
-    globals: Vec<Global<'a>>,
+    globals: Vec<Global<'wasm, 'jvm>>,
 
     /// Populated when we visit elements
-    elements: Vec<Element<'a>>,
+    elements: Vec<Element<'wasm>>,
 
     /// Every time we see a new function, this gets incremented
     current_func_idx: u32,
 }
 
-impl<'a> ModuleTranslator<'a> {
-    pub fn new(settings: Settings) -> Result<ModuleTranslator<'a>, Error> {
+impl<'wasm, 'jvm> ModuleTranslator<'wasm, 'jvm> {
+    pub fn new(settings: Settings<'jvm>) -> Result<ModuleTranslator<'wasm, 'jvm>, Error> {
         let mut validator = Validator::new();
         validator.wasm_features(settings.wasm_features);
 
@@ -59,7 +60,7 @@ impl<'a> ModuleTranslator<'a> {
         let class = ClassBuilder::new(
             ClassAccessFlags::PUBLIC | ClassAccessFlags::SUPER,
             settings.output_full_class_name.clone(),
-            RefType::OBJECT_NAME.to_string(),
+            BinaryName::OBJECT,
             false,
             vec![],
             class_graph.clone(),
@@ -84,7 +85,7 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Parse a full module
-    pub fn parse_module(&mut self, data: &'a [u8]) -> Result<(), Error> {
+    pub fn parse_module(&mut self, data: &'wasm [u8]) -> Result<(), Error> {
         let parser = Parser::new(0);
         for payload in parser.parse_all(data) {
             let payload = payload?;
@@ -94,18 +95,18 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Construct a new inner class part
-    fn new_part(
-        settings: &Settings,
-        class_graph: Rc<RefCell<ClassGraph>>,
+    fn new_part<'x>(
+        settings: &'x Settings<'x>,
+        class_graph: Rc<RefCell<ClassGraph<'x>>>,
         part_idx: usize,
-    ) -> Result<ClassBuilder, Error> {
+    ) -> Result<ClassBuilder<'x>, Error> {
         let mut part = ClassBuilder::new(
             ClassAccessFlags::SYNTHETIC | ClassAccessFlags::SUPER,
-            format!(
+            BinaryName::try_from(format!(
                 "{}${}{}",
                 settings.output_full_class_name, settings.part_short_class_name, part_idx
-            ),
-            RefType::OBJECT_NAME.to_string(),
+            ).as_str()).unwrap(),
+            BinaryName::OBJECT,
             false,
             vec![],
             class_graph.clone(),
@@ -114,9 +115,9 @@ impl<'a> ModuleTranslator<'a> {
         // Add the `NestHost` and `InnerClasses` attributes
         let (nest_host, inner_classes): (NestHost, InnerClasses) = {
             let mut constants = part.constants();
-            let outer_class_name = constants.get_utf8(&settings.output_full_class_name)?;
+            let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_ref())?;
             let outer_class = constants.get_class(outer_class_name)?;
-            let inner_class_name = constants.get_utf8(part.class_name())?;
+            let inner_class_name = constants.get_utf8(part.class_name().as_ref())?;
             let inner_class = constants.get_class(inner_class_name)?;
             let inner_name =
                 constants.get_utf8(&format!("{}{}", settings.part_short_class_name, part_idx))?;
@@ -135,7 +136,7 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Process one payload
-    pub fn process_payload(&mut self, payload: Payload<'a>) -> Result<(), Error> {
+    pub fn process_payload(&mut self, payload: Payload<'wasm>) -> Result<(), Error> {
         log::trace!("Payload {:?}", payload);
         match payload {
             Payload::Version { num, range } => self.validator.version(num, &range)?,
@@ -177,7 +178,7 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Visit a function body
-    fn visit_function_body(&mut self, function_body: FunctionBody) -> Result<(), Error> {
+    fn visit_function_body(&mut self, function_body: FunctionBody<'wasm>) -> Result<(), Error> {
         let validator = self.validator.code_section_entry()?;
 
         // Build up the type and argument
@@ -187,16 +188,16 @@ impl<'a> ModuleTranslator<'a> {
 
         // Build up a method descriptor, which includes a trailing "WASM module" argument
         let mut method_descriptor = typ.method_descriptor();
-        method_descriptor.parameters.push(FieldType::object(
-            self.settings.output_full_class_name.clone(),
-        ));
+        method_descriptor.parameters.push(FieldType::Ref(RefType::Object(
+            self.settings.output_full_class_name
+        )));
 
         let mut method_builder = self.current_part.start_method(
             MethodAccessFlags::STATIC,
-            format!(
+            UnqualifiedName::try_from(format!(
                 "{}{}",
                 self.settings.wasm_function_name_prefix, self.current_func_idx
-            ),
+            ).as_str()).unwrap(),
             method_descriptor,
         )?;
 
@@ -218,7 +219,7 @@ impl<'a> ModuleTranslator<'a> {
         Ok(())
     }
 
-    fn visit_globals(&mut self, globals: GlobalSectionReader<'a>) -> Result<(), Error> {
+    fn visit_globals(&mut self, globals: GlobalSectionReader<'wasm>) -> Result<(), Error> {
         self.validator.global_section(&globals)?;
         for global in globals {
             let wasmparser::Global { ty, init_expr } = global?;
@@ -226,9 +227,10 @@ impl<'a> ModuleTranslator<'a> {
                 imported: None,
                 exported: false,
             };
+            let field_name = format!("global_{}", self.globals.len()).as_ref();
             let global = Global {
                 origin,
-                field_name: format!("global_{}", self.globals.len()),
+                field_name: UnqualifiedName::try_from(field_name).unwrap(),
                 global_type: StackType::from_general(ty.content_type)?,
                 mutable: ty.mutable,
                 initial: Some(init_expr),
@@ -265,7 +267,7 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Visit the imports
-    fn visit_imports(&mut self, imports: ImportSectionReader<'a>) -> Result<(), Error> {
+    fn visit_imports(&mut self, imports: ImportSectionReader<'wasm>) -> Result<(), Error> {
         self.validator.import_section(&imports)?;
         for import in imports {
             self.visit_import(import?)?;
@@ -273,7 +275,7 @@ impl<'a> ModuleTranslator<'a> {
         Ok(())
     }
 
-    fn visit_import(&mut self, import: Import<'a>) -> Result<(), Error> {
+    fn visit_import(&mut self, import: Import<'wasm>) -> Result<(), Error> {
         use wasmparser::ImportSectionEntryType;
 
         let origin = MemberOrigin {
@@ -284,21 +286,25 @@ impl<'a> ModuleTranslator<'a> {
         // TODO: this is not the name we want
         let name = match import.field {
             None => unimplemented!(),
-            Some(name) => name.to_owned(),
+            Some(name) => name,
         };
 
         match import.ty {
-            ImportSectionEntryType::Table(table_type) => self.tables.push(Table {
-                origin,
-                field_name: name,
-                table_type: TableType::from_general(table_type.element_type)?,
-                limits: table_type.limits,
-            }),
+            ImportSectionEntryType::Table(table_type) => {
+                let name = self.settings.renamer.rename_table(name).as_ref();
+                self.tables.push(Table {
+                    origin,
+                    field_name: UnqualifiedName::try_from(name).map_err(Error::InvalidName)?,
+                    table_type: TableType::from_general(table_type.element_type)?,
+                    limits: table_type.limits,
+                });
+            }
 
             ImportSectionEntryType::Global(global_type) => {
+                let name = self.settings.renamer.rename_global(name).as_ref();
                 self.globals.push(Global {
                     origin,
-                    field_name: name,
+                    field_name: UnqualifiedName::try_from(name).map_err(Error::InvalidName)?,
                     global_type: StackType::from_general(global_type.content_type)?,
                     mutable: global_type.mutable,
                     initial: None,
@@ -312,7 +318,7 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Visit the tables section
-    fn visit_tables(&mut self, tables: TableSectionReader<'a>) -> Result<(), Error> {
+    fn visit_tables(&mut self, tables: TableSectionReader<'wasm>) -> Result<(), Error> {
         self.validator.table_section(&tables)?;
         for table in tables {
             let table = table?;
@@ -322,7 +328,7 @@ impl<'a> ModuleTranslator<'a> {
             };
             self.tables.push(Table {
                 origin,
-                field_name: format!("table_{}", self.tables.len()),
+                field_name: UnqualifiedName::try_from(format!("table_{}", self.tables.len()).as_str()).unwrap(),
                 table_type: TableType::from_general(table.element_type)?,
                 limits: table.limits,
             });
@@ -341,7 +347,7 @@ impl<'a> ModuleTranslator<'a> {
             self.class.add_field(
                 FieldAccessFlags::PRIVATE,
                 table.field_name.clone(),
-                RefType::array(table.table_type.field_type()).render(),
+                RefType::Array(&table.table_type.field_type()).render(),
             )?;
         }
 
@@ -352,7 +358,7 @@ impl<'a> ModuleTranslator<'a> {
     ///
     /// The actual processing of the exports is in `generate_exports`, since the module resources
     /// aren't ready at this point.
-    fn visit_exports(&mut self, exports: ExportSectionReader<'a>) -> Result<(), Error> {
+    fn visit_exports(&mut self, exports: ExportSectionReader<'wasm>) -> Result<(), Error> {
         self.validator.export_section(&exports)?;
         for export in exports {
             let export = export?;
@@ -362,7 +368,8 @@ impl<'a> ModuleTranslator<'a> {
                         .tables
                         .get_mut(export.index as usize)
                         .expect("Exporting function that doesn't exist");
-                    table.field_name = self.settings.renamer.rename_table(export.field);
+                    let name = self.settings.renamer.rename_table(export.field).as_ref();
+                    table.field_name = UnqualifiedName::try_from(name).map_err(Error::InvalidName)?;
                     table.origin.exported = true;
                 }
 
@@ -371,7 +378,8 @@ impl<'a> ModuleTranslator<'a> {
                         .globals
                         .get_mut(export.index as usize)
                         .expect("Exporting global that ddoesn't exist");
-                    global.field_name = self.settings.renamer.rename_table(export.field);
+                    let name = self.settings.renamer.rename_global(export.field).as_ref();
+                    global.field_name = UnqualifiedName::try_from(name).map_err(Error::InvalidName)?;
                     global.origin.exported = true;
                 }
 
@@ -399,31 +407,30 @@ impl<'a> ModuleTranslator<'a> {
                         self.settings.output_full_class_name.clone(),
                     ));
 
+                    let name = self.settings.renamer.rename_function(export.field).as_ref();
+
                     let mut method_builder = self.class.start_method(
                         MethodAccessFlags::PUBLIC,
-                        self.settings.renamer.rename_function(export.field),
+                        UnqualifiedName::try_from(name).map_err(Error::InvalidName)?,
                         export_descriptor.clone(),
                     )?;
 
                     // Push the method arguments onto the stack
                     let mut offset = 1;
                     for parameter in &export_descriptor.parameters {
-                        method_builder.code.get_local(offset, parameter)?;
+                        method_builder.code.get_local(offset, *parameter)?;
                         offset += parameter.width() as u16;
                     }
-                    method_builder.code.get_local(
-                        0,
-                        &FieldType::object(self.settings.output_full_class_name.clone()),
-                    )?;
+                    method_builder.code.get_local(0, self.settings.module_field_type())?;
 
                     // Call the implementation
                     method_builder.code.invoke_explicit(
                         InvokeType::Static,
-                        self.current_part.class_name().to_owned(),
-                        format!(
+                        &self.current_part.class_name(),
+                        &UnqualifiedName::try_from(format!(
                             "{}{}",
-                            self.settings.wasm_function_name_prefix, export.index
-                        ),
+                            self.settings.wasm_function_name_prefix.as_ref(), export.index
+                        ).as_str()).unwrap(),
                         &underlying_descriptor,
                     )?;
                     method_builder.code.return_(export_descriptor.return_type)?;
@@ -438,7 +445,7 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Visit the elements section
-    fn visit_elements(&mut self, elements: ElementSectionReader<'a>) -> Result<(), Error> {
+    fn visit_elements(&mut self, elements: ElementSectionReader<'wasm>) -> Result<(), Error> {
         self.validator.element_section(&elements)?;
         for element in elements.into_iter() {
             let element = element?;
@@ -460,7 +467,7 @@ impl<'a> ModuleTranslator<'a> {
     pub fn generate_constructor(&mut self) -> Result<(), Error> {
         let mut method_builder = self.class.start_method(
             MethodAccessFlags::PUBLIC,
-            String::from("<init>"),
+            UnqualifiedName::INIT,
             MethodDescriptor {
                 parameters: vec![],
                 return_type: None,
@@ -469,7 +476,7 @@ impl<'a> ModuleTranslator<'a> {
         let jvm_code = &mut method_builder.code;
 
         jvm_code.push_instruction(Instruction::ALoad(0))?;
-        jvm_code.invoke(RefType::OBJECT_NAME, "<init>")?;
+        jvm_code.invoke(&BinaryName::OBJECT, &UnqualifiedName::INIT)?;
 
         // Initial table arrays
         for table in &self.tables {
@@ -479,8 +486,8 @@ impl<'a> ModuleTranslator<'a> {
                     jvm_code.const_int(table.limits.initial as i32)?; // TODO: error if `u32` is too big
                     jvm_code.new_ref_array(&table.table_type.ref_type())?;
                     jvm_code.access_field(
-                        self.settings.output_full_class_name.clone(),
-                        table.field_name.clone(),
+                        &self.settings.output_full_class_name,
+                        &table.field_name,
                         AccessMode::Write,
                     )?;
                 } else {
@@ -497,8 +504,8 @@ impl<'a> ModuleTranslator<'a> {
                         jvm_code.push_instruction(Instruction::ALoad(0))?;
                         self.translate_init_expr(jvm_code, init_expr)?;
                         jvm_code.access_field(
-                            self.settings.output_full_class_name.clone(),
-                            global.field_name.clone(),
+                            &self.settings.output_full_class_name,
+                            &global.field_name,
                             AccessMode::Write,
                         )?;
                     }
@@ -520,8 +527,8 @@ impl<'a> ModuleTranslator<'a> {
                     // Load onto the stack the table array
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
                     jvm_code.access_field(
-                        self.settings.output_full_class_name.clone(),
-                        table.field_name.clone(),
+                        &self.settings.output_full_class_name,
+                        &table.field_name,
                         AccessMode::Read,
                     )?;
 
@@ -563,7 +570,7 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Translate a constant expression
-    fn translate_init_expr<B: CodeBuilderExts>(
+    fn translate_init_expr<B: CodeBuilderExts<'jvm>>(
         &self,
         jvm_code: &mut B,
         init_expr: &InitExpr,
@@ -603,8 +610,8 @@ impl<'a> ModuleTranslator<'a> {
     ///
     /// Note: the method handle will have an "adapted" signature, meaning there is always one final
     /// argument that is the module itself.
-    fn translate_ref_func<B: CodeBuilderExts>(
-        settings: &Settings,
+    fn translate_ref_func<'x, B: CodeBuilderExts<'x>>(
+        settings: &Settings<'x>,
         validator: &Validator,
         function_index: u32,
         jvm_code: &mut B,
@@ -619,7 +626,7 @@ impl<'a> ModuleTranslator<'a> {
             .method_descriptor();
         method_type
             .parameters
-            .push(FieldType::object(settings.output_full_class_name.clone()));
+            .push(settings.module_field_type());
         let method_handle: ConstantIndex = {
             let mut constants = jvm_code.constants();
             let class_name_idx = constants.get_utf8(class_name)?;
@@ -643,7 +650,7 @@ impl<'a> ModuleTranslator<'a> {
     ///
     /// The first element in the output vector is the output class. The rest of the elements are
     /// the "part" inner classes.
-    pub fn result(mut self) -> Result<Vec<(String, ClassFile)>, Error> {
+    pub fn result(mut self) -> Result<Vec<(BinaryName<'jvm>, ClassFile)>, Error> {
         self.generate_exports()?;
         self.generate_constructor()?;
 
@@ -656,13 +663,13 @@ impl<'a> ModuleTranslator<'a> {
             let mut nest_members = vec![];
             let mut inner_class_attrs = vec![];
             let mut constants = self.class.constants();
-            let outer_class_name = constants.get_utf8(&self.settings.output_full_class_name)?;
+            let outer_class_name = constants.get_utf8(self.settings.output_full_class_name.as_ref())?;
             let outer_class = constants.get_class(outer_class_name)?;
 
             // Utilities inner class
-            let utilities_class_name = constants.get_utf8(self.utilities.class.class_name())?;
+            let utilities_class_name = constants.get_utf8(self.utilities.class.class_name().as_ref())?;
             let utilities_class = constants.get_class(utilities_class_name)?;
-            let utilities_name = constants.get_utf8(self.settings.utilities_short_class_name)?;
+            let utilities_name = constants.get_utf8(self.settings.utilities_short_class_name.as_ref())?;
             nest_members.push(utilities_class);
             inner_class_attrs.push(InnerClass {
                 inner_class: utilities_class,
@@ -673,7 +680,7 @@ impl<'a> ModuleTranslator<'a> {
 
             // Part inner classes
             for (part_idx, part) in parts.iter().enumerate() {
-                let inner_class_name = constants.get_utf8(part.class_name())?;
+                let inner_class_name = constants.get_utf8(part.class_name().as_ref())?;
                 let inner_class = constants.get_class(inner_class_name)?;
                 let inner_name = constants.get_utf8(&format!(
                     "{}{}",
@@ -694,16 +701,16 @@ impl<'a> ModuleTranslator<'a> {
 
         // Final results
         let mut results = vec![
-            (self.class.class_name().to_owned(), self.class.result()),
+            (*self.class.class_name(), self.class.result()),
             (
-                self.utilities.class.class_name().to_owned(),
+                *self.utilities.class.class_name(),
                 self.utilities.class.result(),
             ),
         ];
         results.extend(
             parts
                 .into_iter()
-                .map(|part| (part.class_name().to_owned(), part.result())),
+                .map(|part| (*part.class_name(), part.result())),
         );
 
         Ok(results)

@@ -5,7 +5,7 @@ use std::cell::RefMut;
 use std::fmt::Debug;
 
 /// Abstract code building trait
-pub trait CodeBuilder<E: Debug = Error> {
+pub trait CodeBuilder<'a, E: Debug = Error> {
     /// Block labels
     type Lbl: Copy + Eq + PartialEq;
 
@@ -29,11 +29,11 @@ pub trait CodeBuilder<E: Debug = Error> {
     fn place_label_with_frame(
         &mut self,
         label: Self::Lbl,
-        frame: &Frame<RefType, (RefType, Offset)>,
+        frame: &Frame<RefType<'a>, (RefType<'a>, Offset)>,
     ) -> Result<(), E>;
 
     /// Push a new instruction to the current block
-    fn push_instruction(&mut self, insn: Instruction) -> Result<(), E>;
+    fn push_instruction(&mut self, insn: Instruction<'a>) -> Result<(), E>;
 
     /// Push a new branch instruction to close the current block and possibly open a new one
     fn push_branch_instruction(
@@ -45,8 +45,8 @@ pub trait CodeBuilder<E: Debug = Error> {
     fn constants(&self) -> RefMut<ConstantsPool>;
 
     /// Get the class graph
-    fn class_graph(&self) -> RefMut<ClassGraph>;
+    fn class_graph(&self) -> RefMut<ClassGraph<'a>>;
 
     /// Get the current frame
-    fn current_frame(&self) -> Option<&Frame<RefType, (RefType, Offset)>>;
+    fn current_frame(&self) -> Option<&Frame<RefType<'a>, (RefType<'a>, Offset)>>;
 }

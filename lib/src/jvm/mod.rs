@@ -11,6 +11,7 @@ mod constants;
 mod descriptors;
 mod errors;
 mod frame;
+mod names;
 mod offset_vec;
 mod version;
 
@@ -27,5 +28,6 @@ pub use constants::*;
 pub use descriptors::*;
 pub use errors::*;
 pub use frame::*;
+pub use names::*;
 pub use offset_vec::*;
 pub use version::*;

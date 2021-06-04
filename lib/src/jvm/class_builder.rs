@@ -1,47 +1,47 @@
 use super::*;
 
-use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
 
-pub struct ClassBuilder {
+pub struct ClassBuilder<'a> {
     /// This class name
-    this_class: String,
+    this_class: BinaryName<'a>,
 
     /// Class file, but with `constants` left blank
     class: ClassFile,
 
     /// Class graph
-    class_graph: Rc<RefCell<ClassGraph>>,
+    class_graph: Rc<RefCell<ClassGraph<'a>>>,
 
     /// Constants pool
     constants_pool: Rc<RefCell<ConstantsPool>>,
 }
 
-impl ClassBuilder {
+impl<'a> ClassBuilder<'a> {
     /// Create a new class builder
     pub fn new(
         access_flags: ClassAccessFlags,
-        this_class: String,
-        super_class: String,
+        this_class: BinaryName<'a>,
+        super_class: BinaryName<'a>,
         is_interface: bool,
-        interfaces: Vec<String>,
-        class_graph: Rc<RefCell<ClassGraph>>,
-    ) -> Result<ClassBuilder, Error> {
-        let mut class_data = ClassData::new(super_class.clone(), is_interface);
+        interfaces: Vec<BinaryName<'a>>,
+        class_graph: Rc<RefCell<ClassGraph<'a>>>,
+    ) -> Result<ClassBuilder<'a>, Error> {
+
+        // Construct a fresh constant pool
+        let mut constants = ConstantsPool::new();
+        let this_class_utf8 = constants.get_utf8(this_class.as_ref())?;
+        let super_class_utf8 = constants.get_utf8(super_class.as_ref())?;
+
+        let mut class_data = ClassData::new(super_class, is_interface);
         class_data.add_interfaces(interfaces.iter().cloned());
 
         // Make sure this class is in the class graph
         class_graph
             .borrow_mut()
             .classes
-            .entry(Cow::Owned(this_class.clone()))
+            .entry(this_class.clone())
             .or_insert(class_data);
-
-        // Construct a fresh constant pool
-        let mut constants = ConstantsPool::new();
-        let this_class_utf8 = constants.get_utf8(&this_class)?;
-        let super_class_utf8 = constants.get_utf8(super_class)?;
 
         let class = ClassFile {
             version: Version::JAVA11,
@@ -52,7 +52,7 @@ impl ClassBuilder {
             interfaces: interfaces
                 .iter()
                 .map(|interface| {
-                    let interface_utf8 = constants.get_utf8(interface)?;
+                    let interface_utf8 = constants.get_utf8(interface.as_ref())?;
                     constants.get_class(interface_utf8)
                 })
                 .collect::<Result<_, _>>()?,
@@ -92,10 +92,10 @@ impl ClassBuilder {
     pub fn add_field(
         &mut self,
         access_flags: FieldAccessFlags,
-        name: String,
+        name: UnqualifiedName<'a>,
         descriptor: String,
     ) -> Result<(), Error> {
-        let name_index = self.constants_pool.borrow_mut().get_utf8(&name)?;
+        let name_index = self.constants_pool.borrow_mut().get_utf8(name.as_ref())?;
         let descriptor_index = self.constants_pool.borrow_mut().get_utf8(&descriptor)?;
         let descriptor = FieldType::parse(&descriptor).map_err(Error::IoError)?;
 
@@ -106,11 +106,10 @@ impl ClassBuilder {
             attributes: vec![],
         });
 
-        let class_str: &str = &self.this_class;
         self.class_graph
             .borrow_mut()
             .classes
-            .get_mut(class_str)
+            .get_mut(&self.this_class)
             .expect("class cannot be found in class graph")
             .add_field(
                 access_flags.contains(FieldAccessFlags::STATIC),
@@ -125,11 +124,11 @@ impl ClassBuilder {
     pub fn add_method(
         &mut self,
         access_flags: MethodAccessFlags,
-        name: String,
+        name: UnqualifiedName<'a>,
         descriptor: String,
         code: Option<Code>,
     ) -> Result<(), Error> {
-        let name_index = self.constants_pool.borrow_mut().get_utf8(&name)?;
+        let name_index = self.constants_pool.borrow_mut().get_utf8(name.as_ref())?;
         let descriptor_index = self.constants_pool.borrow_mut().get_utf8(&descriptor)?;
         let descriptor = MethodDescriptor::parse(&descriptor).map_err(Error::IoError)?;
         let mut attributes = vec![];
@@ -145,11 +144,10 @@ impl ClassBuilder {
             attributes,
         });
 
-        let class_str: &str = &self.this_class;
         self.class_graph
             .borrow_mut()
             .classes
-            .get_mut(class_str)
+            .get_mut(&self.this_class)
             .expect("class cannot be found in class graph")
             .add_method(
                 access_flags.contains(MethodAccessFlags::STATIC),
@@ -163,26 +161,25 @@ impl ClassBuilder {
     pub fn start_method(
         &mut self,
         access_flags: MethodAccessFlags,
-        name: String,
-        descriptor: MethodDescriptor,
-    ) -> Result<MethodBuilder, Error> {
+        name: UnqualifiedName<'a>,
+        descriptor: MethodDescriptor<'a>,
+    ) -> Result<MethodBuilder<'a>, Error> {
         let is_static = access_flags.contains(MethodAccessFlags::STATIC);
-        let class_str: &str = &self.this_class;
         let rendered_descriptor = descriptor.render();
         self.class_graph
             .borrow_mut()
             .classes
-            .get_mut(class_str)
+            .get_mut(&self.this_class)
             .expect("class cannot be found in class graph")
-            .add_method(is_static, name.clone(), descriptor.clone());
+            .add_method(is_static, name, descriptor.clone());
 
         let code = BytecodeBuilder::new(
             descriptor,
             !is_static,
-            &name == "<init>",
+            name == UnqualifiedName::INIT,
             self.class_graph.clone(),
             self.constants_pool.clone(),
-            RefType::object(self.this_class.clone()),
+            RefType::Object(self.this_class),
         );
 
         Ok(MethodBuilder {
@@ -194,7 +191,7 @@ impl ClassBuilder {
     }
 
     pub fn finish_method(&mut self, builder: MethodBuilder) -> Result<(), Error> {
-        let name_index = self.constants_pool.borrow_mut().get_utf8(&builder.name)?;
+        let name_index = self.constants_pool.borrow_mut().get_utf8(builder.name.as_ref())?;
         let descriptor_index = self
             .constants_pool
             .borrow_mut()
@@ -217,14 +214,14 @@ impl ClassBuilder {
         self.constants_pool.borrow_mut()
     }
 
-    pub fn class_name(&self) -> &str {
+    pub fn class_name(&self) -> &BinaryName<'a> {
         &self.this_class
     }
 }
 
-pub struct MethodBuilder {
+pub struct MethodBuilder<'a> {
     /// This method name
-    name: String,
+    name: UnqualifiedName<'a>,
 
     /// Access flags
     access_flags: MethodAccessFlags,
@@ -233,13 +230,14 @@ pub struct MethodBuilder {
     descriptor: String,
 
     /// Code builder
-    pub code: BytecodeBuilder,
+    pub code: BytecodeBuilder<'a>,
 }
 
 #[test]
 fn sample_class() -> Result<(), Error> {
     use BranchInstruction::*;
     use Instruction::*;
+    use std::convert::TryInto;
 
     let mut class_graph = ClassGraph::new();
     class_graph.insert_lang_types();
@@ -247,8 +245,8 @@ fn sample_class() -> Result<(), Error> {
 
     let mut class_builder = ClassBuilder::new(
         ClassAccessFlags::PUBLIC,
-        String::from("me/alec/Point"),
-        String::from("java/lang/Object"),
+        "me/alec/Point".try_into().unwrap(),
+        BinaryName::OBJECT,
         false,
         vec![],
         class_graph,
@@ -256,18 +254,18 @@ fn sample_class() -> Result<(), Error> {
 
     class_builder.add_field(
         FieldAccessFlags::PUBLIC,
-        String::from("x"),
+        "x".try_into().unwrap(),
         String::from("I"),
     )?;
     class_builder.add_field(
         FieldAccessFlags::PUBLIC,
-        String::from("y"),
+        "y".try_into().unwrap(),
         String::from("I"),
     )?;
 
     let mut method_builder = class_builder.start_method(
         MethodAccessFlags::PUBLIC,
-        String::from("<init>"),
+        UnqualifiedName::INIT,
         MethodDescriptor {
             parameters: vec![FieldType::INT, FieldType::INT],
             return_type: None,

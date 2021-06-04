@@ -50,25 +50,25 @@ Notes:
 /// enforce that labels cannot be placed unless they are reachable (either with a fall-through from
 /// above, or there has already been a jump to the label). This is also important for the sake of
 /// always being able to find the initial frame of the block.
-pub struct BytecodeBuilder {
+pub struct BytecodeBuilder<'a> {
     /// This method signature
-    descriptor: MethodDescriptor,
+    descriptor: MethodDescriptor<'a>,
 
     /// Basic blocks in the code
-    blocks: HashMap<SynLabel, BasicBlock<SynLabel, SynLabel, SynLabel>>,
+    blocks: HashMap<SynLabel, BasicBlock<'a, SynLabel, SynLabel, SynLabel>>,
 
     /// Order of basic blocks in the code (elements are unique and exactly match keys of `blocks`)
     block_order: Vec<SynLabel>,
 
     /// Labels which have been referenced in blocks so far, but not placed yet (keys do not overlap
     /// with keys of `block`)
-    unplaced_labels: HashMap<SynLabel, Frame<RefType, (RefType, Offset)>>,
+    unplaced_labels: HashMap<SynLabel, Frame<RefType<'a>, (RefType<'a>, Offset)>>,
 
     /// Offset of the end of the last block in `blocks`
     blocks_end_offset: Offset,
 
     /// Block currently under construction (label is not in `blocks` _or_ `unplaced_labels`)
-    current_block: Option<CurrentBlock>,
+    current_block: Option<CurrentBlock<'a>>,
 
     /// Maximum size of locals seen so far
     max_locals: Offset,
@@ -80,34 +80,34 @@ pub struct BytecodeBuilder {
     next_label: SynLabel,
 
     /// Class graph
-    class_graph: Rc<RefCell<ClassGraph>>,
+    class_graph: Rc<RefCell<ClassGraph<'a>>>,
 
     /// Constants pool
     constants_pool: Rc<RefCell<ConstantsPool>>,
 
     /// Enclosing type
-    this_type: RefType,
+    this_type: RefType<'a>,
 }
 
-impl BytecodeBuilder {
+impl<'a> BytecodeBuilder<'a> {
     /// Create a builder for a new method
     pub fn new(
-        descriptor: MethodDescriptor,
+        descriptor: MethodDescriptor<'a>,
         is_instance_method: bool,
         is_constructor: bool,
-        class_graph: Rc<RefCell<ClassGraph>>,
+        class_graph: Rc<RefCell<ClassGraph<'a>>>,
         constants_pool: Rc<RefCell<ConstantsPool>>,
-        this_type: RefType,
-    ) -> BytecodeBuilder {
+        this_type: RefType<'a>,
+    ) -> BytecodeBuilder<'a> {
         // The initial local variables are just the parameters (including maybe "this")
         let mut locals = OffsetVec::new();
         if is_constructor {
             locals.push(VerificationType::UninitializedThis);
         } else if is_instance_method {
-            locals.push(VerificationType::Object(this_type.clone()));
+            locals.push(VerificationType::Object(this_type));
         }
         for arg_type in &descriptor.parameters {
-            locals.push(VerificationType::from(arg_type.clone()));
+            locals.push(VerificationType::from(*arg_type));
         }
 
         let max_locals = locals.offset_len();
@@ -306,8 +306,8 @@ impl BytecodeBuilder {
     fn assert_frame_for_label(
         &mut self,
         label: SynLabel,
-        expected: &Frame<RefType, (RefType, Offset)>,
-        extra_block: Option<(SynLabel, &Frame<RefType, (RefType, Offset)>)>,
+        expected: &Frame<RefType<'a>, (RefType<'a>, Offset)>,
+        extra_block: Option<(SynLabel, &Frame<RefType<'a>, (RefType<'a>, Offset)>)>,
     ) -> Result<(), Error> {
         // Annoying edge case
         match extra_block {
@@ -315,8 +315,8 @@ impl BytecodeBuilder {
                 if found != expected {
                     return Err(Error::IncompatibleFrames(
                         label,
-                        found.clone(),
-                        expected.clone(),
+                        found.into_debug(),
+                        expected.into_debug(),
                     ));
                 } else {
                     return Ok(());
@@ -329,8 +329,8 @@ impl BytecodeBuilder {
             if found != expected {
                 Err(Error::IncompatibleFrames(
                     label,
-                    found.clone(),
-                    expected.clone(),
+                    found.into_debug(),
+                    expected.into_debug(),
                 ))
             } else {
                 Ok(())
@@ -342,7 +342,7 @@ impl BytecodeBuilder {
     }
 }
 
-impl CodeBuilder<Error> for BytecodeBuilder {
+impl<'a> CodeBuilder<'a, Error> for BytecodeBuilder<'a> {
     type Lbl = SynLabel;
 
     fn fresh_label(&mut self) -> SynLabel {
@@ -351,7 +351,7 @@ impl CodeBuilder<Error> for BytecodeBuilder {
         to_return
     }
 
-    fn push_instruction(&mut self, insn: Instruction) -> Result<(), Error> {
+    fn push_instruction(&mut self, insn: Instruction<'a>) -> Result<(), Error> {
         if let Some(current_block) = self.current_block.as_mut() {
             current_block
                 .latest_frame
@@ -363,7 +363,7 @@ impl CodeBuilder<Error> for BytecodeBuilder {
                     &self.this_type,
                 )
                 .map_err(|kind| Error::VerifierError {
-                    instruction: insn.clone(),
+                    instruction: format!("{:?}", insn),
                     kind,
                 })?;
             current_block
@@ -470,7 +470,7 @@ impl CodeBuilder<Error> for BytecodeBuilder {
     fn place_label_with_frame(
         &mut self,
         label: SynLabel,
-        frame: &Frame<RefType, (RefType, Offset)>,
+        frame: &Frame<RefType<'a>, (RefType<'a>, Offset)>,
     ) -> Result<(), Error> {
         self.assert_frame_for_label(label, frame, None)?;
         self.place_label(label)
@@ -480,11 +480,11 @@ impl CodeBuilder<Error> for BytecodeBuilder {
         self.constants_pool.borrow_mut()
     }
 
-    fn class_graph(&self) -> RefMut<ClassGraph> {
+    fn class_graph(&self) -> RefMut<ClassGraph<'a>> {
         self.class_graph.borrow_mut()
     }
 
-    fn current_frame(&self) -> Option<&Frame<RefType, (RefType, Offset)>> {
+    fn current_frame(&self) -> Option<&Frame<RefType<'a>, (RefType<'a>, Offset)>> {
         self.current_block
             .as_ref()
             .map(|current_block| &current_block.latest_frame)
@@ -492,22 +492,22 @@ impl CodeBuilder<Error> for BytecodeBuilder {
 }
 
 /// Just like `BasicBlock`, but not closed off yet
-struct CurrentBlock {
+struct CurrentBlock<'a> {
     pub label: SynLabel,
 
     /// State of the frame at the start of `instructions`
-    pub entry_frame: Frame<RefType, (RefType, Offset)>,
+    pub entry_frame: Frame<RefType<'a>, (RefType<'a>, Offset)>,
 
     /// Tracks the state of the frame at the end of `instructions`
-    pub latest_frame: Frame<RefType, (RefType, Offset)>,
+    pub latest_frame: Frame<RefType<'a>, (RefType<'a>, Offset)>,
 
     /// Accumulated instructions
-    pub instructions: OffsetVec<Instruction>,
+    pub instructions: OffsetVec<Instruction<'a>>,
 }
 
-impl CurrentBlock {
+impl<'a> CurrentBlock<'a> {
     /// New block starting with a given frame
-    pub fn new(label: SynLabel, entry_frame: Frame<RefType, (RefType, Offset)>) -> CurrentBlock {
+    pub fn new(label: SynLabel, entry_frame: Frame<RefType<'a>, (RefType<'a>, Offset)>) -> CurrentBlock<'a> {
         CurrentBlock {
             label,
             latest_frame: entry_frame.clone(),
@@ -524,8 +524,8 @@ impl CurrentBlock {
     ) -> Result<
         (
             SynLabel,
-            BasicBlock<SynLabel, SynLabel, SynLabel>,
-            Option<CurrentBlock>,
+            BasicBlock<'a, SynLabel, SynLabel, SynLabel>,
+            Option<CurrentBlock<'a>>,
         ),
         Error,
     > {
@@ -577,7 +577,7 @@ impl CurrentBlock {
         Ok((self.label, basic_block, next_block))
     }
 
-    pub fn extend_block(&mut self, insn: Instruction) -> Result<(), Error> {
+    pub fn extend_block(&mut self, insn: Instruction<'a>) -> Result<(), Error> {
         self.instructions.push(insn);
 
         Ok(())
@@ -589,21 +589,21 @@ impl CurrentBlock {
 /// We also store some extra information that ultimately allows us to compute things like: the
 /// maximum height of the locals, the maximum height of the stack, and the stack map frames.
 #[derive(Debug)]
-pub struct BasicBlock<Lbl, LblWide, LblFall> {
+pub struct BasicBlock<'a, Lbl, LblWide, LblFall> {
     /// Offset of the start of the basic block from the start of the method
     pub offset_from_start: Offset,
 
     /// Frame at the start of the block
-    pub frame: Frame<RefType, (RefType, Offset)>,
+    pub frame: Frame<RefType<'a>, (RefType<'a>, Offset)>,
 
     /// Straight-line instructions in the block
-    pub instructions: OffsetVec<Instruction>,
+    pub instructions: OffsetVec<Instruction<'a>>,
 
     /// Branch instruction to close the block
     pub branch_end: BranchInstruction<Lbl, LblWide, LblFall>,
 }
 
-impl<Lbl, LblWide, LblFall> Width for BasicBlock<Lbl, LblWide, LblFall> {
+impl<Lbl, LblWide, LblFall> Width for BasicBlock<'_, Lbl, LblWide, LblFall> {
     fn width(&self) -> usize {
         self.instructions.offset_len().0 + self.branch_end.width()
     }

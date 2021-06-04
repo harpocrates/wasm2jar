@@ -14,7 +14,7 @@ pub struct Frame<Cls, U> {
     pub stack: OffsetVec<VerificationType<Cls, U>>,
 }
 
-impl Frame<RefType, (RefType, Offset)> {
+impl<'a> Frame<RefType<'a>, (RefType<'a>, Offset)> {
     /// Update the frame to reflect the effects of the given (non-branching) instruction
     ///
     ///   * `insn_offset_in_basic_block` - used in uninitialized verification types
@@ -24,11 +24,11 @@ impl Frame<RefType, (RefType, Offset)> {
     ///
     pub fn interpret_instruction(
         &mut self,
-        insn: &Instruction,
+        insn: &Instruction<'a>,
         insn_offset_in_block: Offset,
-        class_graph: &ClassGraph,
-        constants_reader: &ConstantsPool,
-        this_class: &RefType,
+        class_graph: &ClassGraph<'a>,
+        constants_reader: &'a ConstantsPool,
+        this_class: &RefType<'a>,
     ) -> Result<(), VerifierErrorKind> {
         interpret_instruction(
             self,
@@ -48,8 +48,8 @@ impl Frame<RefType, (RefType, Offset)> {
     pub fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
         &mut self,
         insn: &BranchInstruction<Lbl, LblWide, LblNext>,
-        class_graph: &ClassGraph,
-        this_method_return_type: &Option<FieldType>,
+        class_graph: &ClassGraph<'a>,
+        this_method_return_type: &Option<FieldType<'a>>,
     ) -> Result<(), VerifierErrorKind> {
         interpret_branch_instruction(self, class_graph, this_method_return_type, insn)
     }
@@ -78,6 +78,32 @@ impl Frame<RefType, (RefType, Offset)> {
                 .map(|(_, _, t)| t.into_serializable(constants_pool, block_offset))
                 .collect::<Result<_, _>>()?,
         })
+    }
+
+    /// Resolve the frame into its error message form
+    pub fn into_debug(&self) -> Frame<String, String> {
+        Frame {
+            stack: self
+                .stack
+                .iter()
+                .map(|(_, _, t)| {
+                    t.map(
+                        |ty| format!("{:?}", ty),
+                        |u| format!("{:?}", u),
+                    )
+                })
+                .collect(),
+            locals: self
+                .locals
+                .iter()
+                .map(|(_, _, t)| {
+                    t.map(
+                        |ty| format!("{:?}", ty),
+                        |u| format!("{:?}", u),
+                    )
+                })
+                .collect(),
+        }
     }
 }
 
@@ -198,10 +224,27 @@ impl<Cls, U> VerificationType<Cls, U> {
             | VerificationType::Uninitialized(_) => true,
         }
     }
+
+    pub fn map<Cls2, U2>(
+        &self,
+        map_cls: impl Fn(&Cls) -> Cls2,
+        map_uninit: impl Fn(&U) -> U2,
+    ) -> VerificationType<Cls2, U2> {
+        match self {
+            VerificationType::Integer => VerificationType::Integer,
+            VerificationType::Float => VerificationType::Float,
+            VerificationType::Double => VerificationType::Double,
+            VerificationType::Long => VerificationType::Long,
+            VerificationType::Null => VerificationType::Null,
+            VerificationType::UninitializedThis => VerificationType::UninitializedThis,
+            VerificationType::Object(cls) => VerificationType::Object(map_cls(cls)),
+            VerificationType::Uninitialized(u) => VerificationType::Uninitialized(map_uninit(u)),
+        }
+    }
 }
 
-impl<U> From<FieldType> for VerificationType<RefType, U> {
-    fn from(field_type: FieldType) -> Self {
+impl<'a, U> From<FieldType<'a>> for VerificationType<RefType<'a>, U> {
+    fn from(field_type: FieldType<'a>) -> Self {
         match field_type {
             FieldType::Base(BaseType::Int)
             | FieldType::Base(BaseType::Char)
@@ -247,7 +290,7 @@ impl<Cls, A> Width for VerificationType<Cls, A> {
     }
 }
 
-impl<U> VerificationType<RefType, U> {
+impl<U> VerificationType<RefType<'_>, U> {
     /// Check if one verification type is assignable to another
     ///
     /// TODO: there is no handling of uninitialized yet. This just means that we might get false
@@ -266,7 +309,7 @@ impl<U> VerificationType<RefType, U> {
     }
 }
 
-impl VerificationType<RefType, (RefType, Offset)> {
+impl<'a> VerificationType<RefType<'a>, (RefType<'a>, Offset)> {
     /// Resolve the type into its serializable form
     fn into_serializable(
         &self,
@@ -294,17 +337,17 @@ impl VerificationType<RefType, (RefType, Offset)> {
 
 pub trait ConstantsReader {
     /// Lookup the type of a value loaded from the constant pool (eg. from `ldc`)
-    fn lookup_constant_type(&self, index: ConstantIndex) -> Result<FieldType, VerifierErrorKind>;
+    fn lookup_constant_type(&self, index: ConstantIndex) -> Result<FieldType<'static>, VerifierErrorKind>;
 
     /// Resolve the class
-    fn lookup_class_reftype(&self, index: ClassConstantIndex)
-        -> Result<RefType, VerifierErrorKind>;
+    fn lookup_class_reftype<'a>(&'a self, index: ClassConstantIndex)
+        -> Result<RefType<'a>, VerifierErrorKind>;
 
     /// Resolve the class and the field type
-    fn lookup_field(
-        &self,
+    fn lookup_field<'a>(
+        &'a self,
         index: FieldRefConstantIndex,
-    ) -> Result<(RefType, FieldType), VerifierErrorKind>;
+    ) -> Result<(RefType<'a>, FieldType<'a>), VerifierErrorKind>;
 
     /// Resolve a method into:
     ///
@@ -313,30 +356,30 @@ pub trait ConstantsReader {
     ///   * whether it is an `<init>` method
     ///   * and its descriptor
     ///
-    fn lookup_method(
-        &self,
+    fn lookup_method<'a>(
+        &'a self,
         index: MethodRefConstantIndex,
-    ) -> Result<(ClassConstantIndex, bool, bool, MethodDescriptor), VerifierErrorKind>;
+    ) -> Result<(ClassConstantIndex, bool, bool, MethodDescriptor<'a>), VerifierErrorKind>;
 
     /// Resolve the type of an invoke dynamic constant
-    fn lookup_invoke_dynamic(
-        &self,
+    fn lookup_invoke_dynamic<'a>(
+        &'a self,
         index: InvokeDynamicConstantIndex,
-    ) -> Result<MethodDescriptor, VerifierErrorKind>;
+    ) -> Result<MethodDescriptor<'a>, VerifierErrorKind>;
 }
 
-fn interpret_instruction(
-    frame: &mut Frame<RefType, (RefType, Offset)>,
-    constants_reader: &impl ConstantsReader,
-    class_graph: &ClassGraph,
-    this_class: &RefType,
-    insn: &Instruction,
+fn interpret_instruction<'a>(
+    frame: &mut Frame<RefType<'a>, (RefType<'a>, Offset)>,
+    constants_reader: &'a impl ConstantsReader,
+    class_graph: &ClassGraph<'a>,
+    this_class: &RefType<'a>,
+    insn: &Instruction<'a>,
     insn_offset_in_basic_block: Offset,
 ) -> Result<(), VerifierErrorKind> {
     use Instruction::*;
     use VerificationType::*;
 
-    type VType = VerificationType<RefType, (RefType, Offset)>;
+    type VType<'a> = VerificationType<RefType<'a>, (RefType<'a>, Offset)>;
     let Frame {
         ref mut stack,
         ref mut locals,
@@ -400,22 +443,22 @@ fn interpret_instruction(
 
         IALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::INT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::INT)))?;
             stack.push(Integer);
         }
         LALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::LONG)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::LONG)))?;
             stack.push(Long);
         }
         FALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::FLOAT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::FLOAT)))?;
             stack.push(Float);
         }
         DALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::DOUBLE)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::DOUBLE)))?;
             stack.push(Double);
         }
         AALoad => {
@@ -431,17 +474,17 @@ fn interpret_instruction(
         }
         BALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::BYTE)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::BYTE)))?;
             stack.push(Integer);
         }
         CALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::CHAR)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::CHAR)))?;
             stack.push(Integer);
         }
         SALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::SHORT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::SHORT)))?;
             stack.push(Integer);
         }
 
@@ -516,22 +559,22 @@ fn interpret_instruction(
         IAStore => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::INT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::INT)))?;
         }
         LAStore => {
             pop_offset_vec_expecting_type(stack, Long)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::LONG)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::LONG)))?;
         }
         FAStore => {
             pop_offset_vec_expecting_type(stack, Float)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::FLOAT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::FLOAT)))?;
         }
         DAStore => {
             pop_offset_vec_expecting_type(stack, Double)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::DOUBLE)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::DOUBLE)))?;
         }
         AAStore => {
             let elem_type = pop_offset_vec(stack)?;
@@ -542,7 +585,7 @@ fn interpret_instruction(
                     if VerificationType::is_assignable(
                         class_graph,
                         &elem_type,
-                        &VType::from(*expected_elem_type.clone()),
+                        &VType::from(expected_elem_type.clone()),
                     ) =>
                 {
                     ()
@@ -553,17 +596,17 @@ fn interpret_instruction(
         BAStore => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::BYTE)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::BYTE)))?;
         }
         CAStore => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::CHAR)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::CHAR)))?;
         }
         SAStore => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::SHORT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::Array(&FieldType::SHORT)))?;
         }
 
         Pop => {
@@ -996,12 +1039,12 @@ fn interpret_instruction(
         }
         NewArray(base_type) => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            stack.push(Object(RefType::array(FieldType::Base(*base_type))));
+            stack.push(Object(RefType::Array(&FieldType::Base(*base_type))));
         }
         ANewArray(cls_idx) => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             let ref_type = constants_reader.lookup_class_reftype(*cls_idx)?;
-            stack.push(Object(RefType::array(FieldType::Ref(ref_type))));
+            stack.push(Object(RefType::Array(&FieldType::Ref(ref_type))));
         }
         ArrayLength => {
             let array_type = pop_offset_vec(stack)?;
@@ -1032,16 +1075,16 @@ fn interpret_instruction(
     Ok(())
 }
 
-fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
-    frame: &mut Frame<RefType, (RefType, Offset)>,
-    class_graph: &ClassGraph,
-    this_method_return_type: &Option<FieldType>,
+fn interpret_branch_instruction<'a, Lbl, LblWide, LblNext>(
+    frame: &mut Frame<RefType<'a>, (RefType<'a>, Offset)>,
+    class_graph: &ClassGraph<'a>,
+    this_method_return_type: &Option<FieldType<'a>>,
     insn: &BranchInstruction<Lbl, LblWide, LblNext>,
 ) -> Result<(), VerifierErrorKind> {
     use BranchInstruction::*;
     use VerificationType::*;
 
-    type VType = VerificationType<RefType, (RefType, Offset)>;
+    type VType<'a> = VerificationType<RefType<'a>, (RefType<'a>, Offset)>;
     let Frame {
         ref mut stack,
         locals: _,
@@ -1107,7 +1150,7 @@ fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
             let is_exception = VerificationType::is_assignable(
                 class_graph,
                 &atype,
-                &Object(RefType::THROWABLE_CLASS),
+                &Object(RefType::THROWABLE),
             );
             if !is_exception {
                 return Err(VerifierErrorKind::InvalidType);

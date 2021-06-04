@@ -317,25 +317,25 @@ impl Serialize for ConstantsPool {
 }
 
 impl ConstantsReader for ConstantsPool {
-    fn lookup_constant_type(&self, index: ConstantIndex) -> Result<FieldType, VerifierErrorKind> {
+    fn lookup_constant_type(&self, index: ConstantIndex) -> Result<FieldType<'static>, VerifierErrorKind> {
         match self.get(index).ok() {
-            Some(Constant::Class(_)) => Ok(FieldType::Ref(RefType::CLASS_CLASS)),
-            Some(Constant::String(_)) => Ok(FieldType::Ref(RefType::STRING_CLASS)),
+            Some(Constant::Class(_)) => Ok(FieldType::Ref(RefType::CLASS)),
+            Some(Constant::String(_)) => Ok(FieldType::Ref(RefType::STRING)),
             Some(Constant::Integer(_)) => Ok(FieldType::INT),
             Some(Constant::Float(_)) => Ok(FieldType::FLOAT),
             Some(Constant::Long(_)) => Ok(FieldType::LONG),
             Some(Constant::Double(_)) => Ok(FieldType::DOUBLE),
-            Some(Constant::MethodHandle { .. }) => Ok(FieldType::Ref(RefType::METHOD_HANDLE_CLASS)),
-            Some(Constant::MethodType { .. }) => Ok(FieldType::Ref(RefType::METHOD_TYPE_CLASS)),
+            Some(Constant::MethodHandle { .. }) => Ok(FieldType::Ref(RefType::METHODHANDLE)),
+            Some(Constant::MethodType { .. }) => Ok(FieldType::Ref(RefType::METHODTYPE)),
             Some(other) => Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
             None => Err(VerifierErrorKind::MissingConstant(index)),
         }
     }
 
-    fn lookup_class_reftype(
-        &self,
+    fn lookup_class_reftype<'a>(
+        &'a self,
         cls_index: ClassConstantIndex,
-    ) -> Result<RefType, VerifierErrorKind> {
+    ) -> Result<RefType<'a>, VerifierErrorKind> {
         let utf8_index = match self.get(cls_index.into()).ok() {
             Some(Constant::Class(utf8_index)) => *utf8_index,
             Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
@@ -348,10 +348,10 @@ impl ConstantsReader for ConstantsPool {
         Ok(ref_type)
     }
 
-    fn lookup_field(
-        &self,
+    fn lookup_field<'a>(
+        &'a self,
         field_index: FieldRefConstantIndex,
-    ) -> Result<(RefType, FieldType), VerifierErrorKind> {
+    ) -> Result<(RefType<'a>, FieldType<'a>), VerifierErrorKind> {
         let (class_index, name_and_type_index) = match self.get(field_index.into()).ok() {
             Some(Constant::FieldRef(class_, name_and_type)) => (*class_, *name_and_type),
             Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
@@ -377,10 +377,10 @@ impl ConstantsReader for ConstantsPool {
         Ok((class_reftype, field_type))
     }
 
-    fn lookup_method(
-        &self,
+    fn lookup_method<'a>(
+        &'a self,
         method_index: MethodRefConstantIndex,
-    ) -> Result<(ClassConstantIndex, bool, bool, MethodDescriptor), VerifierErrorKind> {
+    ) -> Result<(ClassConstantIndex, bool, bool, MethodDescriptor<'a>), VerifierErrorKind> {
         let (class, name_and_type, is_interface) = match self.get(method_index.into()).ok() {
             Some(Constant::MethodRef {
                 class,
@@ -406,10 +406,10 @@ impl ConstantsReader for ConstantsPool {
         Ok((class, is_interface, is_init, method_descriptor))
     }
 
-    fn lookup_invoke_dynamic(
-        &self,
+    fn lookup_invoke_dynamic<'a>(
+        &'a self,
         invoke_dynamic: InvokeDynamicConstantIndex,
-    ) -> Result<MethodDescriptor, VerifierErrorKind> {
+    ) -> Result<MethodDescriptor<'a>, VerifierErrorKind> {
         let name_and_type = match self.get(invoke_dynamic.into()).ok() {
             Some(Constant::InvokeDynamic {
                 method_descriptor, ..

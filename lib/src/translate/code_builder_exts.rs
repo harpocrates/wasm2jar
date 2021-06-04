@@ -1,13 +1,12 @@
 use crate::jvm::{
     BranchInstruction, ClassConstantIndex, CodeBuilder, Descriptor, EqComparison, Error, FieldType,
-    Instruction, InvokeType, MethodDescriptor, OrdComparison, RefType, Width,
+    Instruction, InvokeType, MethodDescriptor, OrdComparison, RefType, Width, BinaryName, UnqualifiedName
 };
-use std::borrow::Cow;
 use std::ops::Not;
 
-pub trait CodeBuilderExts: CodeBuilder<Error> {
+pub trait CodeBuilderExts<'a>: CodeBuilder<'a, Error> {
     /// Zero initialize a local variable
-    fn zero_local(&mut self, offset: u16, field_type: FieldType) -> Result<(), Error> {
+    fn zero_local(&mut self, offset: u16, field_type: FieldType<'a>) -> Result<(), Error> {
         match field_type {
             FieldType::INT
             | FieldType::CHAR
@@ -39,7 +38,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     }
 
     /// Push a null of a specific value to the stack
-    fn const_null(&mut self, ref_type: RefType) -> Result<(), Error> {
+    fn const_null(&mut self, ref_type: RefType<'a>) -> Result<(), Error> {
         self.push_instruction(Instruction::AConstNull)?;
         self.push_instruction(Instruction::AHint(ref_type))?;
         Ok(())
@@ -57,8 +56,8 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     }
 
     /// Get a local at a particular offset
-    fn get_local(&mut self, offset: u16, field_type: &FieldType) -> Result<(), Error> {
-        let insn = match *field_type {
+    fn get_local(&mut self, offset: u16, field_type: FieldType<'a>) -> Result<(), Error> {
+        let insn = match field_type {
             FieldType::INT
             | FieldType::CHAR
             | FieldType::SHORT
@@ -73,8 +72,8 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     }
 
     /// Set a local at a particular offset
-    fn set_local(&mut self, offset: u16, field_type: &FieldType) -> Result<(), Error> {
-        let insn = match *field_type {
+    fn set_local(&mut self, offset: u16, field_type: FieldType<'a>) -> Result<(), Error> {
+        let insn = match field_type {
             FieldType::INT
             | FieldType::CHAR
             | FieldType::SHORT
@@ -267,18 +266,16 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// an `Error::AmbiguousMethod` will be returned).
     fn invoke(
         &mut self,
-        class_name: impl Into<Cow<'static, str>>,
-        method_name: impl Into<Cow<'static, str>>,
+        class_name: &BinaryName<'a>,
+        method_name: &UnqualifiedName<'a>,
     ) -> Result<(), Error> {
-        let class_name = class_name.into();
-        let method_name = method_name.into();
 
         // Query the class graph for the descriptor
         let (invoke_typ, descriptor): (InvokeType, MethodDescriptor) = {
             let class_graph = self.class_graph();
             let class = class_graph
                 .classes
-                .get(&class_name)
+                .get(class_name)
                 .ok_or_else(|| Error::MissingClass(class_name.to_string()))?;
             let is_interface = class.is_interface;
             let mut method_overloads = class
@@ -289,7 +286,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
                 .map(|(desc, is_static)| {
                     let typ = if *is_static {
                         InvokeType::Static
-                    } else if method_name == "<init>" || method_name == "<clinit>" {
+                    } else if method_name == &UnqualifiedName::INIT || method_name == &UnqualifiedName::CLINIT {
                         InvokeType::Special
                     } else if is_interface {
                         let n = desc.parameter_length(true) as u8;
@@ -331,12 +328,10 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     fn invoke_explicit(
         &mut self,
         invoke_typ: InvokeType,
-        class_name: impl Into<Cow<'static, str>>,
-        method_name: impl Into<Cow<'static, str>>,
+        class_name: &BinaryName<'a>,
+        method_name: &UnqualifiedName<'a>,
         descriptor: &MethodDescriptor,
     ) -> Result<(), Error> {
-        let class_name = class_name.into();
-        let method_name = method_name.into();
         let descriptor = descriptor.render();
         let is_interface = if let InvokeType::Interface(_) = invoke_typ {
             true
@@ -346,9 +341,9 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
 
         let method_ref = {
             let mut constants = self.constants();
-            let class_utf8 = constants.get_utf8(class_name)?;
+            let class_utf8 = constants.get_utf8(class_name.as_ref())?;
             let class_idx = constants.get_class(class_utf8)?;
-            let method_utf8 = constants.get_utf8(method_name)?;
+            let method_utf8 = constants.get_utf8(method_name.as_ref())?;
             let desc_utf8 = constants.get_utf8(descriptor)?;
             let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
             constants.get_method_ref(class_idx, name_and_type_idx, is_interface)?
@@ -360,47 +355,42 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// Get/put a field
     fn access_field(
         &mut self,
-        class_name: impl Into<Cow<'static, str>>,
-        field_name: impl Into<Cow<'static, str>>,
+        class_name: &BinaryName<'a>,
+        field_name: &UnqualifiedName<'a>,
         access_mode: AccessMode,
     ) -> Result<(), Error> {
-        let class_name = class_name.into();
-        let field_name = field_name.into();
 
         // Query the class graph for the descriptor
-        let (is_static, descriptor): (bool, FieldType) = {
+        let (is_static, descriptor): &(bool, FieldType) = {
             let class_graph = self.class_graph();
             class_graph
                 .classes
-                .get(&class_name)
+                .get(class_name)
                 .ok_or_else(|| Error::MissingClass(class_name.to_string()))?
                 .fields
-                .get(&field_name)
+                .get(field_name)
                 .ok_or_else(|| Error::MissingMember(field_name.to_string()))?
-                .clone()
         };
 
-        self.access_field_explicit(is_static, access_mode, class_name, field_name, &descriptor)
+        self.access_field_explicit(*is_static, class_name, field_name, descriptor, access_mode)
     }
 
     /// Get a field explicitly specifying the descriptor
     fn access_field_explicit(
         &mut self,
         is_static: bool,
-        access_mode: AccessMode,
-        class_name: impl Into<Cow<'static, str>>,
-        field_name: impl Into<Cow<'static, str>>,
+        class_name: &BinaryName<'a>,
+        field_name: &UnqualifiedName<'a>,
         descriptor: &FieldType,
+        access_mode: AccessMode,
     ) -> Result<(), Error> {
-        let class_name = class_name.into();
-        let field_name = field_name.into();
         let descriptor = descriptor.render();
 
         let field_ref = {
             let mut constants = self.constants();
-            let class_utf8 = constants.get_utf8(class_name)?;
+            let class_utf8 = constants.get_utf8(class_name.as_ref())?;
             let class_idx = constants.get_class(class_utf8)?;
-            let field_utf8 = constants.get_utf8(field_name)?;
+            let field_utf8 = constants.get_utf8(field_name.as_ref())?;
             let desc_utf8 = constants.get_utf8(descriptor)?;
             let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
             constants.get_field_ref(class_idx, name_and_type_idx)?
@@ -429,7 +419,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     }
 }
 
-impl<A: CodeBuilder> CodeBuilderExts for A {}
+impl<'a, A: CodeBuilder<'a>> CodeBuilderExts<'a> for A {}
 
 /// Conditional branch condition
 pub enum BranchCond {

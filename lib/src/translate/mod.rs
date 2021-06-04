@@ -16,6 +16,7 @@ pub use utility::*;
 
 use crate::wasm::{StackType, TableType};
 use wasmparser::{ElementItem, ElementKind, FuncType, InitExpr, ResizableLimits};
+use crate::jvm::UnqualifiedName;
 
 /// Visibility of different importable/exportable entities in the WASM module
 #[derive(Debug)]
@@ -46,12 +47,12 @@ impl MemberOrigin {
 /// complicated because they can be altered (even resized) from the outside or be aliased with
 /// different names (an imported table can be re-exported under a different name).
 #[derive(Debug)]
-pub struct Table {
+pub struct Table<'b> {
     /// Where is the table defined?
     origin: MemberOrigin,
 
     /// Name of the method in the class (if exported, this matches the export name)
-    field_name: String,
+    field_name: UnqualifiedName<'b>,
 
     /// Table type
     table_type: TableType,
@@ -60,12 +61,12 @@ pub struct Table {
     limits: ResizableLimits,
 }
 
-pub struct Global<'a> {
+pub struct Global<'a, 'b> {
     /// Where is the table defined?
     origin: MemberOrigin,
 
     /// Name of the method in the class (if exported, this matches the export name)
-    field_name: String,
+    field_name: UnqualifiedName<'b>,
 
     /// Global type
     global_type: StackType,

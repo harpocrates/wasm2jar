@@ -4,6 +4,7 @@ use crate::wasm;
 #[derive(Debug)]
 pub enum Error {
     BytecodeGen(jvm::Error),
+    InvalidName(String),
     WasmParser(wasmparser::BinaryReaderError),
     UnsupportedType(wasm::BadType),
     LocalsOverflow,

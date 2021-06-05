@@ -222,7 +222,7 @@ pub struct BootstrapMethods(pub Vec<BootstrapMethod>);
 #[derive(Debug)]
 pub struct BootstrapMethod {
     pub bootstrap_method: ConstantIndex,
-    pub boostrap_arguments: Vec<ConstantIndex>,
+    pub bootstrap_arguments: Vec<ConstantIndex>,
 }
 
 impl AttributeLike for BootstrapMethods {
@@ -238,7 +238,7 @@ impl Serialize for BootstrapMethods {
 impl Serialize for BootstrapMethod {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
         self.bootstrap_method.serialize(writer)?;
-        self.boostrap_arguments.serialize(writer)?;
+        self.bootstrap_arguments.serialize(writer)?;
         Ok(())
     }
 }

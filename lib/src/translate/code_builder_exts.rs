@@ -211,6 +211,12 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         Ok(())
     }
 
+    /// Push a value of type `java/lang/Class` onto the stack
+    fn const_class(&mut self, class_name: &RefType) -> Result<(), Error> {
+        let cls_idx = self.get_class_idx(class_name)?;
+        self.push_instruction(Instruction::Ldc(cls_idx.into()))
+    }
+
     /// Pop the top of the stack, accounting for the different possible type widths
     fn pop(&mut self) -> Result<(), Error> {
         if let Some(frame) = self.current_frame() {
@@ -356,6 +362,25 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         };
 
         self.push_instruction(Instruction::Invoke(invoke_typ, method_ref))
+    }
+
+    /// Invoke dynamic
+    fn invoke_dynamic(
+        &mut self,
+        bootstrap_method: u16,
+        method_name: &UnqualifiedName,
+        descriptor: &MethodDescriptor,
+    ) -> Result<(), Error> {
+        let descriptor = descriptor.render();
+        let invoke_dyn = {
+            let mut constants = self.constants();
+            let method_utf8 = constants.get_utf8(method_name.as_str())?;
+            let desc_utf8 = constants.get_utf8(descriptor)?;
+            let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
+            constants.get_invoke_dynamic(bootstrap_method, name_and_type_idx)?
+        };
+
+        self.push_instruction(Instruction::InvokeDynamic(invoke_dyn))
     }
 
     /// Get/put a field

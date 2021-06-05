@@ -10,7 +10,6 @@ pub enum TestError {
     IncompleteHarness(&'static str),
     Translation(translate::Error),
     TranslationPanic(String),
-    InvalidMessage(String),
     JavacFailed(process::Output),
     JavaFailed(process::Output),
 }
@@ -51,9 +50,6 @@ impl From<TestError> for TestOutcome {
             TestError::Wast(wast_err) => TestOutcome::Error(format!("WAST - {:?}", wast_err)),
             TestError::IncompleteHarness(msg) => TestOutcome::Error(format!("Harness - {}", msg)),
             TestError::Translation(err) => TestOutcome::Fail(format!("Translation - {:?}", err)),
-            TestError::InvalidMessage(err) => {
-                TestOutcome::Fail(format!("Incorrect invalid message - {:?}", err))
-            }
             TestError::TranslationPanic(err) => {
                 TestOutcome::Fail(format!("Translation panic - {:?}", err))
             }

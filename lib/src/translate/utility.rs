@@ -1,11 +1,12 @@
-use super::{AccessMode, CodeBuilderExts, Error, Settings};
+use super::{AccessMode, CodeBuilderExts, Error, Settings, Table};
 use crate::jvm::{
-    BinaryName, BranchInstruction, ClassAccessFlags, ClassBuilder, ClassGraph, CompareMode,
-    FieldType, InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType,
+    BaseType, BinaryName, BootstrapMethod, BootstrapMethods, BranchInstruction, ClassAccessFlags,
+    ClassBuilder, ClassGraph, CompareMode, ConstantIndex, ConstantsPool, Descriptor, FieldType,
+    HandleKind, InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType,
     MethodAccessFlags, MethodDescriptor, Name, OrdComparison, RefType, ShiftType, UnqualifiedName,
 };
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// Potential utility methods.
@@ -99,6 +100,9 @@ pub enum UtilityMethod {
     /// Perform a saturating conversion of a `double` to an unsigned `long` (don't throw, just pick
     /// the "best" `long` available)
     I64TruncSatF64U,
+
+    /// Bootstrap method for table utilities
+    BootstrapTable,
 }
 impl UtilityMethod {
     /// Get the method name
@@ -128,6 +132,7 @@ impl UtilityMethod {
             UtilityMethod::I32TruncSatF64U => UnqualifiedName::I32TRUNCSATF64U,
             UtilityMethod::I64TruncSatF32U => UnqualifiedName::I64TRUNCSATF32U,
             UtilityMethod::I64TruncSatF64U => UnqualifiedName::I64TRUNCSATF64U,
+            UtilityMethod::BootstrapTable => UnqualifiedName::BOOTSTRAPTABLE,
         }
     }
 
@@ -229,6 +234,18 @@ impl UtilityMethod {
             UtilityMethod::I64TruncSatF64U => MethodDescriptor {
                 parameters: vec![FieldType::DOUBLE],
                 return_type: Some(FieldType::LONG),
+            },
+            UtilityMethod::BootstrapTable => MethodDescriptor {
+                parameters: vec![
+                    FieldType::Ref(RefType::Object(BinaryName::METHODHANDLES_LOOKUP)),
+                    FieldType::Ref(RefType::STRING),
+                    FieldType::Ref(RefType::METHODTYPE),
+                    FieldType::Ref(RefType::METHODHANDLE),
+                    FieldType::Ref(RefType::METHODHANDLE),
+                ],
+                return_type: Some(FieldType::Ref(RefType::Object(
+                    BinaryName::CONSTANTCALLSITE,
+                ))),
             },
         }
     }
@@ -340,6 +357,7 @@ impl UtilityClass {
             UtilityMethod::I32TruncSatF64U => Self::generate_i32_trunc_sat_f64_u(code)?,
             UtilityMethod::I64TruncSatF32U => Self::generate_i64_trunc_sat_f32_u(code)?,
             UtilityMethod::I64TruncSatF64U => Self::generate_i64_trunc_sat_f64_u(code)?,
+            UtilityMethod::BootstrapTable => Self::generate_bootstrap_table(code)?,
         }
 
         self.class.finish_method(method_builder)?;
@@ -1077,5 +1095,265 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         Ok(())
+    }
+
+    /// Generate the bootstrap method used for table operators, including indirect calls. Here lie
+    /// some dragons. The output is sensible, but the "how" is not obvious.
+    ///
+    /// For `call_indirect`, we need to take an index as input to choose which method in an array
+    /// to call. We could do this by doing an array lookup into the `table` field and then calling
+    /// `invokeExact` on the `MethodHandle` we extract from there however:
+    ///
+    ///   - that's a fair bit of duplicated code (or else an extra function call)
+    ///   - there is something faster and that fits our needs better: `invokedynamic`!
+    ///
+    /// In order to leverage `invokedynamic`, we need a bootstrap method. This bootstrap method
+    /// will be called with an expected type and return a callsite. We generate bytecode analagous
+    /// to the following method:
+    ///
+    /// ```java
+    /// import java.lang.invoke.*;
+    ///
+    /// static CallSite bootstrapTable(
+    ///   MethodHandles.Lookup lookup,
+    ///   String name,
+    ///   MethodType type,                                // (A₀A₁..ILMyWasmModule;)R
+    ///   MethodHandle getter,                            // (LMyWasmModule;)[LMethodHandle;
+    ///   MethodHandle setter                             // (LMyWasmModule;[LMethodHandle)V
+    /// ) throws Exception {
+    ///
+    ///   int paramCount = type.parameterCount();
+    ///   MethodType targetType =                         // (A₀A₁..LMyWasmModule;)R
+    ///     type.dropParameterTypes(paramCount - 2, paramCount - 1);
+    ///
+    ///   int[] permutation = new int[paramCount + 1];
+    ///   permutation[0] = paramCount - 1;
+    ///   permutation[1] = paramCount - 2;
+    ///   for (int i = 2; i < paramCount; i++) {
+    ///     permutation[i] = i - 2;
+    ///   }
+    ///   permutation[paramCount] = paramCount - 1;
+    ///
+    ///   MethodHandle handle =
+    ///     MethodHandles.permuteArguments(               // (A₀A₁..ILMyWasmModule;)R
+    ///       MethodHandles.collectArguments(             // (LMyWasmModule;IA₀A₁..LMyWasmModule;)R
+    ///         MethodHandles.collectArguments(           // ([LMethodHandle;IA₀A₁..LMyWasmModule;)R
+    ///           MethodHandles.exactInvoker(targetType), // (LMethodHandle;A₀A₁..LMyWasmModule;)R
+    ///           0,
+    ///           MethodHandles.arrayElementGetter(MethodHandle[].class)
+    ///         ),
+    ///         0,
+    ///         getter
+    ///       ),
+    ///       type,
+    ///       permutation
+    ///     );
+    ///
+    ///   return new ConstantCallSite(handle);
+    /// }
+    /// ```
+    ///
+    /// Generates the method and adds a reference to it in the class attributes
+    fn generate_bootstrap_table<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        let param_count_local = 5;
+        let permutation_local = 6;
+
+        // int paramCount = type.parameterCount();
+        // int[] permutation = new int[paramCount + 1];
+        code.push_instruction(Instruction::ALoad(2))?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERCOUNT)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IStore(param_count_local))?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::IAdd)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        code.push_instruction(Instruction::AStore(permutation_local))?;
+
+        // initialize `permutation[0]`
+        code.push_instruction(Instruction::ALoad(permutation_local))?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ILoad(param_count_local))?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::ISub)?;
+        code.push_instruction(Instruction::IAStore)?;
+
+        // initialize `permutation[1]`
+        code.push_instruction(Instruction::ALoad(permutation_local))?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::ILoad(param_count_local))?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.push_instruction(Instruction::ISub)?;
+        code.push_instruction(Instruction::IAStore)?;
+
+        // initialize `permutation[2]` until and including `permutation[paramCount - 1]`
+        code.push_instruction(Instruction::ALoad(permutation_local))?;
+        code.push_instruction(Instruction::IConst2)?;
+        let loop_start = code.fresh_label();
+        let loop_end = code.fresh_label();
+        code.place_label(loop_start)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::ILoad(param_count_local))?;
+        code.push_branch_instruction(BranchInstruction::IfICmp(OrdComparison::GE, loop_end, ()))?;
+        code.push_instruction(Instruction::Dup2)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.push_instruction(Instruction::ISub)?;
+        code.push_instruction(Instruction::IAStore)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::IAdd)?;
+        code.push_branch_instruction(BranchInstruction::Goto(loop_start))?;
+        code.place_label(loop_end)?;
+        code.push_instruction(Instruction::Pop2)?;
+
+        // initialize `permutation[paramCount] = paramCount - 1`
+        code.push_instruction(Instruction::ALoad(permutation_local))?;
+        code.push_instruction(Instruction::ILoad(param_count_local))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::ISub)?;
+        code.push_instruction(Instruction::IAStore)?;
+
+        // MethodType targetType = type.dropParameterTypes(paramCount - 2, paramCount - 1);
+        // Stack after: [ .., targetType ]
+        code.push_instruction(Instruction::ALoad(2))?;
+        code.push_instruction(Instruction::ILoad(param_count_local))?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.push_instruction(Instruction::ISub)?;
+        code.push_instruction(Instruction::ILoad(param_count_local))?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::ISub)?;
+        code.invoke(
+            &BinaryName::METHODTYPE,
+            &UnqualifiedName::DROPPARAMETERTYPES,
+        )?;
+
+        /* MethodHandle handle = MethodHandles.permuteArguments(
+         *   MethodHandles.collectArguments(
+         *     MethodHandles.collectArguments(
+         *       MethodHandles.exactInvoker(targetType),
+         *       0,
+         *       MethodHandles.arrayElementGetter(MethodHandle[].class)
+         *     ),
+         *     0,
+         *     getter
+         *   ),
+         *   type,
+         *   permutation
+         * )
+         * Stack after: [ .., methodhandle ]
+         */
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::EXACTINVOKER)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.const_class(&RefType::array(FieldType::Ref(RefType::METHODHANDLE)))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::ARRAYELEMENTGETTER,
+        )?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::ALoad(2))?;
+        code.push_instruction(Instruction::ALoad(permutation_local))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+
+        // return new ConstantCallSite(methodhandle);
+        let constant_callsite_cls =
+            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
+        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.push_instruction(Instruction::DupX1)?;
+        code.push_instruction(Instruction::Swap)?;
+        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
+        Ok(())
+    }
+}
+
+/// Tracks utility bootstrap methods inside a given class
+#[derive(Default)]
+pub struct BootstrapUtilities {
+    /// Mapping from the table index to a bootstrap method index
+    table_bootstrap_methods: HashMap<u32, u16>,
+
+    /// Ordered list of bootstrap methods
+    bootstrap_methods: Vec<BootstrapMethod>,
+}
+impl BootstrapUtilities {
+    /// Get (and create if missing) a bootstrap method for a given table
+    ///
+    /// Note: the `constants` argument must correspond to the class in which the bootstrap method
+    /// is going to be _used_ (not where it is defined).
+    pub fn get_table_bootstrap(
+        &mut self,
+        table_index: u32,
+        table: &Table,
+        table_field_class: &BinaryName,
+        utilities: &mut UtilityClass,
+        constants: &mut ConstantsPool,
+    ) -> Result<u16, Error> {
+        if let Some(bootstrap) = self.table_bootstrap_methods.get(&table_index) {
+            return Ok(*bootstrap);
+        }
+
+        // Ensure the bootstrapping method is defined
+        let _ = utilities.add_utility_method(UtilityMethod::BootstrapTable)?;
+
+        // Compute a method handle for the bootstrap
+        let table_bootstrap_handle: ConstantIndex = {
+            let utilities_utf8 = constants.get_utf8(utilities.class.class_name().as_str())?;
+            let utilities_cls = constants.get_class(utilities_utf8)?;
+            let tablebootstrap_utf8 =
+                constants.get_utf8(UtilityMethod::BootstrapTable.name().as_str())?;
+            let tablebootstrap_typ =
+                constants.get_utf8(UtilityMethod::BootstrapTable.descriptor().render())?;
+            let tablebootstrap_nt =
+                constants.get_name_and_type(tablebootstrap_utf8, tablebootstrap_typ)?;
+            let tablebootstrap_method_ref =
+                constants.get_method_ref(utilities_cls, tablebootstrap_nt, false)?;
+            constants
+                .get_method_handle(HandleKind::InvokeStatic, tablebootstrap_method_ref.into())?
+        };
+
+        // Compute the getter and setter constant arguments for the bootstrap method
+        let table_field_typ = FieldType::array(table.table_type.field_type());
+        let table_fieldref: ConstantIndex = {
+            let class_utf8 = constants.get_utf8(table_field_class.as_str())?;
+            let class_idx = constants.get_class(class_utf8)?;
+            let field_utf8 = constants.get_utf8(table.field_name.as_str())?;
+            let desc_utf8 = constants.get_utf8(table_field_typ.render())?;
+            let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
+            constants
+                .get_field_ref(class_idx, name_and_type_idx)?
+                .into()
+        };
+        let table_get_handle = constants.get_method_handle(HandleKind::GetField, table_fieldref)?;
+        let table_set_handle = constants.get_method_handle(HandleKind::PutField, table_fieldref)?;
+
+        // Generate the bootstrap attribute and return the index
+        let bootstrap_index = self.bootstrap_methods.len() as u16; // TODO: detect overflow
+        self.bootstrap_methods.push(BootstrapMethod {
+            bootstrap_method: table_bootstrap_handle,
+            bootstrap_arguments: vec![table_get_handle, table_set_handle],
+        });
+        self.table_bootstrap_methods
+            .insert(table_index, bootstrap_index);
+
+        Ok(bootstrap_index)
+    }
+}
+
+impl From<BootstrapUtilities> for BootstrapMethods {
+    fn from(bootstrap_utils: BootstrapUtilities) -> BootstrapMethods {
+        BootstrapMethods(bootstrap_utils.bootstrap_methods)
     }
 }

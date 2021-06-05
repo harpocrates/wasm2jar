@@ -1,11 +1,11 @@
 use super::{
-    AccessMode, CodeBuilderExts, Element, Error, FunctionTranslator, Global, MemberOrigin, Memory,
-    Settings, Table, UtilityClass,
+    AccessMode, BootstrapUtilities, CodeBuilderExts, Element, Error, FunctionTranslator, Global,
+    MemberOrigin, Memory, Settings, Table, UtilityClass,
 };
 use crate::jvm::{
-    BinaryName, BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile, ClassGraph,
-    CodeBuilder, ConstantIndex, Descriptor, FieldAccessFlags, FieldType, HandleKind, InnerClass,
-    InnerClassAccessFlags, InnerClasses, Instruction, InvokeType, MethodAccessFlags,
+    BinaryName, BootstrapMethods, BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile,
+    ClassGraph, CodeBuilder, ConstantIndex, Descriptor, FieldAccessFlags, FieldType, HandleKind,
+    InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType, MethodAccessFlags,
     MethodDescriptor, Name, NestHost, NestMembers, RefType, UnqualifiedName, Width,
 };
 use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourcesExt};
@@ -25,8 +25,9 @@ pub struct ModuleTranslator<'a> {
     class_graph: Rc<RefCell<ClassGraph>>,
     class: ClassBuilder,
     previous_parts: Vec<ClassBuilder>,
-    current_part: ClassBuilder,
     fields_generated: bool,
+
+    current_part: CurrentPart,
 
     /// Utility class (just a carrier for whatever helper methods we may want)
     utilities: UtilityClass,
@@ -51,6 +52,18 @@ pub struct ModuleTranslator<'a> {
 
     /// Every time we see a new function, this gets incremented
     current_func_idx: u32,
+}
+
+struct CurrentPart {
+    class: ClassBuilder,
+    bootstrap: BootstrapUtilities,
+}
+impl CurrentPart {
+    fn result(mut self) -> Result<ClassBuilder, Error> {
+        self.class
+            .add_attribute(BootstrapMethods::from(self.bootstrap))?;
+        Ok(self.class)
+    }
 }
 
 impl<'a> ModuleTranslator<'a> {
@@ -110,11 +123,11 @@ impl<'a> ModuleTranslator<'a> {
         settings: &Settings,
         class_graph: Rc<RefCell<ClassGraph>>,
         part_idx: usize,
-    ) -> Result<ClassBuilder, Error> {
+    ) -> Result<CurrentPart, Error> {
         let name = settings
             .part_short_class_name
             .concat(&UnqualifiedName::number(part_idx));
-        let mut part = ClassBuilder::new(
+        let mut class = ClassBuilder::new(
             ClassAccessFlags::SYNTHETIC | ClassAccessFlags::SUPER,
             settings
                 .output_full_class_name
@@ -128,10 +141,10 @@ impl<'a> ModuleTranslator<'a> {
 
         // Add the `NestHost` and `InnerClasses` attributes
         let (nest_host, inner_classes): (NestHost, InnerClasses) = {
-            let mut constants = part.constants();
+            let mut constants = class.constants();
             let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
-            let inner_class_name = constants.get_utf8(part.class_name().as_str())?;
+            let inner_class_name = constants.get_utf8(class.class_name().as_str())?;
             let inner_class = constants.get_class(inner_class_name)?;
             let inner_name = constants.get_utf8(name.as_str())?;
             let inner_class_attr = InnerClass {
@@ -142,10 +155,13 @@ impl<'a> ModuleTranslator<'a> {
             };
             (NestHost(outer_class), InnerClasses(vec![inner_class_attr]))
         };
-        part.add_attribute(nest_host)?;
-        part.add_attribute(inner_classes)?;
+        class.add_attribute(nest_host)?;
+        class.add_attribute(inner_classes)?;
 
-        Ok(part)
+        Ok(CurrentPart {
+            class,
+            bootstrap: BootstrapUtilities::default(),
+        })
     }
 
     /// Process one payload
@@ -217,7 +233,7 @@ impl<'a> ModuleTranslator<'a> {
             self.settings.output_full_class_name.clone(),
         ));
 
-        let mut method_builder = self.current_part.start_method(
+        let mut method_builder = self.current_part.class.start_method(
             MethodAccessFlags::STATIC,
             self.settings
                 .wasm_function_name_prefix
@@ -229,6 +245,7 @@ impl<'a> ModuleTranslator<'a> {
             typ,
             &self.settings,
             &mut self.utilities,
+            &mut self.current_part.bootstrap,
             &mut method_builder.code,
             &self.tables,
             &self.memories,
@@ -238,7 +255,7 @@ impl<'a> ModuleTranslator<'a> {
         )?;
         function_translator.translate()?;
 
-        self.current_part.finish_method(method_builder)?;
+        self.current_part.class.finish_method(method_builder)?;
         self.current_func_idx += 1;
 
         Ok(())
@@ -272,7 +289,7 @@ impl<'a> ModuleTranslator<'a> {
     fn generate_global_fields(&mut self) -> Result<(), Error> {
         for global in &self.globals {
             if !global.origin.is_internal() {
-                todo!()
+                todo!("exported/imported global")
             }
 
             let mutable_flag = if global.mutable {
@@ -335,7 +352,11 @@ impl<'a> ModuleTranslator<'a> {
                 });
             }
 
-            _ => todo!(),
+            ImportSectionEntryType::Function(_) => todo!("import function"),
+            ImportSectionEntryType::Memory(_) => todo!("import memory"),
+            ImportSectionEntryType::Event(_) => todo!("import event"),
+            ImportSectionEntryType::Module(_) => todo!("import module"),
+            ImportSectionEntryType::Instance(_) => todo!("import instance"),
         }
 
         Ok(())
@@ -368,7 +389,7 @@ impl<'a> ModuleTranslator<'a> {
     fn generate_table_fields(&mut self) -> Result<(), Error> {
         for table in &self.tables {
             if !table.origin.is_internal() {
-                todo!()
+                todo!("exported/imported table")
             }
 
             // TODO: if the limits on the table constrain it to never grow, make the field final
@@ -513,7 +534,7 @@ impl<'a> ModuleTranslator<'a> {
                     // Call the implementation
                     method_builder.code.invoke_explicit(
                         InvokeType::Static,
-                        self.current_part.class_name(),
+                        self.current_part.class.class_name(),
                         &self
                             .settings
                             .wasm_function_name_prefix
@@ -828,7 +849,7 @@ impl<'a> ModuleTranslator<'a> {
 
         // Assemble all the parts
         let mut parts = self.previous_parts;
-        parts.push(self.current_part);
+        parts.push(self.current_part.result()?);
 
         // Construct the `NestMembers` and `InnerClasses` attribute
         let (nest_members, inner_classes): (NestMembers, InnerClasses) = {

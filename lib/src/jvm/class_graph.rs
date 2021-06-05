@@ -164,10 +164,26 @@ impl ClassGraph {
 
         // java.lang.invoke.MethodType
         {
-            let _java_lang_invoke_methodtype = self
+            let java_lang_invoke_methodtype = self
                 .classes
                 .entry(BinaryName::METHODTYPE)
                 .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_invoke_methodtype.add_method(
+                false,
+                UnqualifiedName::PARAMETERCOUNT,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: Some(FieldType::INT),
+                },
+            );
+            java_lang_invoke_methodtype.add_method(
+                false,
+                UnqualifiedName::DROPPARAMETERTYPES,
+                MethodDescriptor {
+                    parameters: vec![FieldType::INT, FieldType::INT],
+                    return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
+                },
+            );
         }
 
         // java.lang.invoke.MethodHandle
@@ -176,6 +192,143 @@ impl ClassGraph {
                 .classes
                 .entry(BinaryName::METHODHANDLE)
                 .or_insert(ClassData::new(BinaryName::OBJECT, false));
+        }
+
+        // java.lang.invoke.MethodHandles
+        {
+            let java_lang_invoke_methodhandles = self
+                .classes
+                .entry(BinaryName::METHODHANDLES)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_invoke_methodhandles.add_method(
+                true,
+                UnqualifiedName::PERMUTEARGUMENTS,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::Ref(RefType::METHODHANDLE),
+                        FieldType::Ref(RefType::METHODTYPE),
+                        FieldType::Ref(RefType::array(FieldType::INT)),
+                    ],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
+            java_lang_invoke_methodhandles.add_method(
+                true,
+                UnqualifiedName::COLLECTARGUMENTS,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::Ref(RefType::METHODHANDLE),
+                        FieldType::INT,
+                        FieldType::Ref(RefType::METHODHANDLE),
+                    ],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
+            java_lang_invoke_methodhandles.add_method(
+                true,
+                UnqualifiedName::EXACTINVOKER,
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::METHODTYPE)],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
+            for method in vec![
+                UnqualifiedName::ARRAYELEMENTGETTER,
+                UnqualifiedName::ARRAYELEMENTSETTER,
+            ] {
+                java_lang_invoke_methodhandles.add_method(
+                    true,
+                    method,
+                    MethodDescriptor {
+                        parameters: vec![FieldType::Ref(RefType::CLASS)],
+                        return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                    },
+                );
+            }
+        }
+
+        // java.lang.invoke.CallSite
+        {
+            let java_lang_invoke_callsite = self
+                .classes
+                .entry(BinaryName::CALLSITE)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_invoke_callsite.add_method(
+                false,
+                UnqualifiedName::DYNAMICINVOKER,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: Some(FieldType::object(BinaryName::METHODHANDLE)),
+                },
+            );
+            java_lang_invoke_callsite.add_method(
+                false,
+                UnqualifiedName::GETTARGET,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: Some(FieldType::object(BinaryName::METHODHANDLE)),
+                },
+            );
+            java_lang_invoke_callsite.add_method(
+                false,
+                UnqualifiedName::SETTARGET,
+                MethodDescriptor {
+                    parameters: vec![FieldType::object(BinaryName::METHODHANDLE)],
+                    return_type: None,
+                },
+            );
+            java_lang_invoke_callsite.add_method(
+                false,
+                UnqualifiedName::TYPE,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: Some(FieldType::object(BinaryName::METHODTYPE)),
+                },
+            );
+        }
+
+        // java.lang.invoke.ConstantCallSite
+        {
+            let java_lang_invoke_constantcallsite = self
+                .classes
+                .entry(BinaryName::CONSTANTCALLSITE)
+                .or_insert(ClassData::new(BinaryName::CALLSITE, false));
+            java_lang_invoke_constantcallsite.add_method(
+                false,
+                UnqualifiedName::INIT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::object(BinaryName::METHODHANDLE)],
+                    return_type: None,
+                },
+            );
+        }
+
+        // java.lang.invoke.MutableCallSite
+        {
+            let java_lang_invoke_mutablecallsite = self
+                .classes
+                .entry(BinaryName::MUTABLECALLSITE)
+                .or_insert(ClassData::new(BinaryName::CALLSITE, false));
+            java_lang_invoke_mutablecallsite.add_method(
+                true,
+                UnqualifiedName::SYNCALL,
+                MethodDescriptor {
+                    parameters: vec![FieldType::array(FieldType::object(
+                        BinaryName::MUTABLECALLSITE,
+                    ))],
+                    return_type: None,
+                },
+            );
+            java_lang_invoke_mutablecallsite.add_method(
+                false,
+                UnqualifiedName::INIT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::array(FieldType::object(
+                        BinaryName::METHODHANDLE,
+                    ))],
+                    return_type: None,
+                },
+            );
         }
 
         // java.lang.Number

@@ -1,6 +1,6 @@
 use super::{
-    AccessMode, BranchCond, CodeBuilderExts, Error, Global, Memory, Settings, Table, UtilityClass,
-    UtilityMethod,
+    AccessMode, BootstrapUtilities, BranchCond, CodeBuilderExts, Error, Global, Memory, Settings,
+    Table, UtilityClass, UtilityMethod,
 };
 use crate::jvm::{
     BaseType, BinaryName, BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction,
@@ -28,6 +28,9 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
 
     /// Utilities
     utilities: &'b mut UtilityClass,
+
+    /// Bootstrap utilities (unlike `utilities`, these get cleared across parts)
+    bootstrap_utilities: &'b mut BootstrapUtilities,
 
     /// Code builder
     jvm_code: &'b mut B,
@@ -69,6 +72,7 @@ where
         function_typ: FunctionType,
         settings: &'b Settings,
         utilities: &'b mut UtilityClass,
+        bootstrap_utilities: &'b mut BootstrapUtilities,
         jvm_code: &'b mut B,
         wasm_tables: &'b [Table],
         wasm_memories: &'b [Memory],
@@ -88,6 +92,7 @@ where
             function_typ,
             settings,
             utilities,
+            bootstrap_utilities,
             jvm_code,
             jvm_locals,
             wasm_tables,
@@ -233,7 +238,9 @@ where
             Operator::BrTable { table } => self.visit_branch_table(table)?,
             Operator::Return => self.visit_return()?,
             Operator::Call { function_index } => self.visit_call(function_index)?,
-            Operator::CallIndirect { .. } => todo!(),
+            Operator::CallIndirect { index, table_index } => {
+                self.visit_call_indirect(TypeOrFuncType::FuncType(index), table_index)?
+            }
 
             // Parametric Instructions
             Operator::Drop => self.jvm_code.pop()?,
@@ -1324,6 +1331,38 @@ where
         Ok(())
     }
 
+    /// Visit a `call_indirect`
+    fn visit_call_indirect(&mut self, typ: TypeOrFuncType, table_idx: u32) -> Result<(), Error> {
+        let func_typ = self.wasm_validator.resources().function_type(typ)?;
+        let table = &self.wasm_tables[table_idx as usize];
+
+        // Compute the method descriptor we'll actually be calling
+        let mut desc: MethodDescriptor = func_typ.method_descriptor();
+        desc.parameters.push(FieldType::INT);
+        desc.parameters.push(FieldType::object(
+            self.settings.output_full_class_name.clone(),
+        ));
+
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        let bootstrap_method: u16 = self.bootstrap_utilities.get_table_bootstrap(
+            table_idx,
+            table,
+            &self.settings.output_full_class_name,
+            &mut self.utilities,
+            &mut self.jvm_code.constants(),
+        )?;
+
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        self.jvm_code
+            .invoke_dynamic(bootstrap_method, &UnqualifiedName::CALLINDIRECT, &desc)?;
+        if func_typ.outputs.len() > 1 {
+            self.unpack_stack_from_array(&func_typ.outputs)?;
+        }
+
+        Ok(())
+    }
+
     /// Pack the top stack elements into an array
     ///
     /// This is used when returning out of functions that return multiple values.
@@ -1695,13 +1734,7 @@ where
     ) -> Result<(), Error> {
         let memory = &self.wasm_memories[memarg.memory as usize];
 
-        // Adjust the offset
-        if memarg.offset != 0 {
-            self.jvm_code.const_int(memarg.offset as i32)?; // TODO: overflow
-            self.jvm_code.push_instruction(Instruction::IAdd)?;
-        }
-
-        if ty.width() == 1 {
+        if ty.width() == 1 && memarg.offset == 0 {
             // Load the memory
             let this_off = self.jvm_locals.lookup_this()?.0;
             self.jvm_code
@@ -1719,6 +1752,12 @@ where
             // Stash the value being stored
             let off = self.jvm_locals.push_local(FieldType::Base(ty))?;
             self.jvm_code.set_local(off, &FieldType::Base(ty))?;
+
+            // Adjust the offset
+            if memarg.offset != 0 {
+                self.jvm_code.const_int(memarg.offset as i32)?; // TODO: overflow
+                self.jvm_code.push_instruction(Instruction::IAdd)?;
+            }
 
             // Load the memory
             let this_off = self.jvm_locals.lookup_this()?.0;

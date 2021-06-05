@@ -528,7 +528,7 @@ impl Serialize for Instruction {
                 0u8.serialize(writer)?;
             }
             Instruction::InvokeDynamic(idx) => {
-                0xb9u8.serialize(writer)?;
+                0xbau8.serialize(writer)?;
                 idx.serialize(writer)?;
                 0u16.serialize(writer)?;
             }

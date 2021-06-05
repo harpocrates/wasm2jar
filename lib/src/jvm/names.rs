@@ -128,11 +128,14 @@ impl UnqualifiedName {
     pub const ABS: Self = Self::name("abs");
     pub const ALLOCATE: Self = Self::name("allocate");
     pub const ALLOCATEDIRECT: Self = Self::name("allocateDirect");
+    pub const ARRAYELEMENTGETTER: Self = Self::name("arrayElementGetter");
+    pub const ARRAYELEMENTSETTER: Self = Self::name("arrayElementSetter");
     pub const BIGENDIAN: Self = Self::name("BIG_ENDIAN");
     pub const BITCOUNT: Self = Self::name("bitCount");
     pub const BYTEVALUE: Self = Self::name("byteValue");
     pub const CAPACITY: Self = Self::name("capacity");
     pub const CEIL: Self = Self::name("ceil");
+    pub const COLLECTARGUMENTS: Self = Self::name("collectArguments");
     pub const COMPARE: Self = Self::name("compare");
     pub const COMPAREUNSIGNED: Self = Self::name("compareUnsigned");
     pub const COPYOF: Self = Self::name("copyOf");
@@ -140,7 +143,10 @@ impl UnqualifiedName {
     pub const DIVIDEUNSIGNED: Self = Self::name("divideUnsigned");
     pub const DOUBLETORAWLONGBITS: Self = Self::name("doubleToRawLongBits");
     pub const DOUBLEVALUE: Self = Self::name("doubleValue");
+    pub const DROPPARAMETERTYPES: Self = Self::name("dropParameterTypes");
+    pub const DYNAMICINVOKER: Self = Self::name("dynamicInvoker");
     pub const EQUALS: Self = Self::name("equals");
+    pub const EXACTINVOKER: Self = Self::name("exactInvoker");
     pub const FILL: Self = Self::name("fill");
     pub const FLOATTORAWINTBITS: Self = Self::name("floatToRawIntBits");
     pub const FLOATVALUE: Self = Self::name("floatValue");
@@ -152,6 +158,7 @@ impl UnqualifiedName {
     pub const GETINT: Self = Self::name("getInt");
     pub const GETLONG: Self = Self::name("getLong");
     pub const GETSHORT: Self = Self::name("getShort");
+    pub const GETTARGET: Self = Self::name("getTarget");
     pub const HASHCODE: Self = Self::name("hashCode");
     pub const INTBITSTOFLOAT: Self = Self::name("intBitsToFloat");
     pub const INTVALUE: Self = Self::name("intValue");
@@ -168,6 +175,8 @@ impl UnqualifiedName {
     pub const NUMBEROFLEADINGZEROS: Self = Self::name("numberOfLeadingZeros");
     pub const NUMBEROFTRAILINGZEROS: Self = Self::name("numberOfTrailingZeros");
     pub const ORDER: Self = Self::name("order");
+    pub const PARAMETERCOUNT: Self = Self::name("parameterCount");
+    pub const PERMUTEARGUMENTS: Self = Self::name("permuteArguments");
     pub const POSITION: Self = Self::name("position");
     pub const POSITIVEINFINITY: Self = Self::name("POSITIVE_INFINITY");
     pub const PUT: Self = Self::name("put");
@@ -180,9 +189,12 @@ impl UnqualifiedName {
     pub const RINT: Self = Self::name("rint");
     pub const ROTATELEFT: Self = Self::name("rotateLeft");
     pub const ROTATERIGHT: Self = Self::name("rotateRight");
+    pub const SETTARGET: Self = Self::name("setTarget");
     pub const SHORTVALUE: Self = Self::name("shortValue");
     pub const SQRT: Self = Self::name("sqrt");
+    pub const SYNCALL: Self = Self::name("syncAll");
     pub const TOINTEXACT: Self = Self::name("toIntExact");
+    pub const TYPE: Self = Self::name("type");
     pub const VALUEOF: Self = Self::name("valueOf");
 
     // Special unqualified names - only these are allowed to have angle brackets in them
@@ -190,6 +202,8 @@ impl UnqualifiedName {
     pub const CLINIT: Self = Self::name("<clinit>");
 
     // Names we generate
+    pub const BOOTSTRAPTABLE: Self = Self::name("bootstrapTable");
+    pub const CALLINDIRECT: Self = Self::name("call_indirect");
     pub const EXTERNREFTABLEBOOTSTRAP: Self = Self::name("externrefTableBootstrap");
     pub const F32ABS: Self = Self::name("f32Abs");
     pub const F32CONVERTI32U: Self = Self::name("f32ConvertI32U");
@@ -255,7 +269,8 @@ impl BinaryName {
     pub const INTEGER: Self = Self::name("java/lang/Integer");
     pub const LONG: Self = Self::name("java/lang/Long");
     pub const MATH: Self = Self::name("java/lang/Math");
-    pub const METHODHANDLE_LOOKUP: Self = Self::name("java/lang/invoke/MethodHandle$Lookup");
+    pub const METHODHANDLES: Self = Self::name("java/lang/invoke/MethodHandles");
+    pub const METHODHANDLES_LOOKUP: Self = Self::name("java/lang/invoke/MethodHandles$Lookup");
     pub const METHODHANDLE: Self = Self::name("java/lang/invoke/MethodHandle");
     pub const METHODTYPE: Self = Self::name("java/lang/invoke/MethodType");
     pub const MUTABLECALLSITE: Self = Self::name("java/lang/invoke/MutableCallSite");

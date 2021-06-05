@@ -333,9 +333,7 @@ impl<'a> TestHarness<'a> {
             WastDirective::AssertUnlinkable { .. } => {
                 return Err(TestError::IncompleteHarness("assert_unlinkable"))
             }
-            WastDirective::Register { .. } => {
-                return Err(TestError::IncompleteHarness("register"))
-            }
+            WastDirective::Register { .. } => return Err(TestError::IncompleteHarness("register")),
         }
 
         Ok(())

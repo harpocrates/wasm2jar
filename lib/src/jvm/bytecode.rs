@@ -602,6 +602,17 @@ pub enum BranchInstruction<Lbl, LblWide, LblNext> {
         /// Jump targets
         targets: Vec<LblWide>,
     },
+    LookupSwitch {
+        /// `default` must be at a multiple of four bytes from the start of the current method, so
+        /// there must be a 0-3 inclusive byte padding
+        padding: u8,
+
+        /// Jump target if there is no corresponding key
+        default: LblWide,
+
+        /// Jump targets (sorted so that the keys are ascending)
+        targets: Vec<(i32, LblWide)>,
+    },
     IReturn,
     LReturn,
     FReturn,
@@ -624,6 +635,7 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
             BranchInstruction::Goto(_)
             | BranchInstruction::GotoW(_)
             | BranchInstruction::TableSwitch { .. }
+            | BranchInstruction::LookupSwitch { .. }
             | BranchInstruction::IReturn
             | BranchInstruction::LReturn
             | BranchInstruction::FReturn
@@ -653,6 +665,13 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
             } => {
                 let mut ts = vec![*default];
                 ts.extend(targets.iter().copied());
+                JumpTargets::WideMany(ts)
+            }
+            BranchInstruction::LookupSwitch {
+                default, targets, ..
+            } => {
+                let mut ts = vec![*default];
+                ts.extend(targets.iter().map(|(_, target)| *target));
                 JumpTargets::WideMany(ts)
             }
             BranchInstruction::IReturn => JumpTargets::None,
@@ -692,6 +711,18 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
                 low: *low,
                 targets: targets.iter().map(map_wide_label).collect(),
             },
+            LookupSwitch {
+                padding,
+                default,
+                targets,
+            } => LookupSwitch {
+                padding: *padding,
+                default: map_wide_label(default),
+                targets: targets
+                    .iter()
+                    .map(|(key, lbl)| (*key, map_wide_label(lbl)))
+                    .collect(),
+            },
             IReturn => IReturn,
             LReturn => LReturn,
             FReturn => FReturn,
@@ -729,6 +760,10 @@ impl<Lbl, LblWide, LblFall> Width for BranchInstruction<Lbl, LblWide, LblFall> {
             BranchInstruction::TableSwitch {
                 padding, targets, ..
             } => 1 + *padding as usize + 4 * (3 + targets.len()),
+
+            BranchInstruction::LookupSwitch {
+                padding, targets, ..
+            } => 1 + *padding as usize + 8 * (1 + targets.len()),
         }
     }
 }
@@ -790,6 +825,22 @@ impl Serialize for BranchInstruction<i16, i32, ()> {
                 low.serialize(writer)?;
                 (low + targets.len() as i32 - 1).serialize(writer)?;
                 for target in targets {
+                    target.serialize(writer)?;
+                }
+            }
+            BranchInstruction::LookupSwitch {
+                padding,
+                default,
+                targets,
+            } => {
+                0xabu8.serialize(writer)?;
+                for _ in 0..*padding {
+                    0x00u8.serialize(writer)?;
+                }
+                default.serialize(writer)?;
+                (targets.len() as i32).serialize(writer)?;
+                for (key, target) in targets {
+                    key.serialize(writer)?;
                     target.serialize(writer)?;
                 }
             }

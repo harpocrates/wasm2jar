@@ -551,6 +551,21 @@ impl CurrentBlock {
                     targets,
                 }
             }
+            BranchInstruction::LookupSwitch {
+                default, targets, ..
+            } => {
+                let off = offset_from_start.0 + self.instructions.offset_len().0 + 1;
+                let padding = match (off % 4) as u8 {
+                    0 => 0,
+                    x => 4 - x,
+                };
+                BranchInstruction::LookupSwitch {
+                    padding,
+                    default,
+                    targets,
+                }
+            }
+
             other => other,
         };
 

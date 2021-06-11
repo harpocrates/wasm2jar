@@ -1591,74 +1591,62 @@ where
     }
 
     /// Visit a table get operator
-    fn visit_table_get(&mut self, table: u32) -> Result<(), Error> {
-        let table = &self.wasm_tables[table as usize];
+    fn visit_table_get(&mut self, table_idx: u32) -> Result<(), Error> {
+        let table = &self.wasm_tables[table_idx as usize];
 
-        // Stash the index in a local
-        let temp_index = self.jvm_locals.push_local(FieldType::INT)?;
-        self.jvm_code
-            .push_instruction(Instruction::IStore(temp_index))?;
+        // Compute the method descriptor we'll actually be calling
+        let desc: MethodDescriptor = MethodDescriptor {
+            parameters: vec![
+                FieldType::INT,
+                FieldType::object(self.settings.output_full_class_name.clone()),
+            ],
+            return_type: Some(table.table_type.field_type()),
+        };
 
-        if table.origin.is_internal() {
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code.access_field(
-                &self.settings.output_full_class_name,
-                &table.field_name,
-                AccessMode::Read,
-            )?;
-            self.jvm_code
-                .push_instruction(Instruction::ILoad(temp_index))?;
-            self.jvm_code.push_instruction(Instruction::AALoad)?;
-        } else {
-            todo!()
-        }
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        let bootstrap_method: u16 = self.bootstrap_utilities.get_table_bootstrap(
+            table_idx,
+            table,
+            &self.settings.output_full_class_name,
+            &mut self.utilities,
+            &mut self.jvm_code.constants(),
+        )?;
 
         self.jvm_code
-            .push_instruction(Instruction::IKill(temp_index))?;
-        self.jvm_locals.pop_local()?;
+            .push_instruction(Instruction::ALoad(this_off))?;
+        self.jvm_code
+            .invoke_dynamic(bootstrap_method, &UnqualifiedName::TABLEGET, &desc)?;
 
         Ok(())
     }
 
     /// Visit a table set operator
-    fn visit_table_set(&mut self, table: u32) -> Result<(), Error> {
-        let table = &self.wasm_tables[table as usize];
-        let table_elem_type = table.table_type.field_type();
+    fn visit_table_set(&mut self, table_idx: u32) -> Result<(), Error> {
+        let table = &self.wasm_tables[table_idx as usize];
 
-        // Stash the index and element in locals
-        let temp_value = self.jvm_locals.push_local(table_elem_type.clone())?;
-        let temp_index = self.jvm_locals.push_local(FieldType::INT)?;
-        self.jvm_code
-            .push_instruction(Instruction::AStore(temp_value))?;
-        self.jvm_code
-            .push_instruction(Instruction::IStore(temp_index))?;
+        // Compute the method descriptor we'll actually be calling
+        let desc: MethodDescriptor = MethodDescriptor {
+            parameters: vec![
+                FieldType::INT,
+                table.table_type.field_type(),
+                FieldType::object(self.settings.output_full_class_name.clone()),
+            ],
+            return_type: None,
+        };
 
-        if table.origin.is_internal() {
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code.access_field(
-                &self.settings.output_full_class_name,
-                &table.field_name,
-                AccessMode::Read,
-            )?;
-            self.jvm_code
-                .push_instruction(Instruction::ILoad(temp_index))?;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(temp_value))?;
-            self.jvm_code.push_instruction(Instruction::AAStore)?;
-        } else {
-            todo!()
-        }
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        let bootstrap_method: u16 = self.bootstrap_utilities.get_table_bootstrap(
+            table_idx,
+            table,
+            &self.settings.output_full_class_name,
+            &mut self.utilities,
+            &mut self.jvm_code.constants(),
+        )?;
 
         self.jvm_code
-            .push_instruction(Instruction::IKill(temp_index))?;
+            .push_instruction(Instruction::ALoad(this_off))?;
         self.jvm_code
-            .push_instruction(Instruction::AKill(temp_value))?;
-        self.jvm_locals.pop_local()?;
-        self.jvm_locals.pop_local()?;
+            .invoke_dynamic(bootstrap_method, &UnqualifiedName::TABLESET, &desc)?;
 
         Ok(())
     }

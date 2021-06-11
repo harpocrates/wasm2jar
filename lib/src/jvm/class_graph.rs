@@ -107,7 +107,7 @@ impl ClassGraph {
                 false,
                 UnqualifiedName::HASHCODE,
                 MethodDescriptor {
-                    parameters: vec![FieldType::Ref(RefType::OBJECT)],
+                    parameters: vec![],
                     return_type: Some(FieldType::INT),
                 },
             );
@@ -178,20 +178,44 @@ impl ClassGraph {
             );
             java_lang_invoke_methodtype.add_method(
                 false,
+                UnqualifiedName::PARAMETERTYPE,
+                MethodDescriptor {
+                    parameters: vec![FieldType::INT],
+                    return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
+                },
+            );
+            java_lang_invoke_methodtype.add_method(
+                false,
                 UnqualifiedName::DROPPARAMETERTYPES,
                 MethodDescriptor {
                     parameters: vec![FieldType::INT, FieldType::INT],
                     return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
                 },
             );
+            java_lang_invoke_methodtype.add_method(
+                false,
+                UnqualifiedName::RETURNTYPE,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: Some(FieldType::Ref(RefType::CLASS)),
+                },
+            );
         }
 
         // java.lang.invoke.MethodHandle
         {
-            let _java_lang_invoke_methodtype = self
+            let java_lang_invoke_methodhandle = self
                 .classes
                 .entry(BinaryName::METHODHANDLE)
                 .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_invoke_methodhandle.add_method(
+                false,
+                UnqualifiedName::TYPE,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
+                },
+            );
         }
 
         // java.lang.invoke.MethodHandles
@@ -709,6 +733,22 @@ impl ClassGraph {
             let java_lang_error = self
                 .classes
                 .entry(BinaryName::ARITHMETICEXCEPTION)
+                .or_insert(ClassData::new(BinaryName::RUNTIMEEXCEPTION, false));
+            java_lang_error.add_method(
+                false,
+                UnqualifiedName::INIT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::STRING)],
+                    return_type: None,
+                },
+            );
+        }
+
+        // java.lang.IllegalArgumentException
+        {
+            let java_lang_error = self
+                .classes
+                .entry(BinaryName::ILLEGALARGUMENTEXCEPTION)
                 .or_insert(ClassData::new(BinaryName::RUNTIMEEXCEPTION, false));
             java_lang_error.add_method(
                 false,

@@ -103,6 +103,9 @@ pub enum UtilityMethod {
 
     /// Bootstrap method for table utilities
     BootstrapTable,
+
+    /// Get the length of an object array
+    ObjectArrayLength,
 }
 impl UtilityMethod {
     /// Get the method name
@@ -133,6 +136,7 @@ impl UtilityMethod {
             UtilityMethod::I64TruncSatF32U => UnqualifiedName::I64TRUNCSATF32U,
             UtilityMethod::I64TruncSatF64U => UnqualifiedName::I64TRUNCSATF64U,
             UtilityMethod::BootstrapTable => UnqualifiedName::BOOTSTRAPTABLE,
+            UtilityMethod::ObjectArrayLength => UnqualifiedName::OBJECTARRAYLENGTH,
         }
     }
 
@@ -247,6 +251,10 @@ impl UtilityMethod {
                     BinaryName::CONSTANTCALLSITE,
                 ))),
             },
+            UtilityMethod::ObjectArrayLength => MethodDescriptor {
+                parameters: vec![FieldType::array(FieldType::OBJECT)],
+                return_type: Some(FieldType::INT),
+            },
         }
     }
 }
@@ -326,6 +334,13 @@ impl UtilityClass {
             return Ok(false);
         }
 
+        match method {
+            UtilityMethod::BootstrapTable => {
+                self.add_utility_method(UtilityMethod::ObjectArrayLength)?;
+            }
+            _ => (),
+        }
+
         let descriptor = method.descriptor();
         let mut method_builder =
             self.class
@@ -357,6 +372,7 @@ impl UtilityClass {
             UtilityMethod::I32TruncSatF64U => Self::generate_i32_trunc_sat_f64_u(code)?,
             UtilityMethod::I64TruncSatF32U => Self::generate_i64_trunc_sat_f32_u(code)?,
             UtilityMethod::I64TruncSatF64U => Self::generate_i64_trunc_sat_f64_u(code)?,
+            UtilityMethod::ObjectArrayLength => Self::generate_object_array_length(code)?,
             UtilityMethod::BootstrapTable => Self::generate_bootstrap_table(code)?,
         }
 
@@ -1099,7 +1115,117 @@ impl UtilityClass {
 
     /// Generate the bootstrap method used for table operators, including indirect calls. Here lie
     /// some dragons. The output is sensible, but the "how" is not obvious.
-    ///
+    fn generate_bootstrap_table<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        let call_indirect_case = code.fresh_label();
+        let table_get_case = code.fresh_label();
+        let table_set_case = code.fresh_label();
+        let table_size_case = code.fresh_label();
+        let table_grow_case = code.fresh_label();
+        let table_fill_case = code.fresh_label();
+        let table_copy_case = code.fresh_label();
+        let table_init_case = code.fresh_label();
+        let bad_name_case = code.fresh_label();
+
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::HASHCODE)?;
+        code.push_branch_instruction(BranchInstruction::LookupSwitch {
+            padding: 0,
+            default: bad_name_case,
+            targets: {
+                let mut targets = vec![
+                    (Self::java_hash_string(b"call_indirect"), call_indirect_case),
+                    (Self::java_hash_string(b"table_get"), table_get_case),
+                    (Self::java_hash_string(b"table_set"), table_set_case),
+                    (Self::java_hash_string(b"table_size"), table_size_case),
+                    (Self::java_hash_string(b"table_grow"), table_grow_case),
+                    (Self::java_hash_string(b"table_fill"), table_fill_case),
+                    (Self::java_hash_string(b"table_copy"), table_copy_case),
+                    (Self::java_hash_string(b"table_init"), table_init_case),
+                ];
+                targets.sort_by_key(|(key, _)| *key);
+                targets
+            },
+        })?;
+
+        // call.indirect
+        code.place_label(call_indirect_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("call_indirect")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_call_indirect_table_case(code)?;
+
+        // table.get
+        code.place_label(table_get_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("table_get")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_get_table_case(code)?;
+
+        // table.set
+        code.place_label(table_set_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("table_set")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_set_table_case(code)?;
+
+        // table.size
+        code.place_label(table_size_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("table_size")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_size_table_case(code)?;
+
+        // table.grow
+        code.place_label(table_grow_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("table_grow")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_grow_table_case(code)?;
+
+        // table.fill
+        code.place_label(table_fill_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("table_fill")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_fill_table_case(code)?;
+
+        // table.copy
+        code.place_label(table_copy_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("table_copy")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_copy_table_case(code)?;
+
+        // table.init
+        code.place_label(table_init_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("table_init")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_init_table_case(code)?;
+
+        // Catch all case
+        let cls_idx = code.get_class_idx(&RefType::Object(BinaryName::ILLEGALARGUMENTEXCEPTION))?;
+        code.place_label(bad_name_case)?;
+        code.push_instruction(Instruction::New(cls_idx))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.invoke(
+            &BinaryName::ILLEGALARGUMENTEXCEPTION,
+            &UnqualifiedName::INIT,
+        )?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+
+        Ok(())
+    }
+
     /// For `call_indirect`, we need to take an index as input to choose which method in an array
     /// to call. We could do this by doing an array lookup into the `table` field and then calling
     /// `invokeExact` on the `MethodHandle` we extract from there however:
@@ -1114,7 +1240,7 @@ impl UtilityClass {
     /// ```java
     /// import java.lang.invoke.*;
     ///
-    /// static CallSite bootstrapTable(
+    /// static CallSite bootstrap(
     ///   MethodHandles.Lookup lookup,
     ///   String name,
     ///   MethodType type,                                // (A₀A₁..ILMyWasmModule;)R
@@ -1152,9 +1278,7 @@ impl UtilityClass {
     ///   return new ConstantCallSite(handle);
     /// }
     /// ```
-    ///
-    /// Generates the method and adds a reference to it in the class attributes
-    fn generate_bootstrap_table<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_call_indirect_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
         let param_count_local = 5;
         let permutation_local = 6;
 
@@ -1276,6 +1400,163 @@ impl UtilityClass {
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
+    }
+
+    fn generate_get_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        // Class<?> tableType = getter.type().returnType();
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
+
+        /* MethodHandles.permuteArguments(                  // (ILMyWasmModule;)LTableElem;
+         *   MethodHandles.collectArguments(                // (LMyWasmModule;I)LTableElem;
+         *     MethodHandles.arrayElementGetter(tableType), // ([LTableElem;I)LTableElem;
+         *     0,
+         *     getter
+         *   ),
+         *   type,
+         *   new int[2] { 1, 0 }
+         * )
+         */
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::ARRAYELEMENTGETTER,
+        )?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::ALoad(2))?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::IAStore)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+
+        // return new ConstantCallSite(methodhandle);
+        let constant_callsite_cls =
+            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
+        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.push_instruction(Instruction::DupX1)?;
+        code.push_instruction(Instruction::Swap)?;
+        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
+        Ok(())
+    }
+
+    fn generate_set_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        // Class<?> tableType = getter.type().returnType();
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
+
+        /* MethodHandles.permuteArguments(                  // (ILTableElem;LMyWasmModule;)V
+         *   MethodHandles.collectArguments(                // (LMyWasmModule;ILTableElem;)V
+         *     MethodHandles.arrayElementSetter(tableType), // ([LTableElem;ILTableElem;)V
+         *     0,
+         *     getter
+         *   ),
+         *   type,
+         *   new int[3] { 2, 0, 1 }
+         * )
+         */
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::ARRAYELEMENTSETTER,
+        )?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::ALoad(2))?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.push_instruction(Instruction::IAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::IAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::IAStore)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+
+        // return new ConstantCallSite(methodhandle);
+        let constant_callsite_cls =
+            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
+        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.push_instruction(Instruction::DupX1)?;
+        code.push_instruction(Instruction::Swap)?;
+        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
+        Ok(())
+    }
+
+    fn generate_object_array_length<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::ALoad(0))?;
+        code.push_instruction(Instruction::ArrayLength)?;
+        code.push_branch_instruction(BranchInstruction::IReturn)?;
+
+        Ok(())
+    }
+
+    fn generate_size_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::AConstNull)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        Ok(())
+    }
+
+    fn generate_grow_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::AConstNull)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        Ok(())
+    }
+
+    fn generate_fill_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::AConstNull)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        Ok(())
+    }
+
+    fn generate_copy_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::AConstNull)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        Ok(())
+    }
+
+    fn generate_init_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::AConstNull)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        Ok(())
+    }
+
+    /// Compute Java's `.hashCode` on simple ASCII strings
+    const fn java_hash_string(string: &[u8]) -> i32 {
+        let mut hash: i32 = 0;
+        let mut i = 0;
+        while i < string.len() {
+            hash = hash.wrapping_mul(31).wrapping_add(string[i] as i32);
+            i += 1;
+        }
+        hash
     }
 }
 

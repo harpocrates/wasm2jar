@@ -176,6 +176,7 @@ impl UnqualifiedName {
     pub const NUMBEROFTRAILINGZEROS: Self = Self::name("numberOfTrailingZeros");
     pub const ORDER: Self = Self::name("order");
     pub const PARAMETERCOUNT: Self = Self::name("parameterCount");
+    pub const PARAMETERTYPE: Self = Self::name("parameterType");
     pub const PERMUTEARGUMENTS: Self = Self::name("permuteArguments");
     pub const POSITION: Self = Self::name("position");
     pub const POSITIVEINFINITY: Self = Self::name("POSITIVE_INFINITY");
@@ -186,6 +187,7 @@ impl UnqualifiedName {
     pub const PUTLONG: Self = Self::name("putLong");
     pub const PUTSHORT: Self = Self::name("putShort");
     pub const REMAINDERUNSIGNED: Self = Self::name("remainderUnsigned");
+    pub const RETURNTYPE: Self = Self::name("returnType");
     pub const RINT: Self = Self::name("rint");
     pub const ROTATELEFT: Self = Self::name("rotateLeft");
     pub const ROTATERIGHT: Self = Self::name("rotateRight");
@@ -229,6 +231,14 @@ impl UnqualifiedName {
     pub const I64TRUNCF64U: Self = Self::name("i64TruncF64U");
     pub const I64TRUNCSATF32U: Self = Self::name("i64TruncSatF32U");
     pub const I64TRUNCSATF64U: Self = Self::name("i64TruncSatF64U");
+    pub const OBJECTARRAYLENGTH: Self = Self::name("objectArrayLength");
+    pub const TABLECOPY: Self = Self::name("table_copy");
+    pub const TABLEFILL: Self = Self::name("table_fill");
+    pub const TABLEGET: Self = Self::name("table_get");
+    pub const TABLEGROW: Self = Self::name("table_grow");
+    pub const TABLEINIT: Self = Self::name("table_init");
+    pub const TABLESET: Self = Self::name("table_set");
+    pub const TABLESIZE: Self = Self::name("table_size");
     pub const UNREACHABLE: Self = Self::name("unreachable");
 
     pub const DOLLAR: Self = Self::name("$");
@@ -280,4 +290,5 @@ impl BinaryName {
     pub const SERIALIZABLE: Self = Self::name("java/io/Serializable");
     pub const STRING: Self = Self::name("java/lang/String");
     pub const THROWABLE: Self = Self::name("java/lang/Throwable");
+    pub const ILLEGALARGUMENTEXCEPTION: Self = Self::name("java/lang/IllegalArgumentException");
 }

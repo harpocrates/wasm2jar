@@ -4,8 +4,7 @@ use super::{
 };
 use crate::jvm::{
     BaseType, BinaryName, BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction,
-    InvokeType, MethodDescriptor, OffsetVec, OrdComparison, RefType, ShiftType, UnqualifiedName,
-    Width,
+    InvokeType, MethodDescriptor, OffsetVec, OrdComparison, RefType, UnqualifiedName, Width,
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
@@ -271,9 +270,9 @@ where
             Operator::TableSet { table } => self.visit_table_set(table)?,
             Operator::TableInit { .. } => todo!("table.init"),
             Operator::TableCopy { .. } => todo!("table.copy"),
-            Operator::TableGrow { .. } => todo!("table.grow"),
+            Operator::TableGrow { table } => self.visit_table_grow(table)?,
             Operator::TableSize { table } => self.visit_table_size(table)?,
-            Operator::TableFill { .. } => todo!("table.fill"),
+            Operator::TableFill { table } => self.visit_table_fill(table)?,
 
             // Memory Instructions
             Operator::I32Load { memarg } => {
@@ -1594,28 +1593,11 @@ where
     fn visit_table_get(&mut self, table_idx: u32) -> Result<(), Error> {
         let table = &self.wasm_tables[table_idx as usize];
 
-        // Compute the method descriptor we'll actually be calling
-        let desc: MethodDescriptor = MethodDescriptor {
-            parameters: vec![
-                FieldType::INT,
-                FieldType::object(self.settings.output_full_class_name.clone()),
-            ],
+        let desc = MethodDescriptor {
+            parameters: vec![FieldType::INT],
             return_type: Some(table.table_type.field_type()),
         };
-
-        let this_off = self.jvm_locals.lookup_this()?.0;
-        let bootstrap_method: u16 = self.bootstrap_utilities.get_table_bootstrap(
-            table_idx,
-            table,
-            &self.settings.output_full_class_name,
-            &mut self.utilities,
-            &mut self.jvm_code.constants(),
-        )?;
-
-        self.jvm_code
-            .push_instruction(Instruction::ALoad(this_off))?;
-        self.jvm_code
-            .invoke_dynamic(bootstrap_method, &UnqualifiedName::TABLEGET, &desc)?;
+        self.visit_table_operator(table_idx, &UnqualifiedName::TABLEGET, desc)?;
 
         Ok(())
     }
@@ -1624,15 +1606,70 @@ where
     fn visit_table_set(&mut self, table_idx: u32) -> Result<(), Error> {
         let table = &self.wasm_tables[table_idx as usize];
 
-        // Compute the method descriptor we'll actually be calling
-        let desc: MethodDescriptor = MethodDescriptor {
+        let desc = MethodDescriptor {
+            parameters: vec![FieldType::INT, table.table_type.field_type()],
+            return_type: None,
+        };
+        self.visit_table_operator(table_idx, &UnqualifiedName::TABLESET, desc)?;
+
+        Ok(())
+    }
+
+    /// Visit a table grow operator
+    fn visit_table_grow(&mut self, table_idx: u32) -> Result<(), Error> {
+        let table = &self.wasm_tables[table_idx as usize];
+
+        let desc = MethodDescriptor {
+            parameters: vec![table.table_type.field_type(), FieldType::INT],
+            return_type: None,
+        };
+        self.visit_table_operator(table_idx, &UnqualifiedName::TABLEGROW, desc)?;
+
+        Ok(())
+    }
+
+    /// Visit a table size operator
+    fn visit_table_size(&mut self, table_idx: u32) -> Result<(), Error> {
+        let desc = MethodDescriptor {
+            parameters: vec![],
+            return_type: Some(FieldType::INT),
+        };
+        self.visit_table_operator(table_idx, &UnqualifiedName::TABLESIZE, desc)?;
+
+        Ok(())
+    }
+
+    /// Visit a table fill operator
+    fn visit_table_fill(&mut self, table_idx: u32) -> Result<(), Error> {
+        let table = &self.wasm_tables[table_idx as usize];
+
+        let desc = MethodDescriptor {
             parameters: vec![
                 FieldType::INT,
                 table.table_type.field_type(),
-                FieldType::object(self.settings.output_full_class_name.clone()),
+                FieldType::INT,
             ],
             return_type: None,
         };
+        self.visit_table_operator(table_idx, &UnqualifiedName::TABLEFILL, desc)?;
+
+        Ok(())
+    }
+
+    /// Visit a table operator that is handled by the table bootstrap method and issue the
+    /// corresponding `invokedynamic` instruction
+    fn visit_table_operator(
+        &mut self,
+        table_idx: u32,
+        method_name: &UnqualifiedName,
+        mut method_type: MethodDescriptor,
+    ) -> Result<(), Error> {
+        let table = &self.wasm_tables[table_idx as usize];
+
+        // Compute the method descriptor we'll actually be calling
+        method_type.parameters.push(FieldType::object(
+            self.settings.output_full_class_name.clone(),
+        ));
 
         let this_off = self.jvm_locals.lookup_this()?.0;
         let bootstrap_method: u16 = self.bootstrap_utilities.get_table_bootstrap(
@@ -1646,31 +1683,7 @@ where
         self.jvm_code
             .push_instruction(Instruction::ALoad(this_off))?;
         self.jvm_code
-            .invoke_dynamic(bootstrap_method, &UnqualifiedName::TABLESET, &desc)?;
-
-        Ok(())
-    }
-
-    /// Visit a table size operator
-    fn visit_table_size(&mut self, table: u32) -> Result<(), Error> {
-        let table = &self.wasm_tables[table as usize];
-
-        if table.origin.is_internal() {
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code.access_field(
-                &self.settings.output_full_class_name,
-                &table.field_name,
-                AccessMode::Read,
-            )?;
-            self.jvm_code.push_instruction(Instruction::ArrayLength)?;
-            self.jvm_code.const_int(16)?;
-            self.jvm_code
-                .push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
-        } else {
-            todo!()
-        }
+            .invoke_dynamic(bootstrap_method, method_name, &method_type)?;
 
         Ok(())
     }

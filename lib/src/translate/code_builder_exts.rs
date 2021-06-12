@@ -1,7 +1,7 @@
 use crate::jvm::{
-    BinaryName, BranchInstruction, ClassConstantIndex, CodeBuilder, Descriptor, EqComparison,
-    Error, FieldType, Instruction, InvokeType, MethodDescriptor, Name, OrdComparison, RefType,
-    UnqualifiedName, Width,
+    BaseType, BinaryName, BranchInstruction, ClassConstantIndex, CodeBuilder, Descriptor,
+    EqComparison, Error, FieldType, Instruction, InvokeType, MethodDescriptor, Name, OrdComparison,
+    RefType, UnqualifiedName, Width,
 };
 use std::borrow::Cow;
 use std::ops::Not;
@@ -212,9 +212,28 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     }
 
     /// Push a value of type `java/lang/Class` onto the stack
-    fn const_class(&mut self, class_name: &RefType) -> Result<(), Error> {
-        let cls_idx = self.get_class_idx(class_name)?;
-        self.push_instruction(Instruction::Ldc(cls_idx.into()))
+    fn const_class(&mut self, ty: &FieldType) -> Result<(), Error> {
+        match ty {
+            FieldType::Base(base_type) => {
+                let cls_name = match base_type {
+                    BaseType::Int => BinaryName::INTEGER,
+                    BaseType::Long => BinaryName::LONG,
+                    BaseType::Float => BinaryName::FLOAT,
+                    BaseType::Double => BinaryName::DOUBLE,
+                    BaseType::Boolean => BinaryName::BOOLEAN,
+                    other => todo!("const_class for {:?}", other),
+                };
+                self.access_field(
+                    &cls_name,
+                    &UnqualifiedName::UPPERCASE_TYPE,
+                    AccessMode::Read,
+                )
+            }
+            FieldType::Ref(ref_type) => {
+                let cls_idx = self.get_class_idx(ref_type)?;
+                self.push_instruction(Instruction::Ldc(cls_idx.into()))
+            }
+        }
     }
 
     /// Pop the top of the stack, accounting for the different possible type widths

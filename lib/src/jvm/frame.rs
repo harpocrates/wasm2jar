@@ -1071,8 +1071,13 @@ fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
         LookupSwitch { .. } => pop_offset_vec_expecting_type(stack, Integer)?,
         IReturn => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            if *this_method_return_type != Some(FieldType::INT) {
-                return Err(VerifierErrorKind::InvalidType);
+            match *this_method_return_type {
+                Some(FieldType::Base(BaseType::Int))
+                | Some(FieldType::Base(BaseType::Char))
+                | Some(FieldType::Base(BaseType::Short))
+                | Some(FieldType::Base(BaseType::Byte))
+                | Some(FieldType::Base(BaseType::Boolean)) => (),
+                _ => return Err(VerifierErrorKind::InvalidType),
             }
         }
         LReturn => {

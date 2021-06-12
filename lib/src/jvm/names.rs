@@ -128,16 +128,21 @@ impl UnqualifiedName {
     pub const ABS: Self = Self::name("abs");
     pub const ALLOCATE: Self = Self::name("allocate");
     pub const ALLOCATEDIRECT: Self = Self::name("allocateDirect");
+    pub const ARRAYCONSTRUCTOR: Self = Self::name("arrayConstructor");
+    pub const ARRAYCOPY: Self = Self::name("arraycopy");
     pub const ARRAYELEMENTGETTER: Self = Self::name("arrayElementGetter");
     pub const ARRAYELEMENTSETTER: Self = Self::name("arrayElementSetter");
+    pub const ARRAYLENGTH: Self = Self::name("arrayLength");
     pub const BIGENDIAN: Self = Self::name("BIG_ENDIAN");
     pub const BITCOUNT: Self = Self::name("bitCount");
     pub const BYTEVALUE: Self = Self::name("byteValue");
     pub const CAPACITY: Self = Self::name("capacity");
     pub const CEIL: Self = Self::name("ceil");
+    pub const CHANGERETURNTYPE: Self = Self::name("changeReturnType");
     pub const COLLECTARGUMENTS: Self = Self::name("collectArguments");
     pub const COMPARE: Self = Self::name("compare");
     pub const COMPAREUNSIGNED: Self = Self::name("compareUnsigned");
+    pub const CONSTANT: Self = Self::name("constant");
     pub const COPYOF: Self = Self::name("copyOf");
     pub const COPYSIGN: Self = Self::name("copySign");
     pub const DIVIDEUNSIGNED: Self = Self::name("divideUnsigned");
@@ -145,9 +150,12 @@ impl UnqualifiedName {
     pub const DOUBLEVALUE: Self = Self::name("doubleValue");
     pub const DROPPARAMETERTYPES: Self = Self::name("dropParameterTypes");
     pub const DYNAMICINVOKER: Self = Self::name("dynamicInvoker");
+    pub const EMPTY: Self = Self::name("empty");
     pub const EQUALS: Self = Self::name("equals");
     pub const EXACTINVOKER: Self = Self::name("exactInvoker");
     pub const FILL: Self = Self::name("fill");
+    pub const FILTERRETURNVALUE: Self = Self::name("filterReturnValue");
+    pub const FINDSTATIC: Self = Self::name("findStatic");
     pub const FLOATTORAWINTBITS: Self = Self::name("floatToRawIntBits");
     pub const FLOATVALUE: Self = Self::name("floatValue");
     pub const FLOOR: Self = Self::name("floor");
@@ -159,6 +167,7 @@ impl UnqualifiedName {
     pub const GETLONG: Self = Self::name("getLong");
     pub const GETSHORT: Self = Self::name("getShort");
     pub const GETTARGET: Self = Self::name("getTarget");
+    pub const GUARDWITHTEST: Self = Self::name("guardWithTest");
     pub const HASHCODE: Self = Self::name("hashCode");
     pub const INTBITSTOFLOAT: Self = Self::name("intBitsToFloat");
     pub const INTVALUE: Self = Self::name("intValue");
@@ -197,6 +206,7 @@ impl UnqualifiedName {
     pub const SYNCALL: Self = Self::name("syncAll");
     pub const TOINTEXACT: Self = Self::name("toIntExact");
     pub const TYPE: Self = Self::name("type");
+    pub const UPPERCASE_TYPE: Self = Self::name("TYPE");
     pub const VALUEOF: Self = Self::name("valueOf");
 
     // Special unqualified names - only these are allowed to have angle brackets in them
@@ -206,6 +216,7 @@ impl UnqualifiedName {
     // Names we generate
     pub const BOOTSTRAPTABLE: Self = Self::name("bootstrapTable");
     pub const CALLINDIRECT: Self = Self::name("call_indirect");
+    pub const COPYRESIZEDARRAY: Self = Self::name("copyResizedArray");
     pub const EXTERNREFTABLEBOOTSTRAP: Self = Self::name("externrefTableBootstrap");
     pub const F32ABS: Self = Self::name("f32Abs");
     pub const F32CONVERTI32U: Self = Self::name("f32ConvertI32U");
@@ -231,7 +242,8 @@ impl UnqualifiedName {
     pub const I64TRUNCF64U: Self = Self::name("i64TruncF64U");
     pub const I64TRUNCSATF32U: Self = Self::name("i64TruncSatF32U");
     pub const I64TRUNCSATF64U: Self = Self::name("i64TruncSatF64U");
-    pub const OBJECTARRAYLENGTH: Self = Self::name("objectArrayLength");
+    pub const INTISNEGATIVEONE: Self = Self::name("intIsNegativeOne");
+    pub const NEXTSIZE: Self = Self::name("nextSize");
     pub const TABLECOPY: Self = Self::name("table_copy");
     pub const TABLEFILL: Self = Self::name("table_fill");
     pub const TABLEGET: Self = Self::name("table_get");
@@ -264,6 +276,7 @@ impl BinaryName {
     pub const ARITHMETICEXCEPTION: Self = Self::name("java/lang/ArithmeticException");
     pub const ARRAYS: Self = Self::name("java/util/Arrays");
     pub const ASSERTIONERROR: Self = Self::name("java/lang/AssertionError");
+    pub const BOOLEAN: Self = Self::name("java/lang/Boolean");
     pub const BUFFER: Self = Self::name("java/nio/Buffer");
     pub const BYTEBUFFER: Self = Self::name("java/nio/ByteBuffer");
     pub const BYTEORDER: Self = Self::name("java/nio/ByteOrder");
@@ -276,12 +289,13 @@ impl BinaryName {
     pub const ERROR: Self = Self::name("java/lang/Error");
     pub const EXCEPTION: Self = Self::name("java/lang/Exception");
     pub const FLOAT: Self = Self::name("java/lang/Float");
+    pub const ILLEGALARGUMENTEXCEPTION: Self = Self::name("java/lang/IllegalArgumentException");
     pub const INTEGER: Self = Self::name("java/lang/Integer");
     pub const LONG: Self = Self::name("java/lang/Long");
     pub const MATH: Self = Self::name("java/lang/Math");
+    pub const METHODHANDLE: Self = Self::name("java/lang/invoke/MethodHandle");
     pub const METHODHANDLES: Self = Self::name("java/lang/invoke/MethodHandles");
     pub const METHODHANDLES_LOOKUP: Self = Self::name("java/lang/invoke/MethodHandles$Lookup");
-    pub const METHODHANDLE: Self = Self::name("java/lang/invoke/MethodHandle");
     pub const METHODTYPE: Self = Self::name("java/lang/invoke/MethodType");
     pub const MUTABLECALLSITE: Self = Self::name("java/lang/invoke/MutableCallSite");
     pub const NUMBER: Self = Self::name("java/lang/Number");
@@ -289,6 +303,7 @@ impl BinaryName {
     pub const RUNTIMEEXCEPTION: Self = Self::name("java/lang/RuntimeException");
     pub const SERIALIZABLE: Self = Self::name("java/io/Serializable");
     pub const STRING: Self = Self::name("java/lang/String");
+    pub const SYSTEM: Self = Self::name("java/lang/System");
     pub const THROWABLE: Self = Self::name("java/lang/Throwable");
-    pub const ILLEGALARGUMENTEXCEPTION: Self = Self::name("java/lang/IllegalArgumentException");
+    pub const VOID: Self = Self::name("java/lang/Void");
 }

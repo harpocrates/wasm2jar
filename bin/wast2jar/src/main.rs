@@ -51,7 +51,7 @@ fn main() -> io::Result<()> {
                 .long("incremental")
                 .required(false)
                 .takes_value(false)
-                .help("Specifies to run in a more incremental (slower) modde"),
+                .help("Specifies to run in a more incremental (slower) mode"),
         )
         .arg(
             Arg::with_name("INPUT")

@@ -216,6 +216,14 @@ impl ClassGraph {
                     return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
                 },
             );
+            java_lang_invoke_methodhandle.add_method(
+                false,
+                UnqualifiedName::CHANGERETURNTYPE,
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::CLASS)],
+                    return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
+                },
+            );
         }
 
         // java.lang.invoke.MethodHandles
@@ -256,9 +264,34 @@ impl ClassGraph {
                     return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
                 },
             );
+            java_lang_invoke_methodhandles.add_method(
+                true,
+                UnqualifiedName::FILTERRETURNVALUE,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::Ref(RefType::METHODHANDLE),
+                        FieldType::Ref(RefType::METHODHANDLE),
+                    ],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
+            java_lang_invoke_methodhandles.add_method(
+                true,
+                UnqualifiedName::GUARDWITHTEST,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::Ref(RefType::METHODHANDLE),
+                        FieldType::Ref(RefType::METHODHANDLE),
+                        FieldType::Ref(RefType::METHODHANDLE),
+                    ],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
             for method in vec![
+                UnqualifiedName::ARRAYCONSTRUCTOR,
                 UnqualifiedName::ARRAYELEMENTGETTER,
                 UnqualifiedName::ARRAYELEMENTSETTER,
+                UnqualifiedName::ARRAYLENGTH,
             ] {
                 java_lang_invoke_methodhandles.add_method(
                     true,
@@ -269,6 +302,34 @@ impl ClassGraph {
                     },
                 );
             }
+            java_lang_invoke_methodhandles.add_method(
+                true,
+                UnqualifiedName::EMPTY,
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::METHODTYPE)],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
+        }
+
+        // java.lang.invoke.MethodHandles#Lookup
+        {
+            let java_lang_invoke_methodhandles_lookup = self
+                .classes
+                .entry(BinaryName::METHODHANDLES_LOOKUP)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_invoke_methodhandles_lookup.add_method(
+                true,
+                UnqualifiedName::FINDSTATIC,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::Ref(RefType::CLASS),
+                        FieldType::Ref(RefType::STRING),
+                        FieldType::Ref(RefType::METHODTYPE),
+                    ],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
         }
 
         // java.lang.invoke.CallSite
@@ -421,6 +482,11 @@ impl ClassGraph {
             for name in vec![UnqualifiedName::MAXVALUE, UnqualifiedName::MINVALUE] {
                 java_lang_integer.add_field(true, name, FieldType::INT)
             }
+            java_lang_integer.add_field(
+                true,
+                UnqualifiedName::UPPERCASE_TYPE,
+                FieldType::Ref(RefType::CLASS),
+            );
         }
 
         // java.lang.Float
@@ -474,6 +540,11 @@ impl ClassGraph {
             ] {
                 java_lang_float.add_field(true, name, FieldType::FLOAT)
             }
+            java_lang_float.add_field(
+                true,
+                UnqualifiedName::UPPERCASE_TYPE,
+                FieldType::Ref(RefType::CLASS),
+            );
         }
 
         // java.lang.Long
@@ -541,6 +612,11 @@ impl ClassGraph {
             for name in vec![UnqualifiedName::MAXVALUE, UnqualifiedName::MINVALUE] {
                 java_lang_long.add_field(true, name, FieldType::LONG)
             }
+            java_lang_long.add_field(
+                true,
+                UnqualifiedName::UPPERCASE_TYPE,
+                FieldType::Ref(RefType::CLASS),
+            );
         }
 
         // java.lang.Double
@@ -594,6 +670,45 @@ impl ClassGraph {
             ] {
                 java_lang_double.add_field(true, name, FieldType::FLOAT)
             }
+            java_lang_double.add_field(
+                true,
+                UnqualifiedName::UPPERCASE_TYPE,
+                FieldType::Ref(RefType::CLASS),
+            );
+        }
+
+        // java.lang.Void
+        {
+            let java_lang_void = self
+                .classes
+                .entry(BinaryName::VOID)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_void.add_field(
+                true,
+                UnqualifiedName::UPPERCASE_TYPE,
+                FieldType::Ref(RefType::CLASS),
+            );
+        }
+
+        // java.lang.Boolean
+        {
+            let java_lang_boolean = self
+                .classes
+                .entry(BinaryName::BOOLEAN)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_boolean.add_field(
+                true,
+                UnqualifiedName::UPPERCASE_TYPE,
+                FieldType::Ref(RefType::CLASS),
+            );
+            java_lang_boolean.add_method(
+                true,
+                UnqualifiedName::VALUEOF,
+                MethodDescriptor {
+                    parameters: vec![FieldType::BOOLEAN],
+                    return_type: Some(FieldType::Ref(RefType::Object(BinaryName::BOOLEAN))),
+                },
+            );
         }
 
         // java.lang.Math
@@ -641,6 +756,28 @@ impl ClassGraph {
                 MethodDescriptor {
                     parameters: vec![FieldType::LONG],
                     return_type: Some(FieldType::INT),
+                },
+            );
+        }
+
+        // java.lang.System
+        {
+            let java_lang_system = self
+                .classes
+                .entry(BinaryName::SYSTEM)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_system.add_method(
+                true,
+                UnqualifiedName::ARRAYCOPY,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::OBJECT,
+                        FieldType::INT,
+                        FieldType::OBJECT,
+                        FieldType::INT,
+                        FieldType::INT,
+                    ],
+                    return_type: None,
                 },
             );
         }
@@ -781,7 +918,12 @@ impl ClassGraph {
                 true,
                 UnqualifiedName::FILL,
                 MethodDescriptor {
-                    parameters: vec![FieldType::array(FieldType::OBJECT), FieldType::OBJECT],
+                    parameters: vec![
+                        FieldType::array(FieldType::OBJECT),
+                        FieldType::INT,
+                        FieldType::INT,
+                        FieldType::OBJECT,
+                    ],
                     return_type: None,
                 },
             );

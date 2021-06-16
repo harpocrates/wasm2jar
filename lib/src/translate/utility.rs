@@ -1194,9 +1194,10 @@ impl UtilityClass {
     /// Analagous to
     ///
     /// ```java
-    /// static int nextSize(int currSize, int growBy, long maxSize) {
+    /// static int nextSize(int currSize, int growBy, long maxTableSize) {
+    ///   if (growBy < 0) return -1;
     ///   long proposed = (long) currSize + (long) growBy;
-    ///   if (proposed >= maxTableSize) return -1;
+    ///   if (proposed > maxTableSize) return -1;
     ///   return (int) proposed;
     /// }
     /// ```
@@ -1205,7 +1206,15 @@ impl UtilityClass {
         let grow_by_argument = 1;
         let max_size_argument = 2;
 
-        let ok_case = code.fresh_label();
+        let ok_case1 = code.fresh_label();
+        let ok_case2 = code.fresh_label();
+
+        // if (growBy < 0) return -1;
+        code.push_instruction(Instruction::ILoad(grow_by_argument))?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::GE, ok_case1, ()))?;
+        code.push_instruction(Instruction::IConstM1)?;
+        code.push_branch_instruction(BranchInstruction::IReturn)?;
+        code.place_label(ok_case1)?;
 
         // long proposed = (long) currSize + (long) growBy;
         code.push_instruction(Instruction::ILoad(curr_size_argument))?;
@@ -1218,12 +1227,12 @@ impl UtilityClass {
         code.push_instruction(Instruction::Dup2)?;
         code.push_instruction(Instruction::LLoad(max_size_argument))?;
         code.push_instruction(Instruction::LCmp)?;
-        code.push_branch_instruction(BranchInstruction::If(OrdComparison::LT, ok_case, ()))?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::LE, ok_case2, ()))?;
         code.push_instruction(Instruction::IConstM1)?;
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         //  return (int) proposed;
-        code.place_label(ok_case)?;
+        code.place_label(ok_case2)?;
         code.push_instruction(Instruction::L2I)?;
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
@@ -1262,6 +1271,7 @@ impl UtilityClass {
         code.push_instruction(Instruction::ALoad(new_table_argument))?;
         code.push_instruction(Instruction::ArrayLength)?;
         code.push_instruction(Instruction::ALoad(filler_argument))?;
+        code.invoke(&BinaryName::ARRAYS, &UnqualifiedName::FILL)?;
 
         // return oldTable.length;
         code.push_instruction(Instruction::ALoad(old_table_argument))?;
@@ -1276,7 +1286,7 @@ impl UtilityClass {
     /// Analagous to
     ///
     /// ```java
-    /// static void intIsNegativeOne(int i) {
+    /// static boolean intIsNegativeOne(int i) {
     ///   return (i == -1) ? true : false;
     /// }
     fn generate_int_is_negative_one<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
@@ -1736,157 +1746,274 @@ impl UtilityClass {
         Ok(())
     }
 
-    // TODO: respect the maximum size of the table
     fn generate_grow_table_case<B: CodeBuilderExts>(
         code: &mut B,
         utility_class_name: &BinaryName,
     ) -> Result<(), Error> {
-        let lookup_argument = 3;
-        let getter_argument = 3;
-        let param_elem_typ = 7; // Class
-        let next_size_handle = 8; // MethodHandle
-                                  //  let copy_resized_array_handle = 9; // MethodHandle
-                                  //  let int_is_negative_one_handle = 10; // MethodHandle
-                                  //  let create_and_fill_resized_array = 11; // MethodHandle
+        let requested_type_argument = 2; // MethodType
+        let getter_argument = 3; // MethodHandle
+        let setter_argument = 4; // MethodHandle
+        let max_size_argument = 5; // long
+        let table_typ = 7; // Class<TableElem[]>
+        let table_elem_typ = 8; // Class<TableElem>
+        let module_typ = 9; // Class<WasmModule>
+        let create_and_update_new_table = 10; // MethodHandle
         let cls_cls_idx = code.get_class_idx(&RefType::CLASS)?;
 
         // Class<?> tableType = getter.type().returnType();
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
         code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
-        code.push_instruction(Instruction::AStore(param_elem_typ))?;
+        code.push_instruction(Instruction::AStore(table_typ))?;
 
-        /* MethodHandle nextSizeHandle = lookup.findStatic(
-         *   UtilityClass.class,
-         *   "nextSize",
-         *   MethodType.methodType(
-         *     int.class,
-         *     new Class[] {
-         *       int.class,
-         *       int.class,
-         *       long.class,
-         *     }
-         *   )
-         * );
-         */
-        code.push_instruction(Instruction::ALoad(lookup_argument))?;
-        code.const_class(&FieldType::object(utility_class_name.clone()))?;
-        code.const_string(UnqualifiedName::NEXTSIZE.as_cow().clone())?;
-        code.const_class(&FieldType::INT)?;
-        code.push_instruction(Instruction::IConst3)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
-        code.push_instruction(Instruction::Dup)?;
+        // Class<?> tableElemType = methodType.parameterType(0);
+        code.push_instruction(Instruction::ALoad(requested_type_argument))?;
         code.push_instruction(Instruction::IConst0)?;
-        code.const_class(&FieldType::INT)?;
-        code.push_instruction(Instruction::AAStore)?;
-        code.push_instruction(Instruction::Dup)?;
-        code.push_instruction(Instruction::IConst1)?;
-        code.const_class(&FieldType::INT)?;
-        code.push_instruction(Instruction::AAStore)?;
-        code.push_instruction(Instruction::Dup)?;
-        code.push_instruction(Instruction::IConst2)?;
-        code.const_class(&FieldType::LONG)?;
-        code.push_instruction(Instruction::AAStore)?;
-        code.push_instruction(Instruction::AStore(next_size_handle))?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERTYPE)?;
+        code.push_instruction(Instruction::AStore(table_elem_typ))?;
 
-        /*
-        /* MethodHandle intIsNegativeOneHandle = lookup.findStatic(
-         *   UtilityClass.class,
-         *   "intIsNegativeOne",
-         *   MethodType.methodType(
-         *     boolean.class,
-         *     new Class[] {
-         *       int.class
-         *     }
-         *   )
-         * );
-         */
-        code.push_instruction(Instruction::ALoad(lookup_argument))?;
-        code.const_class(&FieldType::object(utility_class_name.clone()))?;
-        code.const_string(UnqualifiedName::INTISNEGATIVEONE.as_cow().clone())?;
-        code.const_class(&FieldType::BOOLEAN)?;
-        code.push_instruction(Instruction::IConst1)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
-        code.push_instruction(Instruction::Dup)?;
-        code.push_instruction(Instruction::IConst0)?;
-        code.const_class(&FieldType::INT)?;
-        code.push_instruction(Instruction::AAStore)?;
-        code.push_instruction(Instruction::AStore(int_is_negative_one_handle))?;
-
-        /* MethodHandle copyResizedArrayHandle = lookup.findStatic(
-         *   UtilityClass.class,
-         *   "copyResizedArray",
-         *   MethodType.methodType(
-         *     int.class,
-         *     new Class[] {
-         *       Object[].class,
-         *       Object[].class,
-         *       Object.class,
-         *     }
-         *   )
-         * );
-         */
-        code.push_instruction(Instruction::ALoad(lookup_argument))?;
-        code.const_class(&FieldType::object(utility_class_name.clone()))?;
-        code.const_string(UnqualifiedName::COPYRESIZEDARRAY.as_cow().clone())?;
-        code.const_class(&FieldType::INT)?;
-        code.push_instruction(Instruction::IConst3)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
-        code.push_instruction(Instruction::Dup)?;
-        code.push_instruction(Instruction::IConst0)?;
-        code.const_class(&FieldType::array(FieldType::OBJECT))?;
-        code.push_instruction(Instruction::AAStore)?;
-        code.push_instruction(Instruction::Dup)?;
-        code.push_instruction(Instruction::IConst1)?;
-        code.const_class(&FieldType::array(FieldType::OBJECT))?;
-        code.push_instruction(Instruction::AAStore)?;
-        code.push_instruction(Instruction::Dup)?;
-        code.push_instruction(Instruction::IConst2)?;
-        code.const_class(&FieldType::OBJECT)?;
-        code.push_instruction(Instruction::AAStore)?;
-        code.push_instruction(Instruction::AStore(copy_resized_array_handle))?;
-
-        /* MethodHandle createAndFillResizedArray = MethodHandles.collectArguments(  // (I[LTableElem;LTableElem;)V
-         *   copyResizedArray,
-         *   0,
-         *   MethodHandle.arrayConstructor(elemType)
-         * );
-         */
-        code.push_instruction(Instruction::ALoad(copy_resized_array_handle))?;
-        code.const_int(0)?;
-        code.push_instruction(Instruction::ALoad(param_elem_typ))?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::ARRAYCONSTRUCTOR)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::COLLECTARGUMENTS)?;
-        code.push_instruction(Instruction::AStore(create_and_fill_resized_array))?;
-
-        /* MethodHandle resized = MethodHandles.guardWithTest(  // (I[LTableElem;LTableElem;)I
-         *   intIsNegativeOneHandle,
-         *   createAndFillResizedArray,
-         *   MethodHandles.filterReturnValue(
-         *     MethodHandles.empty(createAndFillResizedArray.type().changeReturnType(void.class)),
-         *     MethodHandles.constant(int.class, Integer.valueOf(-1)),
-         *   )
-         * );
-         */
-        code.push_instruction(Instruction::ALoad(int_is_negative_one_handle))?;
-        code.push_instruction(Instruction::ALoad(create_and_fill_resized_array))?;
-        code.push_instruction(Instruction::Dup)?;
+        // Class<?> moduleType = getter.type().parameterType(0);
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
-        code.access_field(&BinaryName::VOID, &UnqualifiedName::UPPERCASE_TYPE, AccessMode::Read)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::CHANGERETURNTYPE)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::EMPTY)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERTYPE)?;
+        code.push_instruction(Instruction::AStore(module_typ))?;
+
+        /* MethodHandle updateEffects = MethodHandles.collectArguments(
+         *   copyResizedArrayHandle.asType(
+         *     MethodType.methodType(
+         *       int.class,
+         *       new Class[] {
+         *         tableType,
+         *         tableType,
+         *         tableElemType
+         *       }
+         *     )
+         *   ),
+         *   0,
+         *   setter
+         * );
+         */
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::COPYRESIZEDARRAY)?;
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        for (arr_idx, variable_to_load) in vec![table_typ, table_typ, table_elem_typ]
+            .into_iter()
+            .enumerate()
+        {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(arr_idx as i32)?;
+            code.push_instruction(Instruction::ALoad(variable_to_load))?;
+            code.push_instruction(Instruction::AAStore)?;
+        }
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::ASTYPE)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(setter_argument))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+
+        /* MethodHandle permutedEffects = MethodHandles.permuteArguments(
+         *   updateEffects,
+         *   MethodType.methodType(
+         *     int.class,
+         *     new Class[] {
+         *       tableType,     // newTable
+         *       moduleType,    // module
+         *       tableType,     // oldTable
+         *       tableElemType  // filler
+         *     }
+         *   ),
+         *   new int[] { 1, 0, 0, 2, 3 }
+         * );
+         */
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::IConst4)?;
+        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        for (arr_idx, variable_to_load) in vec![table_typ, module_typ, table_typ, table_elem_typ]
+            .into_iter()
+            .enumerate()
+        {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(arr_idx as i32)?;
+            code.push_instruction(Instruction::ALoad(variable_to_load))?;
+            code.push_instruction(Instruction::AAStore)?;
+        }
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.push_instruction(Instruction::IConst5)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        for (arr_idx, array_elem) in vec![1, 0, 0, 2, 3].into_iter().enumerate() {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(arr_idx as i32)?;
+            code.const_int(array_elem as i32)?;
+            code.push_instruction(Instruction::IAStore)?;
+        }
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+
+        /* MethodHandle createAndUpdateNewTable = MethodHandles.collectArguments(
+         *   permutedEffects,
+         *   0,
+         *   MethodHandles.arrayConstructor(tableType)
+         * );
+         */
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(table_typ))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::ARRAYCONSTRUCTOR,
+        )?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::AStore(create_and_update_new_table))?;
+
+        /* MethodHandle createAndUpdateNewTableIfValid = MethodHandles.guardWithTest(
+         *   intIsNegativeOneHandle,
+         *   MethodHandles.dropArguments(
+         *     MethodHandles.constant(int.class, -1),
+         *     0,
+         *     createAndUpdateNewTable.type().parameterArray()
+         *   ),
+         *   createAndUpdateNewTable
+         * );
+         */
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::INTISNEGATIVEONE)?;
         code.const_class(&FieldType::INT)?;
         code.push_instruction(Instruction::IConstM1)?;
         code.invoke(&BinaryName::INTEGER, &UnqualifiedName::VALUEOF)?;
         code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::CONSTANT)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::FILTERRETURNVALUE)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(create_and_update_new_table))?;
+        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERARRAY)?;
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::DROPARGUMENTS)?;
+        code.push_instruction(Instruction::ALoad(create_and_update_new_table))?;
         code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::GUARDWITHTEST)?;
-        */
 
-        // TODO
+        /* MethodHandle checkSizeAndCreate = MethodHandles.collectArguments(
+         *   createAndUpdateNewTableIfValid,
+         *   0,
+         *   MethodHandles.collectArguments(
+         *     MethodHandles.collectArguments(
+         *       nextSizeHandle,
+         *       2,
+         *       MethodHandles.constant(long.class, maxSize)
+         *     ),
+         *     0,
+         *     MethodHandles.arrayLength(tableType)
+         *   )
+         * );
+         */
+        code.push_instruction(Instruction::IConst0)?;
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::NEXTSIZE)?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.const_class(&FieldType::LONG)?;
+        code.push_instruction(Instruction::LLoad(max_size_argument))?;
+        code.invoke(&BinaryName::LONG, &UnqualifiedName::VALUEOF)?;
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::CONSTANT)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(table_typ))?;
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::ARRAYLENGTH)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
 
-        code.push_instruction(Instruction::AConstNull)?;
-        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        /* MethodHandle toReturn = MethodHandles.permuteArguments(
+         *   MethodHandles.collectArguments(
+         *     MethodHandles.permuteArguments(
+         *       checkSizeAndCreate,
+         *       MethodType.methodType(
+         *         int.class,
+         *         new Class[] {
+         *           tableType,      // oldTable
+         *           moduleType,     // module
+         *           tableElemType,  // filler
+         *           int.class       // growBy
+         *         }
+         *       ),
+         *       new int[] { 0, 3, 1, 0, 2 }
+         *     ),
+         *     0,
+         *     getter
+         *   ),
+         *   methodType,
+         *   new int[] { 2, 2, 0, 1 }
+         * );
+         */
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::IConst4)?;
+        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        for (arr_idx, variable_to_load) in vec![table_typ, module_typ, table_elem_typ]
+            .into_iter()
+            .enumerate()
+        {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(arr_idx as i32)?;
+            code.push_instruction(Instruction::ALoad(variable_to_load))?;
+            code.push_instruction(Instruction::AAStore)?;
+        }
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.push_instruction(Instruction::IConst5)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        for (arr_idx, array_elem) in vec![0, 3, 1, 0, 2].into_iter().enumerate() {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(arr_idx as i32)?;
+            code.const_int(array_elem as i32)?;
+            code.push_instruction(Instruction::IAStore)?;
+        }
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::ALoad(requested_type_argument))?;
+        code.push_instruction(Instruction::IConst4)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        for (arr_idx, array_elem) in vec![2, 2, 0, 1].into_iter().enumerate() {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(arr_idx as i32)?;
+            code.const_int(array_elem as i32)?;
+            code.push_instruction(Instruction::IAStore)?;
+        }
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+
+        // return new ConstantCallSite(toReturn);
+        let constant_callsite_cls =
+            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
+        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.push_instruction(Instruction::DupX1)?;
+        code.push_instruction(Instruction::Swap)?;
+        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
         Ok(())
     }
 

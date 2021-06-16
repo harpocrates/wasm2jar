@@ -181,7 +181,15 @@ impl ClassGraph {
                 UnqualifiedName::PARAMETERTYPE,
                 MethodDescriptor {
                     parameters: vec![FieldType::INT],
-                    return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
+                    return_type: Some(FieldType::Ref(RefType::CLASS)),
+                },
+            );
+            java_lang_invoke_methodtype.add_method(
+                false,
+                UnqualifiedName::PARAMETERARRAY,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: Some(FieldType::array(FieldType::Ref(RefType::CLASS))),
                 },
             );
             java_lang_invoke_methodtype.add_method(
@@ -198,6 +206,17 @@ impl ClassGraph {
                 MethodDescriptor {
                     parameters: vec![],
                     return_type: Some(FieldType::Ref(RefType::CLASS)),
+                },
+            );
+            java_lang_invoke_methodtype.add_method(
+                true,
+                UnqualifiedName::METHODTYPE,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::Ref(RefType::CLASS),
+                        FieldType::array(FieldType::Ref(RefType::CLASS)),
+                    ],
+                    return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
                 },
             );
         }
@@ -218,6 +237,14 @@ impl ClassGraph {
             );
             java_lang_invoke_methodhandle.add_method(
                 false,
+                UnqualifiedName::ASTYPE,
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::METHODTYPE)],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
+            java_lang_invoke_methodhandle.add_method(
+                false,
                 UnqualifiedName::CHANGERETURNTYPE,
                 MethodDescriptor {
                     parameters: vec![FieldType::Ref(RefType::CLASS)],
@@ -232,6 +259,18 @@ impl ClassGraph {
                 .classes
                 .entry(BinaryName::METHODHANDLES)
                 .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_lang_invoke_methodhandles.add_method(
+                true,
+                UnqualifiedName::DROPARGUMENTS,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::Ref(RefType::METHODHANDLE),
+                        FieldType::INT,
+                        FieldType::array(FieldType::Ref(RefType::CLASS)),
+                    ],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
             java_lang_invoke_methodhandles.add_method(
                 true,
                 UnqualifiedName::PERMUTEARGUMENTS,
@@ -307,6 +346,14 @@ impl ClassGraph {
                 UnqualifiedName::EMPTY,
                 MethodDescriptor {
                     parameters: vec![FieldType::Ref(RefType::METHODTYPE)],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
+            java_lang_invoke_methodhandles.add_method(
+                true,
+                UnqualifiedName::CONSTANT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::Ref(RefType::CLASS), FieldType::OBJECT],
                     return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
                 },
             );

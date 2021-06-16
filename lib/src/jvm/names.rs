@@ -133,6 +133,7 @@ impl UnqualifiedName {
     pub const ARRAYELEMENTGETTER: Self = Self::name("arrayElementGetter");
     pub const ARRAYELEMENTSETTER: Self = Self::name("arrayElementSetter");
     pub const ARRAYLENGTH: Self = Self::name("arrayLength");
+    pub const ASTYPE: Self = Self::name("asType");
     pub const BIGENDIAN: Self = Self::name("BIG_ENDIAN");
     pub const BITCOUNT: Self = Self::name("bitCount");
     pub const BYTEVALUE: Self = Self::name("byteValue");
@@ -148,6 +149,7 @@ impl UnqualifiedName {
     pub const DIVIDEUNSIGNED: Self = Self::name("divideUnsigned");
     pub const DOUBLETORAWLONGBITS: Self = Self::name("doubleToRawLongBits");
     pub const DOUBLEVALUE: Self = Self::name("doubleValue");
+    pub const DROPARGUMENTS: Self = Self::name("dropArguments");
     pub const DROPPARAMETERTYPES: Self = Self::name("dropParameterTypes");
     pub const DYNAMICINVOKER: Self = Self::name("dynamicInvoker");
     pub const EMPTY: Self = Self::name("empty");
@@ -177,6 +179,7 @@ impl UnqualifiedName {
     pub const LONGVALUE: Self = Self::name("longValue");
     pub const MAX: Self = Self::name("max");
     pub const MAXVALUE: Self = Self::name("MAX_VALUE");
+    pub const METHODTYPE: Self = Self::name("methodType");
     pub const MIN: Self = Self::name("min");
     pub const MINVALUE: Self = Self::name("MIN_VALUE");
     pub const NAN: Self = Self::name("NaN");
@@ -184,6 +187,7 @@ impl UnqualifiedName {
     pub const NUMBEROFLEADINGZEROS: Self = Self::name("numberOfLeadingZeros");
     pub const NUMBEROFTRAILINGZEROS: Self = Self::name("numberOfTrailingZeros");
     pub const ORDER: Self = Self::name("order");
+    pub const PARAMETERARRAY: Self = Self::name("parameterArray");
     pub const PARAMETERCOUNT: Self = Self::name("parameterCount");
     pub const PARAMETERTYPE: Self = Self::name("parameterType");
     pub const PERMUTEARGUMENTS: Self = Self::name("permuteArguments");

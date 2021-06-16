@@ -359,7 +359,7 @@ impl<'a> TestHarness<'a> {
         self.latest_module = Some(name.clone());
 
         // Translate the module
-        let settings = translate::Settings::new(name)?;
+        let settings = translate::Settings::new(&name, None)?;
         let wasm_bytes: Vec<u8> = match module {
             QuoteModule::Module(mut module) => module.encode()?,
             QuoteModule::Quote(wat_bytes) => {

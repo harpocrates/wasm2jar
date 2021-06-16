@@ -1,4 +1,4 @@
-use super::{AccessMode, CodeBuilderExts, Error, Settings, Table};
+use super::{AccessMode, CodeBuilderExts, Error, Settings, Table, UtilitiesStrategy};
 use crate::jvm::{
     BaseType, BinaryName, BootstrapMethod, BootstrapMethods, BranchInstruction, ClassAccessFlags,
     ClassBuilder, ClassGraph, CompareMode, ConstantIndex, ConstantsPool, Descriptor, FieldType,
@@ -283,24 +283,47 @@ impl UtilityMethod {
 /// Class that serves a shared carrier of utility methods. In the name of keeping the translation
 /// outputs lean, these features are enumerated so that they can be requested then generated only
 /// on demand.
-pub struct UtilityClass {
-    pub class: ClassBuilder,
-    methods: HashSet<UtilityMethod>,
+enum UtilityClassInner {
+    /// Use an external class with this name
+    External(BinaryName),
+
+    /// Generate an internal utility class
+    Internal {
+        /// Builder for the inner class
+        class: ClassBuilder,
+
+        /// Set of the utility methods that have already been generated
+        methods: HashSet<UtilityMethod>,
+    },
 }
+
+pub struct UtilityClass(UtilityClassInner);
 
 impl UtilityClass {
     pub fn new(
         settings: &Settings,
         class_graph: Rc<RefCell<ClassGraph>>,
     ) -> Result<UtilityClass, Error> {
-        let class_name = format!(
-            "{}${}",
-            settings.output_full_class_name.as_str(),
-            settings.utilities_short_class_name.as_str()
-        );
+        // TODO: generate_all
+        let (inner_class_short_name, _generate_all) = match &settings.utilities_strategy {
+            UtilitiesStrategy::ReferenceExisting(external) => {
+                let inner = UtilityClassInner::External(external.clone());
+                return Ok(UtilityClass(inner));
+            }
+            UtilitiesStrategy::GenerateNested {
+                inner_class,
+                generate_all,
+            } => (inner_class, generate_all),
+        };
+
+        let class_name = settings
+            .output_full_class_name
+            .concat(&UnqualifiedName::DOLLAR)
+            .concat(&inner_class_short_name);
+
         let mut class = ClassBuilder::new(
             ClassAccessFlags::SYNTHETIC,
-            BinaryName::from_string(class_name).map_err(Error::MalformedName)?,
+            class_name,
             BinaryName::OBJECT,
             false,
             vec![],
@@ -314,7 +337,7 @@ impl UtilityClass {
             let outer_class = constants.get_class(outer_class_name)?;
             let inner_class_name = constants.get_utf8(class.class_name().as_str())?;
             let inner_class = constants.get_class(inner_class_name)?;
-            let inner_name = constants.get_utf8(settings.utilities_short_class_name.as_str())?;
+            let inner_name = constants.get_utf8(inner_class_short_name.as_str())?;
             let inner_class_attr = InnerClass {
                 inner_class,
                 outer_class,
@@ -325,10 +348,26 @@ impl UtilityClass {
         };
         class.add_attribute(inner_classes)?;
 
-        Ok(UtilityClass {
+        Ok(UtilityClass(UtilityClassInner::Internal {
             class,
             methods: HashSet::new(),
-        })
+        }))
+    }
+
+    /// Extract the class name
+    pub fn class_name(&self) -> &BinaryName {
+        match &self.0 {
+            UtilityClassInner::External(name) => name,
+            UtilityClassInner::Internal { class, .. } => class.class_name(),
+        }
+    }
+
+    /// If there is a class being built, finalize and return it
+    pub fn into_builder(self) -> Option<ClassBuilder> {
+        match self.0 {
+            UtilityClassInner::External(_) => None,
+            UtilityClassInner::Internal { class, .. } => Some(class),
+        }
     }
 
     /// Ensure the utility is defined, then call it on the specified code builder
@@ -338,7 +377,7 @@ impl UtilityClass {
         code: &mut B,
     ) -> Result<(), Error> {
         let _ = self.add_utility_method(method)?;
-        let class_name = self.class.class_name();
+        let class_name = self.class_name();
         let method_name = method.name();
         code.invoke_explicit(
             InvokeType::Static,
@@ -351,8 +390,14 @@ impl UtilityClass {
 
     /// Add a utility method and return if it was already there
     pub fn add_utility_method(&mut self, method: UtilityMethod) -> Result<bool, Error> {
-        if !self.methods.insert(method) {
-            return Ok(false);
+        // Nothing for external utility classes or if the method is already generated
+        match &mut self.0 {
+            UtilityClassInner::External(_) => return Ok(false),
+            UtilityClassInner::Internal { methods, .. } => {
+                if !methods.insert(method) {
+                    return Ok(false);
+                }
+            }
         }
 
         // Dependencies
@@ -366,9 +411,12 @@ impl UtilityClass {
         }
 
         let descriptor = method.descriptor();
+        let class: &mut ClassBuilder = match &mut self.0 {
+            UtilityClassInner::Internal { class, .. } => class,
+            _ => unreachable!("external utility classes should be filtered earlier"),
+        };
         let mut method_builder =
-            self.class
-                .start_method(MethodAccessFlags::STATIC, method.name(), descriptor)?;
+            class.start_method(MethodAccessFlags::STATIC, method.name(), descriptor)?;
         let code = &mut method_builder.code;
 
         match method {
@@ -400,11 +448,11 @@ impl UtilityClass {
             UtilityMethod::CopyResizedArray => Self::generate_copy_resized_array(code)?,
             UtilityMethod::IntIsNegativeOne => Self::generate_int_is_negative_one(code)?,
             UtilityMethod::BootstrapTable => {
-                Self::generate_bootstrap_table(code, &self.class.class_name())?
+                Self::generate_bootstrap_table(code, &class.class_name())?
             }
         }
 
-        self.class.finish_method(method_builder)?;
+        class.finish_method(method_builder)?;
         Ok(true)
     }
 
@@ -1903,7 +1951,7 @@ impl BootstrapUtilities {
 
         // Compute a method handle for the bootstrap
         let table_bootstrap_handle: ConstantIndex = {
-            let utilities_utf8 = constants.get_utf8(utilities.class.class_name().as_str())?;
+            let utilities_utf8 = constants.get_utf8(utilities.class_name().as_str())?;
             let utilities_cls = constants.get_class(utilities_utf8)?;
             let tablebootstrap_utf8 =
                 constants.get_utf8(UtilityMethod::BootstrapTable.name().as_str())?;

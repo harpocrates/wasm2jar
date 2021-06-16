@@ -856,7 +856,16 @@ where
             Operator::RefIsNull => {
                 self.visit_cond(BranchCond::IfNull(EqComparison::EQ), next_op)?
             }
-            Operator::RefFunc { .. } => todo!(),
+            Operator::RefFunc { function_index } => {
+                let func_typ = self
+                    .wasm_validator
+                    .resources()
+                    .function_idx_type(function_index)?;
+
+                let (class_name, method_name) = self.bad_get_func(function_index, &func_typ);
+                self.jvm_code
+                    .const_methodhandle(&class_name, &method_name)?;
+            }
 
             _ => todo!(),
         }
@@ -1291,14 +1300,29 @@ where
         let (off, field_type) = self.jvm_locals.lookup_this()?;
         self.jvm_code.get_local(off, field_type)?;
 
-        // TODO: this is a terrible, no good hack:
-        //
-        //   - we shouldn't be modifying the class graph in the function translation (worse even:
-        //     the addition we make here might be redundant!)
-        //   - we shouldn't assume that the function is in `Part0`
-        //   - we shouldn't assume that the function index is directly into functions defined in
-        //     this module (imported functions come first!)
-        //
+        let (class_name, method_name) = self.bad_get_func(func_idx, &func_typ);
+
+        self.jvm_code.invoke(&class_name, &method_name)?;
+        if func_typ.outputs.len() > 1 {
+            self.unpack_stack_from_array(&func_typ.outputs)?;
+        }
+
+        Ok(())
+    }
+
+    // TODO: this is a terrible, no good hack:
+    //
+    //   - we shouldn't be modifying the class graph in the function translation (worse even:
+    //     the addition we make here might be redundant!)
+    //   - we shouldn't assume that the function is in `Part0`
+    //   - we shouldn't assume that the function index is directly into functions defined in
+    //     this module (imported functions come first!)
+    //
+    fn bad_get_func(
+        &self,
+        func_idx: u32,
+        func_typ: &FunctionType,
+    ) -> (BinaryName, UnqualifiedName) {
         let class_name = self
             .settings
             .output_full_class_name
@@ -1309,25 +1333,19 @@ where
             .settings
             .wasm_function_name_prefix
             .concat(&UnqualifiedName::number(func_idx as usize));
-        {
-            let mut class_graph = self.jvm_code.class_graph();
-            let mut desc = func_typ.method_descriptor();
-            desc.parameters.push(FieldType::object(
-                self.settings.output_full_class_name.clone(),
-            ));
-            class_graph
-                .classes
-                .get_mut(&class_name)
-                .expect("part class not in class graph")
-                .add_method(true, method_name.clone(), desc);
-        }
 
-        self.jvm_code.invoke(&class_name, &method_name)?;
-        if func_typ.outputs.len() > 1 {
-            self.unpack_stack_from_array(&func_typ.outputs)?;
-        }
+        let mut class_graph = self.jvm_code.class_graph();
+        let mut desc = func_typ.method_descriptor();
+        desc.parameters.push(FieldType::object(
+            self.settings.output_full_class_name.clone(),
+        ));
+        class_graph
+            .classes
+            .get_mut(&class_name)
+            .expect("part class not in class graph")
+            .add_method(true, method_name.clone(), desc);
 
-        Ok(())
+        (class_name, method_name)
     }
 
     /// Visit a `call_indirect`
@@ -1621,7 +1639,7 @@ where
 
         let desc = MethodDescriptor {
             parameters: vec![table.table_type.field_type(), FieldType::INT],
-            return_type: None,
+            return_type: Some(FieldType::INT),
         };
         self.visit_table_operator(table_idx, &UnqualifiedName::TABLEGROW, desc)?;
 

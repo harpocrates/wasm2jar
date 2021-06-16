@@ -1,7 +1,7 @@
 use crate::jvm::{
     BaseType, BinaryName, BranchInstruction, ClassConstantIndex, CodeBuilder, Descriptor,
-    EqComparison, Error, FieldType, Instruction, InvokeType, MethodDescriptor, Name, OrdComparison,
-    RefType, UnqualifiedName, Width,
+    EqComparison, Error, FieldType, HandleKind, Instruction, InvokeType, MethodDescriptor, Name,
+    OrdComparison, RefType, UnqualifiedName, Width,
 };
 use std::borrow::Cow;
 use std::ops::Not;
@@ -234,6 +234,103 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
                 self.push_instruction(Instruction::Ldc(cls_idx.into()))
             }
         }
+    }
+
+    fn const_methodhandle(
+        &mut self,
+        class_name: &BinaryName,
+        method_name: &UnqualifiedName,
+    ) -> Result<(), Error> {
+        // Query the class graph for the descriptor
+        let (invoke_typ, descriptor): (InvokeType, MethodDescriptor) = {
+            let class_graph = self.class_graph();
+            let class = class_graph
+                .classes
+                .get(class_name)
+                .ok_or_else(|| Error::MissingClass(class_name.clone()))?;
+            let is_interface = class.is_interface;
+            let mut method_overloads = class
+                .methods
+                .get(method_name)
+                .ok_or_else(|| Error::MissingMember(method_name.clone()))?
+                .iter()
+                .map(|(desc, is_static)| {
+                    let typ = if *is_static {
+                        InvokeType::Static
+                    } else if method_name == &UnqualifiedName::INIT
+                        || method_name == &UnqualifiedName::CLINIT
+                    {
+                        InvokeType::Special
+                    } else if is_interface {
+                        let n = desc.parameter_length(true) as u8;
+                        InvokeType::Interface(n)
+                    } else {
+                        InvokeType::Virtual
+                    };
+                    (typ, desc.clone())
+                })
+                .collect::<Vec<_>>();
+
+            if method_overloads.len() == 1 {
+                method_overloads.pop().unwrap()
+            } else {
+                let mut alts = String::new();
+                for (_, alt) in &method_overloads {
+                    if !alts.is_empty() {
+                        alts.push_str(", ");
+                    }
+                    alts.push_str(&alt.render());
+                }
+                log::error!(
+                    "Ambiguous overloads for {:?}.{:?}: {}",
+                    class_name,
+                    method_name,
+                    alts
+                );
+                return Err(Error::AmbiguousMethod(
+                    class_name.clone(),
+                    method_name.clone(),
+                ));
+            }
+        };
+
+        self.const_methodhandle_explicit(invoke_typ, class_name, method_name, &descriptor)
+    }
+
+    fn const_methodhandle_explicit(
+        &mut self,
+        invoke_typ: InvokeType,
+        class_name: &BinaryName,
+        method_name: &UnqualifiedName,
+        descriptor: &MethodDescriptor,
+    ) -> Result<(), Error> {
+        let descriptor = descriptor.render();
+        let is_interface = if let InvokeType::Interface(_) = invoke_typ {
+            true
+        } else {
+            false
+        };
+
+        let handle_kind = match invoke_typ {
+            InvokeType::Interface(_) => HandleKind::InvokeInterface,
+            InvokeType::Virtual => HandleKind::InvokeVirtual,
+            InvokeType::Static => HandleKind::InvokeStatic,
+            InvokeType::Special => HandleKind::InvokeSpecial,
+        };
+
+        let method_handle = {
+            let mut constants = self.constants();
+            let class_utf8 = constants.get_utf8(class_name.as_str())?;
+            let class_idx = constants.get_class(class_utf8)?;
+            let method_utf8 = constants.get_utf8(method_name.as_str())?;
+            let desc_utf8 = constants.get_utf8(descriptor)?;
+            let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
+            let method_ref =
+                constants.get_method_ref(class_idx, name_and_type_idx, is_interface)?;
+            constants.get_method_handle(handle_kind, method_ref.into())?
+        };
+
+        self.push_instruction(Instruction::Ldc(method_handle))
     }
 
     /// Pop the top of the stack, accounting for the different possible type widths

@@ -70,7 +70,7 @@ impl ClassBuilder {
 
     /// Consume the builder and return the file class file
     ///
-    /// Only call this if all associated builder have been released
+    /// Only call this if all associated builders have been released
     pub fn result(mut self) -> ClassFile {
         self.class.constants = Rc::try_unwrap(self.constants_pool)
             .ok()

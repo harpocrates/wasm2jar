@@ -28,6 +28,13 @@ fn main() -> Result<(), translate::Error> {
                 .help("Produce a `jar` output with this name (uses `jar` utility on PATH)"),
         )
         .arg(
+            Arg::with_name("utils")
+                .long("utils")
+                .required(false)
+                .takes_value(true)
+                .help("Specify an external utility class to use"),
+        )
+        .arg(
             Arg::with_name("INPUT")
                 .help("Sets the input WASM module file to use")
                 .required(true)
@@ -35,7 +42,10 @@ fn main() -> Result<(), translate::Error> {
         )
         .get_matches();
 
-    let settings = translate::Settings::new(matches.value_of("class").unwrap().to_owned())?;
+    let settings = translate::Settings::new(
+        matches.value_of("class").unwrap(),
+        matches.value_of("utils"),
+    )?;
 
     let wasm_file = matches.value_of("INPUT").unwrap();
     log::info!("Reading and translating '{}'", &wasm_file);

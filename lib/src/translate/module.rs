@@ -1,6 +1,6 @@
 use super::{
     AccessMode, BootstrapUtilities, CodeBuilderExts, Element, Error, FunctionTranslator, Global,
-    MemberOrigin, Memory, Settings, Table, UtilityClass,
+    MemberOrigin, Memory, Settings, Table, UtilitiesStrategy, UtilityClass,
 };
 use crate::jvm::{
     BinaryName, BootstrapMethods, BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile,
@@ -10,6 +10,7 @@ use crate::jvm::{
 };
 use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourcesExt};
 use std::cell::RefCell;
+use std::iter;
 use std::rc::Rc;
 use wasmparser::{
     Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader, Export,
@@ -861,18 +862,21 @@ impl<'a> ModuleTranslator<'a> {
             let outer_class = constants.get_class(outer_class_name)?;
 
             // Utilities inner class
-            let utilities_class_name =
-                constants.get_utf8(self.utilities.class.class_name().as_str())?;
-            let utilities_class = constants.get_class(utilities_class_name)?;
-            let utilities_name =
-                constants.get_utf8(self.settings.utilities_short_class_name.as_str())?;
-            nest_members.push(utilities_class);
-            inner_class_attrs.push(InnerClass {
-                inner_class: utilities_class,
-                outer_class,
-                inner_name: utilities_name,
-                access_flags: InnerClassAccessFlags::STATIC | InnerClassAccessFlags::PRIVATE,
-            });
+            if let UtilitiesStrategy::GenerateNested { inner_class, .. } =
+                &self.settings.utilities_strategy
+            {
+                let utilities_class_name =
+                    constants.get_utf8(self.utilities.class_name().as_str())?;
+                let utilities_class = constants.get_class(utilities_class_name)?;
+                let utilities_name = constants.get_utf8(inner_class.as_str())?;
+                nest_members.push(utilities_class);
+                inner_class_attrs.push(InnerClass {
+                    inner_class: utilities_class,
+                    outer_class,
+                    inner_name: utilities_name,
+                    access_flags: InnerClassAccessFlags::STATIC | InnerClassAccessFlags::PRIVATE,
+                });
+            }
 
             // Part inner classes
             for (part_idx, part) in parts.iter().enumerate() {
@@ -897,18 +901,11 @@ impl<'a> ModuleTranslator<'a> {
         self.class.add_attribute(inner_classes)?;
 
         // Final results
-        let mut results = vec![
-            (self.class.class_name().to_owned(), self.class.result()),
-            (
-                self.utilities.class.class_name().to_owned(),
-                self.utilities.class.result(),
-            ),
-        ];
-        results.extend(
-            parts
-                .into_iter()
-                .map(|part| (part.class_name().to_owned(), part.result())),
-        );
+        let results: Vec<(BinaryName, ClassFile)> = iter::once(self.class)
+            .chain(self.utilities.into_builder().into_iter())
+            .chain(parts.into_iter())
+            .map(|builder| (builder.class_name().to_owned(), builder.result()))
+            .collect();
 
         Ok(results)
     }

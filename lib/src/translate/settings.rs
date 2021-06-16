@@ -22,8 +22,8 @@ pub struct Settings {
     /// Memory name prefix (eg. `memory`)
     pub wasm_memory_name_prefix: UnqualifiedName,
 
-    /// Inner utilities class name
-    pub utilities_short_class_name: UnqualifiedName,
+    /// Utilities class strategy
+    pub utilities_strategy: UtilitiesStrategy,
 
     /// Inner part class name
     ///
@@ -75,6 +75,17 @@ pub struct Settings {
     pub renamer: AssertUnwindSafe<Box<dyn Renamer>>,
 }
 
+/// Strategy for handling utility functions
+pub enum UtilitiesStrategy {
+    GenerateNested {
+        inner_class: UnqualifiedName,
+
+        /// Generate all utilities (even if they aren't used)
+        generate_all: bool,
+    },
+    ReferenceExisting(BinaryName),
+}
+
 // TODO: add a method to validadte that the settings are all possible (eg. the names are valid in
 // the JVM)
 impl Settings {
@@ -93,13 +104,25 @@ impl Settings {
         memory64: false,
     };
 
-    pub fn new(output_full_class_name: String) -> Result<Settings, Error> {
+    pub fn new(
+        output_full_class_name: &str,
+        external_utilities: Option<&str>,
+    ) -> Result<Settings, Error> {
         let mut wasm_features = Self::SUPPORTED_WASM_FEATURES;
         wasm_features.deterministic_only = false;
 
         fn make_name<N: Name>(name: impl Into<String>) -> Result<N, Error> {
             N::from_string(name.into()).map_err(Error::MalformedName)
         }
+
+        let utilities_strategy = if let Some(external_name) = external_utilities {
+            UtilitiesStrategy::ReferenceExisting(make_name(external_name)?)
+        } else {
+            UtilitiesStrategy::GenerateNested {
+                inner_class: make_name("Utils")?,
+                generate_all: false,
+            }
+        };
 
         Ok(Settings {
             output_full_class_name: make_name(output_full_class_name)?,
@@ -108,7 +131,7 @@ impl Settings {
             wasm_global_name_prefix: make_name("global")?,
             wasm_table_name_prefix: make_name("table")?,
             wasm_memory_name_prefix: make_name("memory")?,
-            utilities_short_class_name: make_name("Utils")?,
+            utilities_strategy,
             part_short_class_name: make_name("Part")?,
             funcref_array_table_field_name: make_name("funcref_tables")?,
             externref_array_table_field_name: make_name("externref_tables")?,

@@ -110,6 +110,9 @@ pub enum UtilityMethod {
     /// Return true if the input is equal to negative one
     IntIsNegativeOne,
 
+    /// Fill a range of an object array
+    FillArrayRange,
+
     /// Bootstrap method for table utilities
     BootstrapTable,
 }
@@ -144,6 +147,7 @@ impl UtilityMethod {
             UtilityMethod::NextSize => UnqualifiedName::NEXTSIZE,
             UtilityMethod::CopyResizedArray => UnqualifiedName::COPYRESIZEDARRAY,
             UtilityMethod::IntIsNegativeOne => UnqualifiedName::INTISNEGATIVEONE,
+            UtilityMethod::FillArrayRange => UnqualifiedName::FILLARRAYRANGE,
             UtilityMethod::BootstrapTable => UnqualifiedName::BOOTSTRAPTABLE,
         }
     }
@@ -262,6 +266,15 @@ impl UtilityMethod {
             UtilityMethod::IntIsNegativeOne => MethodDescriptor {
                 parameters: vec![FieldType::INT],
                 return_type: Some(FieldType::BOOLEAN),
+            },
+            UtilityMethod::FillArrayRange => MethodDescriptor {
+                parameters: vec![
+                    FieldType::INT,
+                    FieldType::OBJECT,
+                    FieldType::INT,
+                    FieldType::array(FieldType::OBJECT),
+                ],
+                return_type: None,
             },
             UtilityMethod::BootstrapTable => MethodDescriptor {
                 parameters: vec![
@@ -406,6 +419,7 @@ impl UtilityClass {
                 self.add_utility_method(UtilityMethod::NextSize)?;
                 self.add_utility_method(UtilityMethod::CopyResizedArray)?;
                 self.add_utility_method(UtilityMethod::IntIsNegativeOne)?;
+                self.add_utility_method(UtilityMethod::FillArrayRange)?;
             }
             _ => (),
         }
@@ -447,6 +461,7 @@ impl UtilityClass {
             UtilityMethod::NextSize => Self::generate_next_size(code)?,
             UtilityMethod::CopyResizedArray => Self::generate_copy_resized_array(code)?,
             UtilityMethod::IntIsNegativeOne => Self::generate_int_is_negative_one(code)?,
+            UtilityMethod::FillArrayRange => Self::generate_fill_array_range(code)?,
             UtilityMethod::BootstrapTable => {
                 Self::generate_bootstrap_table(code, &class.class_name())?
             }
@@ -1305,6 +1320,28 @@ impl UtilityClass {
         Ok(())
     }
 
+    /// Helper method for checking if a value is equal to negative 1
+    ///
+    /// Analagous to
+    ///
+    /// ```java
+    /// static void fillArrayRange(int from, Object filler, int numToFill, Object[] arr) {
+    ///   java.util.Arrays.fill(arr, from, Math.addExact(from, numToFill), filler);
+    /// }
+
+    fn generate_fill_array_range<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.push_instruction(Instruction::ILoad(0))?;
+        code.push_instruction(Instruction::ILoad(0))?;
+        code.push_instruction(Instruction::ILoad(2))?;
+        code.invoke(&BinaryName::MATH, &UnqualifiedName::ADDEXACT)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.invoke(&BinaryName::ARRAYS, &UnqualifiedName::FILL)?;
+        code.push_branch_instruction(BranchInstruction::Return)?;
+
+        Ok(())
+    }
+
     /// Generate the bootstrap method used for table operators, including indirect calls. Here lie
     /// some dragons. The output is sensible, but the "how" is not obvious.
     fn generate_bootstrap_table<B: CodeBuilderExts>(
@@ -1388,7 +1425,7 @@ impl UtilityClass {
         code.const_string("table_fill")?;
         code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
-        Self::generate_fill_table_case(code)?;
+        Self::generate_fill_table_case(code, utility_class_name)?;
 
         // table.copy
         code.place_label(table_copy_case)?;
@@ -2017,9 +2054,87 @@ impl UtilityClass {
         Ok(())
     }
 
-    fn generate_fill_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
-        code.push_instruction(Instruction::AConstNull)?;
-        code.push_branch_instruction(BranchInstruction::AThrow)?;
+    // (I LTableElem; I)V
+    fn generate_fill_table_case<B: CodeBuilderExts>(
+        code: &mut B,
+        utility_class_name: &BinaryName,
+    ) -> Result<(), Error> {
+        let requested_type_argument = 2; // MethodType
+        let getter_argument = 3; // MethodHandle
+        let table_typ = 7; // Class<TableElem[]>
+        let table_elem_typ = 8; // Class<TableElem>
+        let cls_cls_idx = code.get_class_idx(&RefType::CLASS)?;
+
+        // Class<?> tableType = getter.type().returnType();
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
+        code.push_instruction(Instruction::AStore(table_typ))?;
+
+        // Class<?> tableElemType = methodType.parameterType(1);
+        code.push_instruction(Instruction::ALoad(requested_type_argument))?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERTYPE)?;
+        code.push_instruction(Instruction::AStore(table_elem_typ))?;
+
+        /* MethodHandle fillEffects = MethodHandles.collectArguments(
+         *   fillArrayRangeHandle.asType(
+         *     MethodType.methodType(
+         *       void.class,
+         *       new Class[] {
+         *         int.class,
+         *         tableElemType,
+         *         int.class,
+         *         tableType
+         *       }
+         *     )
+         *   ),
+         *   3,
+         *   getter
+         * );
+         */
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::FILLARRAYRANGE)?;
+        code.access_field(
+            &BinaryName::VOID,
+            &UnqualifiedName::UPPERCASE_TYPE,
+            AccessMode::Read,
+        )?;
+        code.push_instruction(Instruction::IConst4)?;
+        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::ALoad(table_elem_typ))?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.push_instruction(Instruction::ALoad(table_typ))?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::ASTYPE)?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+
+        // return new ConstantCallSite(toReturn);
+        let constant_callsite_cls =
+            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
+        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.push_instruction(Instruction::DupX1)?;
+        code.push_instruction(Instruction::Swap)?;
+        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
         Ok(())
     }
 

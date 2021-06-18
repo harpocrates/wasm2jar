@@ -805,6 +805,14 @@ impl ClassGraph {
                     return_type: Some(FieldType::INT),
                 },
             );
+            java_lang_math.add_method(
+                true,
+                UnqualifiedName::ADDEXACT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::INT, FieldType::INT],
+                    return_type: Some(FieldType::INT),
+                },
+            );
         }
 
         // java.lang.System

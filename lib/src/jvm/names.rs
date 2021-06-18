@@ -126,6 +126,7 @@ impl UnqualifiedName {
 
     // JDK names
     pub const ABS: Self = Self::name("abs");
+    pub const ADDEXACT: Self = Self::name("addExact");
     pub const ALLOCATE: Self = Self::name("allocate");
     pub const ALLOCATEDIRECT: Self = Self::name("allocateDirect");
     pub const ARRAYCONSTRUCTOR: Self = Self::name("arrayConstructor");
@@ -230,6 +231,7 @@ impl UnqualifiedName {
     pub const F64CONVERTI32U: Self = Self::name("f64ConvertI32U");
     pub const F64CONVERTI64U: Self = Self::name("f64ConvertI64U");
     pub const F64TRUNC: Self = Self::name("f64Trunc");
+    pub const FILLARRAYRANGE: Self = Self::name("fillArrayRange");
     pub const FUNCREFTABLEBOOTSTRAP: Self = Self::name("funcrefTableBootstrap");
     pub const I32DIVS: Self = Self::name("i32DivS");
     pub const I32TRUNCF32S: Self = Self::name("i32TruncF32S");

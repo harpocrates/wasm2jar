@@ -620,7 +620,7 @@ impl<'a> ModuleTranslator<'a> {
                 if let MemoryType::M32 { limits, .. } = memory.memory_type {
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
                     jvm_code.const_int((limits.initial * 65536) as i32)?; // TODO: error if too big
-                    jvm_code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::ALLOCATE)?;
+                    jvm_code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::ALLOCATE)?; // TODO: add option for allocate direct
                     jvm_code.access_field(
                         &BinaryName::BYTEORDER,
                         &UnqualifiedName::LITTLEENDIAN,

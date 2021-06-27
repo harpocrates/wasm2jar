@@ -1,4 +1,7 @@
-use super::{BinaryName, FieldType, MethodDescriptor, RefType, UnqualifiedName};
+use super::{
+    BinaryName, Descriptor, Error, FieldType, InvokeType, MethodDescriptor, RefType,
+    UnqualifiedName,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Tracks the relationships between classes/interfaces and the members on those classes
@@ -82,6 +85,94 @@ impl ClassGraph {
             (FieldType::Ref(ref1), FieldType::Ref(ref2)) => self.is_java_assignable(ref1, ref2),
             (_, _) => false,
         }
+    }
+
+    /// Look for a method of a given name in a class (or its super classes)
+    pub fn lookup_method(
+        &self,
+        class_name: &BinaryName,
+        method_name: &UnqualifiedName,
+    ) -> Result<(InvokeType, MethodDescriptor), Error> {
+        let mut next_class_name_opt = Some(class_name);
+        while let Some(class_name) = next_class_name_opt.take() {
+            let class = self
+                .classes
+                .get(class_name)
+                .ok_or_else(|| Error::MissingClass(class_name.clone()))?;
+            let is_interface = class.is_interface;
+            if let Some(matching_methods) = class.methods.get(method_name) {
+                let mut method_overloads = matching_methods
+                    .iter()
+                    .map(|(desc, is_static)| {
+                        let typ = if *is_static {
+                            InvokeType::Static
+                        } else if method_name == &UnqualifiedName::INIT
+                            || method_name == &UnqualifiedName::CLINIT
+                        {
+                            InvokeType::Special
+                        } else if is_interface {
+                            let n = desc.parameter_length(true) as u8;
+                            InvokeType::Interface(n)
+                        } else {
+                            InvokeType::Virtual
+                        };
+                        (typ, desc.clone())
+                    })
+                    .collect::<Vec<_>>();
+
+                if method_overloads.len() == 1 {
+                    return Ok(method_overloads.pop().unwrap());
+                } else {
+                    let mut alts = String::new();
+                    for (_, alt) in &method_overloads {
+                        if !alts.is_empty() {
+                            alts.push_str(", ");
+                        }
+                        alts.push_str(&alt.render());
+                    }
+                    log::error!(
+                        "Ambiguous overloads for {:?}.{:?}: {}",
+                        class_name,
+                        method_name,
+                        alts
+                    );
+                    return Err(Error::AmbiguousMethod(
+                        class_name.clone(),
+                        method_name.clone(),
+                    ));
+                }
+            } else {
+                next_class_name_opt = class.superclass.as_ref();
+            }
+        }
+
+        Err(Error::MissingMember(
+            class_name.clone(),
+            method_name.clone(),
+        ))
+    }
+
+    /// Look for a field of a given name in a class (or its super classes) and return whether it is
+    /// static as well as the descriptor
+    pub fn lookup_field(
+        &self,
+        class_name: &BinaryName,
+        field_name: &UnqualifiedName,
+    ) -> Result<(bool, FieldType), Error> {
+        let mut next_class_name_opt = Some(class_name);
+        while let Some(class_name) = next_class_name_opt.take() {
+            let class = self
+                .classes
+                .get(class_name)
+                .ok_or_else(|| Error::MissingClass(class_name.clone()))?;
+            if let Some(matching_field) = class.fields.get(field_name) {
+                return Ok(matching_field.clone());
+            } else {
+                next_class_name_opt = class.superclass.as_ref();
+            }
+        }
+
+        Err(Error::MissingMember(class_name.clone(), field_name.clone()))
     }
 
     /// Add standard types to the class graph

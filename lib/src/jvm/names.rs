@@ -219,9 +219,12 @@ impl UnqualifiedName {
     pub const CLINIT: Self = Self::name("<clinit>");
 
     // Names we generate
+    pub const BOOTSTRAPMEMORY: Self = Self::name("bootstrapMemory");
     pub const BOOTSTRAPTABLE: Self = Self::name("bootstrapTable");
+    pub const BYTESTOPAGES: Self = Self::name("bytesToPages");
     pub const CALLINDIRECT: Self = Self::name("call_indirect");
     pub const COPYRESIZEDARRAY: Self = Self::name("copyResizedArray");
+    pub const COPYRESIZEDBYTEBUFFER: Self = Self::name("copyResizedByteBuffer");
     pub const EXTERNREFTABLEBOOTSTRAP: Self = Self::name("externrefTableBootstrap");
     pub const F32ABS: Self = Self::name("f32Abs");
     pub const F32CONVERTI32U: Self = Self::name("f32ConvertI32U");
@@ -249,7 +252,10 @@ impl UnqualifiedName {
     pub const I64TRUNCSATF32U: Self = Self::name("i64TruncSatF32U");
     pub const I64TRUNCSATF64U: Self = Self::name("i64TruncSatF64U");
     pub const INTISNEGATIVEONE: Self = Self::name("intIsNegativeOne");
+    pub const MEMORYGROW: Self = Self::name("memory_grow");
+    pub const MEMORYSIZE: Self = Self::name("memory_size");
     pub const NEXTSIZE: Self = Self::name("nextSize");
+    pub const PAGESTOBYTES: Self = Self::name("pagesToBytes");
     pub const TABLECOPY: Self = Self::name("table_copy");
     pub const TABLEFILL: Self = Self::name("table_fill");
     pub const TABLEGET: Self = Self::name("table_get");

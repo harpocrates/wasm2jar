@@ -369,8 +369,8 @@ where
                 self.jvm_code.push_instruction(Instruction::L2I)?;
                 self.visit_memory_store(memarg, &UnqualifiedName::PUTINT, BaseType::Int)?;
             }
-            Operator::MemorySize { .. } => todo!("memory.size"),
-            Operator::MemoryGrow { .. } => todo!("memory.grow"),
+            Operator::MemorySize { mem, .. } => self.visit_memory_size(mem)?, // TODO: what is `mem_byte` for?
+            Operator::MemoryGrow { mem, .. } => self.visit_memory_grow(mem)?,
             Operator::MemoryInit { .. } => todo!("memory.init"),
             Operator::MemoryCopy { .. } => todo!("memory.copy"),
             Operator::MemoryFill { .. } => todo!("memory.fill"),
@@ -1806,6 +1806,60 @@ where
             },
         )?;
         self.jvm_code.push_instruction(Instruction::Pop)?;
+
+        Ok(())
+    }
+
+    /// Visit a memory grow operator
+    fn visit_memory_grow(&mut self, memory_idx: u32) -> Result<(), Error> {
+        let desc = MethodDescriptor {
+            parameters: vec![FieldType::INT],
+            return_type: Some(FieldType::INT),
+        };
+        self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYGROW, desc)?;
+
+        Ok(())
+    }
+
+    /// Visit a memory size operator
+    fn visit_memory_size(&mut self, memory_idx: u32) -> Result<(), Error> {
+        let desc = MethodDescriptor {
+            parameters: vec![],
+            return_type: Some(FieldType::INT),
+        };
+        self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYSIZE, desc)?;
+
+        Ok(())
+    }
+
+    /// Visit a memory operator that is handled by the memory bootstrap method and issue the
+    /// corresponding `invokedynamic` instruction
+    fn visit_memory_operator(
+        &mut self,
+        memory_idx: u32,
+        method_name: &UnqualifiedName,
+        mut method_type: MethodDescriptor,
+    ) -> Result<(), Error> {
+        let memory = &self.wasm_memories[memory_idx as usize];
+
+        // Compute the method descriptor we'll actually be calling
+        method_type.parameters.push(FieldType::object(
+            self.settings.output_full_class_name.clone(),
+        ));
+
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        let bootstrap_method: u16 = self.bootstrap_utilities.get_memory_bootstrap(
+            memory_idx,
+            memory,
+            &self.settings.output_full_class_name,
+            &mut self.utilities,
+            &mut self.jvm_code.constants(),
+        )?;
+
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        self.jvm_code
+            .invoke_dynamic(bootstrap_method, method_name, &method_type)?;
 
         Ok(())
     }

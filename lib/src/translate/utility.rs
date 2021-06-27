@@ -1,4 +1,4 @@
-use super::{AccessMode, CodeBuilderExts, Error, Settings, Table, UtilitiesStrategy};
+use super::{AccessMode, CodeBuilderExts, Error, Memory, Settings, Table, UtilitiesStrategy};
 use crate::jvm::{
     BaseType, BinaryName, BootstrapMethod, BootstrapMethods, BranchInstruction, ClassAccessFlags,
     ClassBuilder, ClassGraph, CompareMode, ConstantIndex, ConstantsPool, Descriptor, FieldType,
@@ -8,6 +8,7 @@ use crate::jvm::{
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use wasmparser::MemoryType;
 
 /// Potential utility methods.
 ///
@@ -104,8 +105,13 @@ pub enum UtilityMethod {
     /// Compute the next size of a table or memory (or -1 if it exceeds a limit)
     NextSize,
 
-    /// Copy an array into a bigger array and fill the rest of the entries with a default entry
+    /// Copy an array into a bigger array and fill the rest of the entries with a default entry.
+    /// Return the length of the smaller array.
     CopyResizedArray,
+
+    /// Copy a bytebuffer into a bigger bytebuffer. Return the size of the smaller bytebuffer, in
+    /// units of memory pages.
+    CopyResizedByteBuffer,
 
     /// Return true if the input is equal to negative one
     IntIsNegativeOne,
@@ -113,8 +119,17 @@ pub enum UtilityMethod {
     /// Fill a range of an object array
     FillArrayRange,
 
+    /// Convert a number of bytes to a number of memory pages
+    BytesToMemoryPages,
+
+    /// Convert a number of memory pages into bytes
+    MemoryPagesToBytes,
+
     /// Bootstrap method for table utilities
     BootstrapTable,
+
+    /// Bootstrap method for memory utilities
+    BootstrapMemory,
 }
 impl UtilityMethod {
     /// Get the method name
@@ -146,9 +161,13 @@ impl UtilityMethod {
             UtilityMethod::I64TruncSatF64U => UnqualifiedName::I64TRUNCSATF64U,
             UtilityMethod::NextSize => UnqualifiedName::NEXTSIZE,
             UtilityMethod::CopyResizedArray => UnqualifiedName::COPYRESIZEDARRAY,
+            UtilityMethod::CopyResizedByteBuffer => UnqualifiedName::COPYRESIZEDBYTEBUFFER,
             UtilityMethod::IntIsNegativeOne => UnqualifiedName::INTISNEGATIVEONE,
             UtilityMethod::FillArrayRange => UnqualifiedName::FILLARRAYRANGE,
+            UtilityMethod::BytesToMemoryPages => UnqualifiedName::BYTESTOPAGES,
+            UtilityMethod::MemoryPagesToBytes => UnqualifiedName::PAGESTOBYTES,
             UtilityMethod::BootstrapTable => UnqualifiedName::BOOTSTRAPTABLE,
+            UtilityMethod::BootstrapMemory => UnqualifiedName::BOOTSTRAPMEMORY,
         }
     }
 
@@ -263,6 +282,13 @@ impl UtilityMethod {
                 ],
                 return_type: Some(FieldType::INT), // old size
             },
+            UtilityMethod::CopyResizedByteBuffer => MethodDescriptor {
+                parameters: vec![
+                    FieldType::object(BinaryName::BYTEBUFFER), // new bigger bytebuffer
+                    FieldType::object(BinaryName::BYTEBUFFER), // old bytebuffer
+                ],
+                return_type: Some(FieldType::INT), // old size (in memory pages)
+            },
             UtilityMethod::IntIsNegativeOne => MethodDescriptor {
                 parameters: vec![FieldType::INT],
                 return_type: Some(FieldType::BOOLEAN),
@@ -276,6 +302,14 @@ impl UtilityMethod {
                 ],
                 return_type: None,
             },
+            UtilityMethod::BytesToMemoryPages => MethodDescriptor {
+                parameters: vec![FieldType::INT],
+                return_type: Some(FieldType::INT),
+            },
+            UtilityMethod::MemoryPagesToBytes => MethodDescriptor {
+                parameters: vec![FieldType::INT],
+                return_type: Some(FieldType::INT),
+            },
             UtilityMethod::BootstrapTable => MethodDescriptor {
                 parameters: vec![
                     FieldType::Ref(RefType::Object(BinaryName::METHODHANDLES_LOOKUP)),
@@ -284,6 +318,20 @@ impl UtilityMethod {
                     FieldType::Ref(RefType::METHODHANDLE), // getter
                     FieldType::Ref(RefType::METHODHANDLE), // setter
                     FieldType::LONG,                       // maximum table size
+                ],
+                return_type: Some(FieldType::Ref(RefType::Object(
+                    BinaryName::CONSTANTCALLSITE,
+                ))),
+            },
+            UtilityMethod::BootstrapMemory => MethodDescriptor {
+                parameters: vec![
+                    FieldType::Ref(RefType::Object(BinaryName::METHODHANDLES_LOOKUP)),
+                    FieldType::Ref(RefType::STRING),
+                    FieldType::Ref(RefType::METHODTYPE),
+                    FieldType::Ref(RefType::METHODHANDLE), // getter
+                    FieldType::Ref(RefType::METHODHANDLE), // setter
+                    FieldType::LONG,                       // maximum memory size
+                                                           // FieldType::BOOLEAN,                    // is shared
                 ],
                 return_type: Some(FieldType::Ref(RefType::Object(
                     BinaryName::CONSTANTCALLSITE,
@@ -421,6 +469,13 @@ impl UtilityClass {
                 self.add_utility_method(UtilityMethod::IntIsNegativeOne)?;
                 self.add_utility_method(UtilityMethod::FillArrayRange)?;
             }
+            UtilityMethod::BootstrapMemory => {
+                self.add_utility_method(UtilityMethod::NextSize)?;
+                self.add_utility_method(UtilityMethod::CopyResizedByteBuffer)?;
+                self.add_utility_method(UtilityMethod::IntIsNegativeOne)?;
+                self.add_utility_method(UtilityMethod::BytesToMemoryPages)?;
+                self.add_utility_method(UtilityMethod::MemoryPagesToBytes)?;
+            }
             _ => (),
         }
 
@@ -460,10 +515,17 @@ impl UtilityClass {
             UtilityMethod::I64TruncSatF64U => Self::generate_i64_trunc_sat_f64_u(code)?,
             UtilityMethod::NextSize => Self::generate_next_size(code)?,
             UtilityMethod::CopyResizedArray => Self::generate_copy_resized_array(code)?,
+            UtilityMethod::CopyResizedByteBuffer => Self::generate_copy_resized_bytebuffer(code)?,
             UtilityMethod::IntIsNegativeOne => Self::generate_int_is_negative_one(code)?,
             UtilityMethod::FillArrayRange => Self::generate_fill_array_range(code)?,
+            UtilityMethod::BytesToMemoryPages => Self::generate_bytes_to_memory_pages(code)?,
+            UtilityMethod::MemoryPagesToBytes => Self::generate_memory_pages_to_bytes(code)?,
+
             UtilityMethod::BootstrapTable => {
                 Self::generate_bootstrap_table(code, &class.class_name())?
+            }
+            UtilityMethod::BootstrapMemory => {
+                Self::generate_bootstrap_memory(code, &class.class_name())?
             }
         }
 
@@ -1209,10 +1271,10 @@ impl UtilityClass {
     /// Analagous to
     ///
     /// ```java
-    /// static int nextSize(int currSize, int growBy, long maxTableSize) {
+    /// static int nextSize(int currSize, int growBy, long maxSize) {
     ///   if (growBy < 0) return -1;
     ///   long proposed = (long) currSize + (long) growBy;
-    ///   if (proposed > maxTableSize) return -1;
+    ///   if (proposed > maxSize) return -1;
     ///   return (int) proposed;
     /// }
     /// ```
@@ -1238,7 +1300,7 @@ impl UtilityClass {
         code.push_instruction(Instruction::I2L)?;
         code.push_instruction(Instruction::LAdd)?;
 
-        // if (proposed >= maxTableSize) return -1;
+        // if (proposed >= maxSize) return -1;
         code.push_instruction(Instruction::Dup2)?;
         code.push_instruction(Instruction::LLoad(max_size_argument))?;
         code.push_instruction(Instruction::LCmp)?;
@@ -1254,7 +1316,7 @@ impl UtilityClass {
         Ok(())
     }
 
-    /// Helper method for copying old data into resizedd new tables
+    /// Helper method for copying old data into resized new tables
     ///
     /// Analagous to
     ///
@@ -1296,6 +1358,43 @@ impl UtilityClass {
         Ok(())
     }
 
+    /// Helper method for copying old data into resized new memories
+    ///
+    /// Analagous to
+    ///
+    /// ```java
+    /// static int copyResizedByteBuffer(ByteBuffer newMemory, ByteBuffer oldMemory) {
+    ///   newMemory.put(oldMemory);
+    ///   return oldMemory.capacity() / 65536;
+    /// }
+    /// ```
+    fn generate_copy_resized_bytebuffer<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        let new_memory_argument = 0;
+        let old_memory_argument = 1;
+
+        // newMemory.put(oldMemory);
+        code.push_instruction(Instruction::ALoad(new_memory_argument))?;
+        code.push_instruction(Instruction::ALoad(old_memory_argument))?;
+        code.invoke_explicit(
+            InvokeType::Virtual,
+            &BinaryName::BYTEBUFFER,
+            &UnqualifiedName::PUT,
+            &MethodDescriptor {
+                parameters: vec![FieldType::object(BinaryName::BYTEBUFFER)],
+                return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+            },
+        )?;
+
+        // return oldMemory.capacity() / 65536;
+        code.push_instruction(Instruction::ALoad(old_memory_argument))?;
+        code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::CAPACITY)?;
+        code.const_int(16)?;
+        code.push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
+        code.push_branch_instruction(BranchInstruction::IReturn)?;
+
+        Ok(())
+    }
+
     /// Helper method for checking if a value is equal to negative 1
     ///
     /// Analagous to
@@ -1304,6 +1403,7 @@ impl UtilityClass {
     /// static boolean intIsNegativeOne(int i) {
     ///   return (i == -1) ? true : false;
     /// }
+    /// ```
     fn generate_int_is_negative_one<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
         let not_equal = code.fresh_label();
 
@@ -1328,7 +1428,7 @@ impl UtilityClass {
     /// static void fillArrayRange(int from, Object filler, int numToFill, Object[] arr) {
     ///   java.util.Arrays.fill(arr, from, Math.addExact(from, numToFill), filler);
     /// }
-
+    /// ```
     fn generate_fill_array_range<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
         code.push_instruction(Instruction::ALoad(3))?;
         code.push_instruction(Instruction::ILoad(0))?;
@@ -1338,6 +1438,44 @@ impl UtilityClass {
         code.push_instruction(Instruction::ALoad(1))?;
         code.invoke(&BinaryName::ARRAYS, &UnqualifiedName::FILL)?;
         code.push_branch_instruction(BranchInstruction::Return)?;
+
+        Ok(())
+    }
+
+    /// Helper method for converting a number of bytes into a number of memory pages. This assumes
+    /// that the bytes are a multiple of the memory page size.
+    ///
+    /// Analagous to
+    ///
+    /// ```java
+    /// static int bytesToMemoryPages(int byteCount) {
+    ///   return byteCount / 65536;
+    /// }
+    /// ```
+    fn generate_bytes_to_memory_pages<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::ILoad(0))?;
+        code.const_int(16)?;
+        code.push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
+        code.push_branch_instruction(BranchInstruction::IReturn)?;
+
+        Ok(())
+    }
+
+    /// Helper method for converting a number of memory pages into a number of bytes. This assumes
+    /// that the number of pages is small enough for bytes to not overflow `int`.
+    ///
+    /// Analagous to
+    ///
+    /// ```java
+    /// static int memoryPagesToBytes(int memoryPages) {
+    ///   return memoryPages * 65536;
+    /// }
+    /// ```
+    fn generate_memory_pages_to_bytes<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        code.push_instruction(Instruction::ILoad(0))?;
+        code.const_int(16)?;
+        code.push_instruction(Instruction::ISh(ShiftType::Left))?;
+        code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         Ok(())
     }
@@ -2150,6 +2288,356 @@ impl UtilityClass {
         Ok(())
     }
 
+    /// Generate the bootstrap method used for memory operators
+    fn generate_bootstrap_memory<B: CodeBuilderExts>(
+        code: &mut B,
+        utility_class_name: &BinaryName,
+    ) -> Result<(), Error> {
+        let memory_size_case = code.fresh_label();
+        let memory_grow_case = code.fresh_label();
+        let memory_fill_case = code.fresh_label();
+        let bad_name_case = code.fresh_label();
+
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::HASHCODE)?;
+        code.push_branch_instruction(BranchInstruction::LookupSwitch {
+            padding: 0,
+            default: bad_name_case,
+            targets: {
+                let mut targets = vec![
+                    (Self::java_hash_string(b"memory_size"), memory_size_case),
+                    (Self::java_hash_string(b"memory_grow"), memory_grow_case),
+                    (Self::java_hash_string(b"memory_fill"), memory_fill_case),
+                ];
+                targets.sort_by_key(|(key, _)| *key);
+                targets
+            },
+        })?;
+
+        // memory.size
+        code.place_label(memory_size_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("memory_size")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_size_memory_case(code, utility_class_name)?;
+
+        // memory.grow
+        code.place_label(memory_grow_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("memory_grow")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_grow_memory_case(code, utility_class_name)?;
+
+        // memory.fill
+        code.place_label(memory_fill_case)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.const_string("memory_fill")?;
+        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
+        Self::generate_fill_memory_case(code, utility_class_name)?;
+
+        // Catch all case
+        let cls_idx = code.get_class_idx(&RefType::Object(BinaryName::ILLEGALARGUMENTEXCEPTION))?;
+        code.place_label(bad_name_case)?;
+        code.push_instruction(Instruction::New(cls_idx))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::ALoad(1))?;
+        code.invoke(
+            &BinaryName::ILLEGALARGUMENTEXCEPTION,
+            &UnqualifiedName::INIT,
+        )?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+
+        Ok(())
+    }
+
+    fn generate_size_memory_case<B: CodeBuilderExts>(
+        code: &mut B,
+        utility_class_name: &BinaryName,
+    ) -> Result<(), Error> {
+        let getter_argument = 3;
+
+        /* MethodHandls.filterReturnValue(                    // (LMyWasmModule;)I
+         *   MethodHandles.filterReturnValue(                 // (LMyWasmModule;)I
+         *     getter,                                        // (LMyWasmModule)LByteBuffer;
+         *     capacityHandle                                 // (LByteBuffer;)I
+         *   ),
+         *   bytesToMemoryPagesHandle                         // (I)I
+         */
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::CAPACITY)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::FILTERRETURNVALUE,
+        )?;
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::BYTESTOPAGES)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::FILTERRETURNVALUE,
+        )?;
+
+        // return new ConstantCallSite(methodhandle);
+        let constant_callsite_cls =
+            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
+        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.push_instruction(Instruction::DupX1)?;
+        code.push_instruction(Instruction::Swap)?;
+        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
+        Ok(())
+    }
+
+    fn generate_grow_memory_case<B: CodeBuilderExts>(
+        code: &mut B,
+        utility_class_name: &BinaryName,
+    ) -> Result<(), Error> {
+        let requested_type_argument = 2; // MethodType
+        let getter_argument = 3; // MethodHandle
+        let setter_argument = 4; // MethodHandle
+        let max_size_argument = 5; // long
+        let module_typ = 7; // Class<?>
+        let create_and_update_new_memory = 8; // MethodHandle
+        let cls_cls_idx = code.get_class_idx(&RefType::CLASS)?;
+
+        // Class<?> moduleType = getter.type().parameterType(0);
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERTYPE)?;
+        code.push_instruction(Instruction::AStore(module_typ))?;
+
+        /* MethodHandle updateEffects = MethodHandles.collectArguments(
+         *   copyResizedByteBuffer,
+         *   0,
+         *   setter
+         * );
+         */
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::COPYRESIZEDBYTEBUFFER)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(setter_argument))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+
+        /* MethodHandle permutedEffects = MethodHandles.permuteArguments(
+         *   updateEffects,
+         *   MethodType.methodType(
+         *     int.class,
+         *     new Class[] {
+         *       ByteBuffer.class, // newMemory
+         *       moduleTyp,        // module
+         *       ByteBuffer.class  // oldMemory
+         *     }
+         *   ),
+         *   new int[] { 1, 0, 0, 2 }
+         * );
+         */
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.const_class(&FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER)))?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::ALoad(module_typ))?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.const_class(&FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER)))?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.push_instruction(Instruction::IConst4)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        for (idx, value) in vec![1, 0, 0, 2].into_iter().enumerate() {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(idx as i32)?;
+            code.const_int(value)?;
+            code.push_instruction(Instruction::IAStore)?;
+        }
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+
+        /* MethodHandle createAndUpdateNewMemory = MethodHandles.collectArguments(
+         *   permutedEffects,
+         *   0,
+         *   MethodHandles.filterReturnValue(pagesToBytes, bytebufferAllocate)
+         * );
+         */
+        code.push_instruction(Instruction::IConst0)?;
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::PAGESTOBYTES)?;
+        code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::ALLOCATE)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::FILTERRETURNVALUE,
+        )?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::AStore(create_and_update_new_memory))?;
+
+        /* MethodHandle createAndUpdateNewMemoryIfValid = MethodHandles.guardWithTest(
+         *   intIsNegativeOneHandle,
+         *   MethodHandles.dropArguments(
+         *     MethodHandles.constant(int.class, -1),
+         *     0,
+         *     createAndUpdateNewMemory.type().parameterArray()
+         *   ),
+         *   createAndUpdateNewMemory
+         * );
+         */
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::INTISNEGATIVEONE)?;
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::IConstM1)?;
+        code.invoke(&BinaryName::INTEGER, &UnqualifiedName::VALUEOF)?;
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::CONSTANT)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(create_and_update_new_memory))?;
+        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERARRAY)?;
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::DROPARGUMENTS)?;
+        code.push_instruction(Instruction::ALoad(create_and_update_new_memory))?;
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::GUARDWITHTEST)?;
+
+        /* MethodHandle checkSizeAndCreate = MethodHandles.collectArguments(
+         *   createAndUpdateNewMemoryIfValid,
+         *   0,
+         *   MethodHandles.collectArguments(
+         *     MethodHandles.collectArguments(
+         *       nextSizeHandle,
+         *       2,
+         *       MethodHandles.constant(long.class, maxSize)
+         *     ),
+         *     0,
+         *     MethodHandles.filterReturnValue(bytebufferCapacity, bytesToPages)
+         *   )
+         * );
+         */
+        code.push_instruction(Instruction::IConst0)?;
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::NEXTSIZE)?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.const_class(&FieldType::LONG)?;
+        code.push_instruction(Instruction::LLoad(max_size_argument))?;
+        code.invoke(&BinaryName::LONG, &UnqualifiedName::VALUEOF)?;
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::CONSTANT)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::CAPACITY)?;
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::BYTESTOPAGES)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::FILTERRETURNVALUE,
+        )?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+
+        /* MethodHandle toReturn = MethodHandles.permuteArguments(
+         *   MethodHandles.collectArguments(
+         *     MethodHandles.permuteArguments(
+         *       checkSizeAndCreate,
+         *       MethodType.methodType(
+         *         int.class,
+         *         new Class[] {
+         *           ByteBuffer.class,  // oldMemory
+         *           moduleTyp,         // module
+         *           int.class          // growBy
+         *         }
+         *       ),
+         *       new int[] { 0, 2, 1, 0 }
+         *     ),
+         *     0,
+         *     getter
+         *   ),
+         *   methodType,
+         *   new int[] { 1, 1, 0 }
+         * );
+         */
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.const_class(&FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER)))?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::ALoad(module_typ))?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst2)?;
+        code.const_class(&FieldType::INT)?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.push_instruction(Instruction::IConst4)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        for (arr_idx, array_elem) in vec![0, 2, 1, 0].into_iter().enumerate() {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(arr_idx as i32)?;
+            code.const_int(array_elem as i32)?;
+            code.push_instruction(Instruction::IAStore)?;
+        }
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+        code.push_instruction(Instruction::ALoad(requested_type_argument))?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.push_instruction(Instruction::NewArray(BaseType::Int))?;
+        for (arr_idx, array_elem) in vec![1, 1, 0].into_iter().enumerate() {
+            code.push_instruction(Instruction::Dup)?;
+            code.const_int(arr_idx as i32)?;
+            code.const_int(array_elem as i32)?;
+            code.push_instruction(Instruction::IAStore)?;
+        }
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::PERMUTEARGUMENTS,
+        )?;
+
+        // return new ConstantCallSite(toReturn);
+        let constant_callsite_cls =
+            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
+        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.push_instruction(Instruction::DupX1)?;
+        code.push_instruction(Instruction::Swap)?;
+        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
+        Ok(())
+    }
+
+    fn generate_fill_memory_case<B: CodeBuilderExts>(
+        code: &mut B,
+        _utility_class_name: &BinaryName,
+    ) -> Result<(), Error> {
+        code.push_instruction(Instruction::AConstNull)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        Ok(())
+    }
+
     /// Compute Java's `.hashCode` on simple ASCII strings
     const fn java_hash_string(string: &[u8]) -> i32 {
         let mut hash: i32 = 0;
@@ -2167,6 +2655,9 @@ impl UtilityClass {
 pub struct BootstrapUtilities {
     /// Mapping from the table index to a bootstrap method index
     table_bootstrap_methods: HashMap<u32, u16>,
+
+    /// Mapping from the memory index to a bootstrap method index
+    memory_bootstrap_methods: HashMap<u32, u16>,
 
     /// Ordered list of bootstrap methods
     bootstrap_methods: Vec<BootstrapMethod>,
@@ -2240,6 +2731,84 @@ impl BootstrapUtilities {
         });
         self.table_bootstrap_methods
             .insert(table_index, bootstrap_index);
+
+        Ok(bootstrap_index)
+    }
+
+    /// Get (and create if missing) a bootstrap method for a given memory
+    ///
+    /// Note: the `constants` argument must correspond to the class in which the bootstrap method
+    /// is going to be _used_ (not where it is defined).
+    pub fn get_memory_bootstrap(
+        &mut self,
+        memory_index: u32,
+        memory: &Memory,
+        memory_field_class: &BinaryName,
+        utilities: &mut UtilityClass,
+        constants: &mut ConstantsPool,
+    ) -> Result<u16, Error> {
+        if let Some(bootstrap) = self.memory_bootstrap_methods.get(&memory_index) {
+            return Ok(*bootstrap);
+        }
+
+        // Ensure the bootstrapping method is defined
+        let _ = utilities.add_utility_method(UtilityMethod::BootstrapMemory)?;
+
+        // Compute a method handle for the bootstrap
+        let memory_bootstrap_handle: ConstantIndex = {
+            let utilities_utf8 = constants.get_utf8(utilities.class_name().as_str())?;
+            let utilities_cls = constants.get_class(utilities_utf8)?;
+            let membootstrap_utf8 =
+                constants.get_utf8(UtilityMethod::BootstrapMemory.name().as_str())?;
+            let membootstrap_typ =
+                constants.get_utf8(UtilityMethod::BootstrapMemory.descriptor().render())?;
+            let membootstrap_nt =
+                constants.get_name_and_type(membootstrap_utf8, membootstrap_typ)?;
+            let membootstrap_method_ref =
+                constants.get_method_ref(utilities_cls, membootstrap_nt, false)?;
+            constants.get_method_handle(HandleKind::InvokeStatic, membootstrap_method_ref.into())?
+        };
+
+        // Compute the getter and setter constant arguments for the bootstrap method
+        let memory_field_typ = FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER));
+        let memory_fieldref: ConstantIndex = {
+            let class_utf8 = constants.get_utf8(memory_field_class.as_str())?;
+            let class_idx = constants.get_class(class_utf8)?;
+            let field_utf8 = constants.get_utf8(memory.field_name.as_str())?;
+            let desc_utf8 = constants.get_utf8(memory_field_typ.render())?;
+            let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
+            constants
+                .get_field_ref(class_idx, name_and_type_idx)?
+                .into()
+        };
+        let memory_get_handle =
+            constants.get_method_handle(HandleKind::GetField, memory_fieldref)?;
+        let memory_set_handle =
+            constants.get_method_handle(HandleKind::PutField, memory_fieldref)?;
+
+        let (memory_maximum, _shared) = match memory.memory_type {
+            MemoryType::M32 { limits, shared } => (limits.maximum, shared),
+            MemoryType::M64 { .. } => todo!("wasm64 memory"),
+        };
+
+        /* Compute the maximum memory size based on two constraints:
+         *
+         *   - the JVM's inherent limit of using signed 32-bit integers for bytebuffer indices
+         *   - a declared constraint in the WASM module
+         */
+        let max_memory_size = constants.get_long(i64::min(
+            (i32::MAX as i64) / (u16::MAX as i64),
+            memory_maximum.unwrap_or(u32::MAX) as i64,
+        ))?;
+
+        // Generate the bootstrap attribute and return the index
+        let bootstrap_index = self.bootstrap_methods.len() as u16; // TODO: detect overflow
+        self.bootstrap_methods.push(BootstrapMethod {
+            bootstrap_method: memory_bootstrap_handle,
+            bootstrap_arguments: vec![memory_get_handle, memory_set_handle, max_memory_size],
+        });
+        self.memory_bootstrap_methods
+            .insert(memory_index, bootstrap_index);
 
         Ok(bootstrap_index)
     }

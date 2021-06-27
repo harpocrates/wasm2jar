@@ -52,7 +52,7 @@ pub enum Error {
     ),
 
     MissingClass(BinaryName),
-    MissingMember(UnqualifiedName),
+    MissingMember(BinaryName, UnqualifiedName),
     AmbiguousMethod(BinaryName, UnqualifiedName),
 }
 

@@ -241,59 +241,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         class_name: &BinaryName,
         method_name: &UnqualifiedName,
     ) -> Result<(), Error> {
-        // Query the class graph for the descriptor
-        let (invoke_typ, descriptor): (InvokeType, MethodDescriptor) = {
-            let class_graph = self.class_graph();
-            let class = class_graph
-                .classes
-                .get(class_name)
-                .ok_or_else(|| Error::MissingClass(class_name.clone()))?;
-            let is_interface = class.is_interface;
-            let mut method_overloads = class
-                .methods
-                .get(method_name)
-                .ok_or_else(|| Error::MissingMember(method_name.clone()))?
-                .iter()
-                .map(|(desc, is_static)| {
-                    let typ = if *is_static {
-                        InvokeType::Static
-                    } else if method_name == &UnqualifiedName::INIT
-                        || method_name == &UnqualifiedName::CLINIT
-                    {
-                        InvokeType::Special
-                    } else if is_interface {
-                        let n = desc.parameter_length(true) as u8;
-                        InvokeType::Interface(n)
-                    } else {
-                        InvokeType::Virtual
-                    };
-                    (typ, desc.clone())
-                })
-                .collect::<Vec<_>>();
-
-            if method_overloads.len() == 1 {
-                method_overloads.pop().unwrap()
-            } else {
-                let mut alts = String::new();
-                for (_, alt) in &method_overloads {
-                    if !alts.is_empty() {
-                        alts.push_str(", ");
-                    }
-                    alts.push_str(&alt.render());
-                }
-                log::error!(
-                    "Ambiguous overloads for {:?}.{:?}: {}",
-                    class_name,
-                    method_name,
-                    alts
-                );
-                return Err(Error::AmbiguousMethod(
-                    class_name.clone(),
-                    method_name.clone(),
-                ));
-            }
-        };
-
+        let (invoke_typ, descriptor) = self.class_graph().lookup_method(class_name, method_name)?;
         self.const_methodhandle_explicit(invoke_typ, class_name, method_name, &descriptor)
     }
 
@@ -388,67 +336,15 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     ///
     /// There cannot be any ambiguity about which method this is when using this helper (otherwise
     /// an `Error::AmbiguousMethod` will be returned).
+    ///
+    /// TODO: support calling a method from a superclass off the child class name (eg.
+    /// `ByteBuffer.capacity` which is actually defined at `Buffer.capacity`)
     fn invoke(
         &mut self,
         class_name: &BinaryName,
         method_name: &UnqualifiedName,
     ) -> Result<(), Error> {
-        let class_name = class_name.into();
-        let method_name = method_name.into();
-
-        // Query the class graph for the descriptor
-        let (invoke_typ, descriptor): (InvokeType, MethodDescriptor) = {
-            let class_graph = self.class_graph();
-            let class = class_graph
-                .classes
-                .get(class_name)
-                .ok_or_else(|| Error::MissingClass(class_name.clone()))?;
-            let is_interface = class.is_interface;
-            let mut method_overloads = class
-                .methods
-                .get(method_name)
-                .ok_or_else(|| Error::MissingMember(method_name.clone()))?
-                .iter()
-                .map(|(desc, is_static)| {
-                    let typ = if *is_static {
-                        InvokeType::Static
-                    } else if method_name == &UnqualifiedName::INIT
-                        || method_name == &UnqualifiedName::CLINIT
-                    {
-                        InvokeType::Special
-                    } else if is_interface {
-                        let n = desc.parameter_length(true) as u8;
-                        InvokeType::Interface(n)
-                    } else {
-                        InvokeType::Virtual
-                    };
-                    (typ, desc.clone())
-                })
-                .collect::<Vec<_>>();
-
-            if method_overloads.len() == 1 {
-                method_overloads.pop().unwrap()
-            } else {
-                let mut alts = String::new();
-                for (_, alt) in &method_overloads {
-                    if !alts.is_empty() {
-                        alts.push_str(", ");
-                    }
-                    alts.push_str(&alt.render());
-                }
-                log::error!(
-                    "Ambiguous overloads for {:?}.{:?}: {}",
-                    class_name,
-                    method_name,
-                    alts
-                );
-                return Err(Error::AmbiguousMethod(
-                    class_name.clone(),
-                    method_name.clone(),
-                ));
-            }
-        };
-
+        let (invoke_typ, descriptor) = self.class_graph().lookup_method(class_name, method_name)?;
         self.invoke_explicit(invoke_typ, class_name, method_name, &descriptor)
     }
 
@@ -506,19 +402,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         field_name: &UnqualifiedName,
         access_mode: AccessMode,
     ) -> Result<(), Error> {
-        // Query the class graph for the descriptor
-        let (is_static, descriptor): (bool, FieldType) = {
-            let class_graph = self.class_graph();
-            class_graph
-                .classes
-                .get(class_name)
-                .ok_or_else(|| Error::MissingClass(class_name.clone()))?
-                .fields
-                .get(field_name)
-                .ok_or_else(|| Error::MissingMember(field_name.clone()))?
-                .clone()
-        };
-
+        let (is_static, descriptor) = self.class_graph().lookup_field(class_name, field_name)?;
         self.access_field_explicit(is_static, access_mode, class_name, field_name, &descriptor)
     }
 

@@ -1379,6 +1379,7 @@ impl UtilityClass {
     ///
     /// ```java
     /// static int copyResizedByteBuffer(ByteBuffer newMemory, ByteBuffer oldMemory) {
+    ///   oldMemory.position(0);
     ///   newMemory.put(oldMemory);
     ///   return oldMemory.capacity() / 65536;
     /// }
@@ -1386,6 +1387,12 @@ impl UtilityClass {
     fn generate_copy_resized_bytebuffer<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
         let new_memory_argument = 0;
         let old_memory_argument = 1;
+
+        // oldMemory.position(0);
+        code.push_instruction(Instruction::ALoad(old_memory_argument))?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::POSITION)?;
+        code.push_instruction(Instruction::Pop)?;
 
         // newMemory.put(oldMemory);
         code.push_instruction(Instruction::ALoad(new_memory_argument))?;
@@ -2015,6 +2022,7 @@ impl UtilityClass {
         Ok(())
     }
 
+    // TODO: avoid allocating a new table for `table.grow 0`
     fn generate_grow_table_case<B: CodeBuilderExts>(
         code: &mut B,
         utility_class_name: &BinaryName,
@@ -2484,6 +2492,7 @@ impl UtilityClass {
         Ok(())
     }
 
+    // TODO: avoid allocating a new memory for `memory.grow 0`
     fn generate_grow_memory_case<B: CodeBuilderExts>(
         code: &mut B,
         utility_class_name: &BinaryName,
@@ -2495,6 +2504,7 @@ impl UtilityClass {
         let module_typ = 7; // Class<?>
         let create_and_update_new_memory = 8; // MethodHandle
         let cls_cls_idx = code.get_class_idx(&RefType::CLASS)?;
+        let object_cls_idx = code.get_class_idx(&RefType::OBJECT)?;
 
         // Class<?> moduleType = getter.type().parameterType(0);
         code.push_instruction(Instruction::ALoad(getter_argument))?;
@@ -2562,12 +2572,28 @@ impl UtilityClass {
         /* MethodHandle createAndUpdateNewMemory = MethodHandles.collectArguments(
          *   permutedEffects,
          *   0,
-         *   MethodHandles.filterReturnValue(pagesToBytes, bytebufferAllocate)
+         *   MethodHandles.filterReturnValue(
+         *     MethodHandles.filterReturnValue(pagesToBytes, bytebufferAllocate),
+         *     MethodHandles.insertArguments(byteBufferByteOrder, 1, new Object[] { ByteOrder.LITTLE_ENDIAN })
+         *   )
          * );
          */
         code.push_instruction(Instruction::IConst0)?;
         code.const_methodhandle(utility_class_name, &UnqualifiedName::PAGESTOBYTES)?;
         code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::ALLOCATE)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::FILTERRETURNVALUE,
+        )?;
+        code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::ORDER)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::IConst1)?;
+        code.push_instruction(Instruction::ANewArray(object_cls_idx))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_instruction(Instruction::IConst0)?;
+        code.access_field(&BinaryName::BYTEORDER, &UnqualifiedName::LITTLEENDIAN, AccessMode::Read)?;
+        code.push_instruction(Instruction::AAStore)?;
+        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::INSERTARGUMENTS)?;
         code.invoke(
             &BinaryName::METHODHANDLES,
             &UnqualifiedName::FILTERRETURNVALUE,

@@ -172,6 +172,7 @@ impl UnqualifiedName {
     pub const GETTARGET: Self = Self::name("getTarget");
     pub const GUARDWITHTEST: Self = Self::name("guardWithTest");
     pub const HASHCODE: Self = Self::name("hashCode");
+    pub const INSERTARGUMENTS: Self = Self::name("insertArguments");
     pub const INTBITSTOFLOAT: Self = Self::name("intBitsToFloat");
     pub const INTVALUE: Self = Self::name("intValue");
     pub const LENGTH: Self = Self::name("length");

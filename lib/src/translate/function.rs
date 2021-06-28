@@ -364,7 +364,7 @@ where
                 self.visit_memory_store(memarg, &UnqualifiedName::PUTSHORT, BaseType::Short)?;
             }
             Operator::I64Store32 { memarg } => {
-                self.jvm_code.const_long(0xFFFFFFF)?;
+                self.jvm_code.const_long(0xFFFFFFFF)?;
                 self.jvm_code.push_instruction(Instruction::LAnd)?;
                 self.jvm_code.push_instruction(Instruction::L2I)?;
                 self.visit_memory_store(memarg, &UnqualifiedName::PUTINT, BaseType::Int)?;

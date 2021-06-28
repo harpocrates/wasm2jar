@@ -44,6 +44,7 @@ impl JavaRenamer {
             Self::RESERVED_IDENTIFIERS
                 .iter()
                 .copied()
+                .chain(std::iter::once(""))
                 .map(String::from)
                 .collect(),
         )

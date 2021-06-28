@@ -388,6 +388,18 @@ impl ClassGraph {
             );
             java_lang_invoke_methodhandles.add_method(
                 true,
+                UnqualifiedName::INSERTARGUMENTS,
+                MethodDescriptor {
+                    parameters: vec![
+                        FieldType::Ref(RefType::METHODHANDLE),
+                        FieldType::INT,
+                        FieldType::array(FieldType::OBJECT),
+                    ],
+                    return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
+                },
+            );
+            java_lang_invoke_methodhandles.add_method(
+                true,
                 UnqualifiedName::EXACTINVOKER,
                 MethodDescriptor {
                     parameters: vec![FieldType::Ref(RefType::METHODTYPE)],

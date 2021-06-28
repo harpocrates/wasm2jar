@@ -235,6 +235,7 @@ impl UnqualifiedName {
     pub const F64CONVERTI64U: Self = Self::name("f64ConvertI64U");
     pub const F64TRUNC: Self = Self::name("f64Trunc");
     pub const FILLARRAYRANGE: Self = Self::name("fillArrayRange");
+    pub const FILLBYTEBUFFERRANGE: Self = Self::name("fillByteBufferRange");
     pub const FUNCREFTABLEBOOTSTRAP: Self = Self::name("funcrefTableBootstrap");
     pub const I32DIVS: Self = Self::name("i32DivS");
     pub const I32TRUNCF32S: Self = Self::name("i32TruncF32S");
@@ -252,6 +253,7 @@ impl UnqualifiedName {
     pub const I64TRUNCSATF32U: Self = Self::name("i64TruncSatF32U");
     pub const I64TRUNCSATF64U: Self = Self::name("i64TruncSatF64U");
     pub const INTISNEGATIVEONE: Self = Self::name("intIsNegativeOne");
+    pub const MEMORYFILL: Self = Self::name("memory_fill");
     pub const MEMORYGROW: Self = Self::name("memory_grow");
     pub const MEMORYSIZE: Self = Self::name("memory_size");
     pub const NEXTSIZE: Self = Self::name("nextSize");

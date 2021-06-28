@@ -119,6 +119,9 @@ pub enum UtilityMethod {
     /// Fill a range of an object array
     FillArrayRange,
 
+    /// Fill a range of a bytebuffer
+    FillByteBufferRange,
+
     /// Convert a number of bytes to a number of memory pages
     BytesToMemoryPages,
 
@@ -164,6 +167,7 @@ impl UtilityMethod {
             UtilityMethod::CopyResizedByteBuffer => UnqualifiedName::COPYRESIZEDBYTEBUFFER,
             UtilityMethod::IntIsNegativeOne => UnqualifiedName::INTISNEGATIVEONE,
             UtilityMethod::FillArrayRange => UnqualifiedName::FILLARRAYRANGE,
+            UtilityMethod::FillByteBufferRange => UnqualifiedName::FILLBYTEBUFFERRANGE,
             UtilityMethod::BytesToMemoryPages => UnqualifiedName::BYTESTOPAGES,
             UtilityMethod::MemoryPagesToBytes => UnqualifiedName::PAGESTOBYTES,
             UtilityMethod::BootstrapTable => UnqualifiedName::BOOTSTRAPTABLE,
@@ -295,10 +299,19 @@ impl UtilityMethod {
             },
             UtilityMethod::FillArrayRange => MethodDescriptor {
                 parameters: vec![
-                    FieldType::INT,
-                    FieldType::OBJECT,
-                    FieldType::INT,
+                    FieldType::INT,    // start index (inclusive)
+                    FieldType::OBJECT, // filler value
+                    FieldType::INT,    // how many entries to fill
                     FieldType::array(FieldType::OBJECT),
+                ],
+                return_type: None,
+            },
+            UtilityMethod::FillByteBufferRange => MethodDescriptor {
+                parameters: vec![
+                    FieldType::INT, // start index (inclusive)
+                    FieldType::INT, // filler value (as byte)
+                    FieldType::INT, // how many entries to fill
+                    FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER)),
                 ],
                 return_type: None,
             },
@@ -473,6 +486,7 @@ impl UtilityClass {
                 self.add_utility_method(UtilityMethod::NextSize)?;
                 self.add_utility_method(UtilityMethod::CopyResizedByteBuffer)?;
                 self.add_utility_method(UtilityMethod::IntIsNegativeOne)?;
+                self.add_utility_method(UtilityMethod::FillByteBufferRange)?;
                 self.add_utility_method(UtilityMethod::BytesToMemoryPages)?;
                 self.add_utility_method(UtilityMethod::MemoryPagesToBytes)?;
             }
@@ -518,6 +532,7 @@ impl UtilityClass {
             UtilityMethod::CopyResizedByteBuffer => Self::generate_copy_resized_bytebuffer(code)?,
             UtilityMethod::IntIsNegativeOne => Self::generate_int_is_negative_one(code)?,
             UtilityMethod::FillArrayRange => Self::generate_fill_array_range(code)?,
+            UtilityMethod::FillByteBufferRange => Self::generate_fill_bytebuffer_range(code)?,
             UtilityMethod::BytesToMemoryPages => Self::generate_bytes_to_memory_pages(code)?,
             UtilityMethod::MemoryPagesToBytes => Self::generate_memory_pages_to_bytes(code)?,
 
@@ -1420,7 +1435,7 @@ impl UtilityClass {
         Ok(())
     }
 
-    /// Helper method for checking if a value is equal to negative 1
+    /// Helper method for filling a range of values in an array
     ///
     /// Analagous to
     ///
@@ -1437,6 +1452,85 @@ impl UtilityClass {
         code.invoke(&BinaryName::MATH, &UnqualifiedName::ADDEXACT)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.invoke(&BinaryName::ARRAYS, &UnqualifiedName::FILL)?;
+        code.push_branch_instruction(BranchInstruction::Return)?;
+
+        Ok(())
+    }
+
+    /// Helper method for filling a range of bytes in a bytebuffer
+    ///
+    /// Analagous to
+    ///
+    /// ```java
+    /// static void fillByteBufferRange(int from, int filler, int numToFill, ByteBuffer buf) {
+    ///   if (numToFill < 0) {
+    ///     throw new IllegalArgumentException("memory.fill: negative number of bytes");
+    ///   }
+    ///   buf.position(from);
+    ///   byte fillerByte = (byte) filler;
+    ///   while (numToFill > 0) {
+    ///     buf.put(fillerByte);
+    ///     numToFill--;
+    ///   }
+    /// }
+    /// ```
+    fn generate_fill_bytebuffer_range<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+        let ok_case = code.fresh_label();
+
+        // if (numToFill < 0) {
+        code.push_instruction(Instruction::ILoad(2))?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::GE, ok_case, ()))?;
+
+        // throw new IllegalArgumentException("memory.fill: negative number of bytes");
+        let cls_idx = code.get_class_idx(&RefType::Object(BinaryName::ILLEGALARGUMENTEXCEPTION))?;
+        code.push_instruction(Instruction::New(cls_idx))?;
+        code.push_instruction(Instruction::Dup)?;
+        code.const_string("memory.fill: negative number of bytes")?;
+        code.invoke(
+            &BinaryName::ILLEGALARGUMENTEXCEPTION,
+            &UnqualifiedName::INIT,
+        )?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        code.place_label(ok_case)?;
+
+        // buf.position(from);
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.push_instruction(Instruction::ILoad(0))?;
+        code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::POSITION)?;
+        code.push_instruction(Instruction::Pop)?;
+
+        // byte fillerByte = (byte) filler;
+        code.push_instruction(Instruction::ILoad(1))?;
+        code.push_instruction(Instruction::I2B)?;
+        code.push_instruction(Instruction::IStore(1))?;
+
+        let loop_entry = code.fresh_label();
+        let loop_exit = code.fresh_label();
+
+        // while (numToFill > 0) {
+        code.place_label(loop_entry)?;
+        code.push_instruction(Instruction::ILoad(2))?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::LE, loop_exit, ()))?;
+
+        // buf.put(fillerByte);
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.push_instruction(Instruction::ILoad(1))?;
+        code.invoke_explicit(
+            InvokeType::Virtual,
+            &BinaryName::BYTEBUFFER,
+            &UnqualifiedName::PUT,
+            &MethodDescriptor {
+                parameters: vec![FieldType::BYTE],
+                return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
+            },
+        )?;
+        code.push_instruction(Instruction::Pop)?;
+
+        // numToFill--;
+        code.push_instruction(Instruction::IInc(2, -1))?;
+
+        code.push_branch_instruction(BranchInstruction::Goto(loop_entry))?;
+        code.place_label(loop_exit)?;
         code.push_branch_instruction(BranchInstruction::Return)?;
 
         Ok(())
@@ -2631,10 +2725,33 @@ impl UtilityClass {
 
     fn generate_fill_memory_case<B: CodeBuilderExts>(
         code: &mut B,
-        _utility_class_name: &BinaryName,
+        utility_class_name: &BinaryName,
     ) -> Result<(), Error> {
-        code.push_instruction(Instruction::AConstNull)?;
-        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        let getter_argument = 3; // MethodHandle
+
+        /* MethodHandle fillEffects = MethodHandles.collectArguments(
+         *   fillByteBufferRange,
+         *   3,
+         *   getter
+         * );
+         */
+        code.const_methodhandle(utility_class_name, &UnqualifiedName::FILLBYTEBUFFERRANGE)?;
+        code.push_instruction(Instruction::IConst3)?;
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::COLLECTARGUMENTS,
+        )?;
+
+        // return new ConstantCallSite(toReturn);
+        let constant_callsite_cls =
+            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
+        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.push_instruction(Instruction::DupX1)?;
+        code.push_instruction(Instruction::Swap)?;
+        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
         Ok(())
     }
 

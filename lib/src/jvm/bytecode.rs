@@ -273,7 +273,7 @@ impl Width for Instruction {
           | Instruction::FStore(4..=255)
           | Instruction::DStore(4..=255)
           | Instruction::AStore(4..=255)
-          | Instruction::Ldc(ConstantIndex(0..=256))
+          | Instruction::Ldc(ConstantIndex(0..=255))
           | Instruction::NewArray(_)
           => 2,
 

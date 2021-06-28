@@ -373,7 +373,7 @@ where
             Operator::MemoryGrow { mem, .. } => self.visit_memory_grow(mem)?,
             Operator::MemoryInit { .. } => todo!("memory.init"),
             Operator::MemoryCopy { .. } => todo!("memory.copy"),
-            Operator::MemoryFill { .. } => todo!("memory.fill"),
+            Operator::MemoryFill { mem } => self.visit_memory_fill(mem)?,
             Operator::DataDrop { .. } => todo!("data.drop"),
             Operator::ElemDrop { .. } => todo!("elem.drop"),
 
@@ -1817,6 +1817,17 @@ where
             return_type: Some(FieldType::INT),
         };
         self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYGROW, desc)?;
+
+        Ok(())
+    }
+
+    /// Visit a memory fill operator
+    fn visit_memory_fill(&mut self, memory_idx: u32) -> Result<(), Error> {
+        let desc = MethodDescriptor {
+            parameters: vec![FieldType::INT, FieldType::INT, FieldType::INT],
+            return_type: None,
+        };
+        self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYFILL, desc)?;
 
         Ok(())
     }

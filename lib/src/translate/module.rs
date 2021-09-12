@@ -15,7 +15,7 @@ use std::rc::Rc;
 use wasmparser::{
     Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader, Export,
     ExportSectionReader, ExternalKind, FunctionBody, GlobalSectionReader, Import,
-    ImportSectionReader, InitExpr, MemorySectionReader, MemoryType, Operator, Parser, Payload,
+    ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
     TableSectionReader, Validator,
 };
 
@@ -192,7 +192,7 @@ impl<'a> ModuleTranslator<'a> {
             Payload::InstanceSection(section) => self.validator.instance_section(&section)?,
             Payload::TableSection(section) => self.visit_tables(section)?,
             Payload::MemorySection(section) => self.visit_memories(section)?,
-            Payload::EventSection(section) => self.validator.event_section(&section)?,
+            Payload::TagSection(section) => self.validator.tag_section(&section)?,
             Payload::GlobalSection(section) => self.visit_globals(section)?,
             Payload::ExportSection(section) => self.visit_exports(section)?,
             Payload::FunctionSection(section) => self.validator.function_section(&section)?,
@@ -340,7 +340,8 @@ impl<'a> ModuleTranslator<'a> {
                 origin,
                 field_name: name,
                 table_type: TableType::from_general(table_type.element_type)?,
-                limits: table_type.limits,
+                initial: table_type.initial,
+                maximum: table_type.maximum,
             }),
 
             ImportSectionEntryType::Global(global_type) => {
@@ -355,7 +356,7 @@ impl<'a> ModuleTranslator<'a> {
 
             ImportSectionEntryType::Function(_) => todo!("import function"),
             ImportSectionEntryType::Memory(_) => todo!("import memory"),
-            ImportSectionEntryType::Event(_) => todo!("import event"),
+            ImportSectionEntryType::Tag(_) => todo!("import tag"),
             ImportSectionEntryType::Module(_) => todo!("import module"),
             ImportSectionEntryType::Instance(_) => todo!("import instance"),
         }
@@ -380,7 +381,8 @@ impl<'a> ModuleTranslator<'a> {
                 origin,
                 field_name,
                 table_type: TableType::from_general(table.element_type)?,
-                limits: table.limits,
+                initial: table.initial,
+                maximum: table.maximum,
             });
         }
         Ok(())
@@ -430,18 +432,19 @@ impl<'a> ModuleTranslator<'a> {
     /// Generate the fields associated with memories
     fn generate_memory_fields(&mut self) -> Result<(), Error> {
         for memory in &self.memories {
-            match memory.memory_type {
-                MemoryType::M64 { .. } => todo!("64-bit memory"),
-                _ if !memory.origin.is_internal() => todo!("exported/imported memories"),
-                MemoryType::M32 { shared: true, .. } => todo!("shared memory"),
-                MemoryType::M32 { shared: false, .. } => {
-                    // TODO: if the limits on the memory constrain it to never grow, make the field final
-                    self.class.add_field(
-                        FieldAccessFlags::PRIVATE,
-                        memory.field_name.clone(),
-                        RefType::Object(BinaryName::BYTEBUFFER).render(),
-                    )?;
-                }
+            if !memory.origin.is_internal() {
+                todo!("exported/imported memories")
+            } else if memory.memory_type.shared {
+                todo!("shared memory")
+            } else if memory.memory_type.memory64 {
+                todo!("64-bit memory")
+            } else {
+                // TODO: if the limits on the memory constrain it to never grow, make the field final
+                self.class.add_field(
+                    FieldAccessFlags::PRIVATE,
+                    memory.field_name.clone(),
+                    RefType::Object(BinaryName::BYTEBUFFER).render(),
+                )?;
             }
         }
 
@@ -601,7 +604,7 @@ impl<'a> ModuleTranslator<'a> {
             if let None = table.origin.imported {
                 if !table.origin.exported {
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.const_int(table.limits.initial as i32)?; // TODO: error if `u32` is too big
+                    jvm_code.const_int(table.initial as i32)?; // TODO: error if `u32` is too big
                     jvm_code.new_ref_array(&table.table_type.ref_type())?;
                     jvm_code.access_field(
                         &self.settings.output_full_class_name,
@@ -617,9 +620,12 @@ impl<'a> ModuleTranslator<'a> {
         // Initialize memory
         for memory in &self.memories {
             if memory.origin.is_internal() {
-                if let MemoryType::M32 { limits, .. } = memory.memory_type {
+                if memory.memory_type.memory64 {
+                    todo!("64-bit memory")
+                } else {
+                    let initial: u64 = memory.memory_type.initial * 65536;
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.const_int((limits.initial * 65536) as i32)?; // TODO: error if too big
+                    jvm_code.const_int(initial as i32)?; // TODO: error if too big
                     jvm_code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::ALLOCATE)?; // TODO: add option for allocate direct
                     jvm_code.access_field(
                         &BinaryName::BYTEORDER,
@@ -632,8 +638,6 @@ impl<'a> ModuleTranslator<'a> {
                         &memory.field_name,
                         AccessMode::Write,
                     )?;
-                } else {
-                    todo!()
                 }
             }
         }

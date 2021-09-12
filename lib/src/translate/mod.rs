@@ -16,7 +16,7 @@ pub use utility::*;
 
 use crate::jvm::UnqualifiedName;
 use crate::wasm::{StackType, TableType};
-use wasmparser::{ElementItem, ElementKind, FuncType, InitExpr, MemoryType, ResizableLimits};
+use wasmparser::{ElementItem, ElementKind, FuncType, InitExpr, MemoryType};
 
 /// Visibility of different importable/exportable entities in the WASM module
 #[derive(Debug)]
@@ -57,8 +57,11 @@ pub struct Table {
     /// Table type
     pub table_type: TableType,
 
-    /// Table limits
-    pub limits: ResizableLimits,
+    /// Table initial size
+    pub initial: u32,
+
+    /// Table maximum size
+    pub maximum: Option<u32>,
 }
 
 #[derive(Debug)]

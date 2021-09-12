@@ -135,7 +135,6 @@ impl<'a> TestHarness<'a> {
                 span,
             } => {
                 self.end_java_harness(false)?;
-                let module = QuoteModule::Module(module);
                 self.visit_module_expecting_error(module, span, message, true)?;
             }
 
@@ -334,6 +333,9 @@ impl<'a> TestHarness<'a> {
                 return Err(TestError::IncompleteHarness("assert_unlinkable"))
             }
             WastDirective::Register { .. } => return Err(TestError::IncompleteHarness("register")),
+            WastDirective::AssertException { .. } => {
+                return Err(TestError::IncompleteHarness("assert_exception"))
+            }
         }
 
         Ok(())

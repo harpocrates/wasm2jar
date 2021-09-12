@@ -8,7 +8,6 @@ use crate::jvm::{
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use wasmparser::MemoryType;
 
 /// Potential utility methods.
 ///
@@ -2591,9 +2590,16 @@ impl UtilityClass {
         code.push_instruction(Instruction::ANewArray(object_cls_idx))?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst0)?;
-        code.access_field(&BinaryName::BYTEORDER, &UnqualifiedName::LITTLEENDIAN, AccessMode::Read)?;
+        code.access_field(
+            &BinaryName::BYTEORDER,
+            &UnqualifiedName::LITTLEENDIAN,
+            AccessMode::Read,
+        )?;
         code.push_instruction(Instruction::AAStore)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::INSERTARGUMENTS)?;
+        code.invoke(
+            &BinaryName::METHODHANDLES,
+            &UnqualifiedName::INSERTARGUMENTS,
+        )?;
         code.invoke(
             &BinaryName::METHODHANDLES,
             &UnqualifiedName::FILTERRETURNVALUE,
@@ -2863,7 +2869,7 @@ impl BootstrapUtilities {
          */
         let max_table_size = constants.get_long(i64::min(
             i32::MAX as i64,
-            table.limits.maximum.unwrap_or(u32::MAX) as i64,
+            table.maximum.unwrap_or(u32::MAX) as i64,
         ))?;
 
         // Generate the bootstrap attribute and return the index
@@ -2929,10 +2935,7 @@ impl BootstrapUtilities {
         let memory_set_handle =
             constants.get_method_handle(HandleKind::PutField, memory_fieldref)?;
 
-        let (memory_maximum, _shared) = match memory.memory_type {
-            MemoryType::M32 { limits, shared } => (limits.maximum, shared),
-            MemoryType::M64 { .. } => todo!("wasm64 memory"),
-        };
+        let memory_maximum = memory.memory_type.maximum;
 
         /* Compute the maximum memory size based on two constraints:
          *
@@ -2941,7 +2944,7 @@ impl BootstrapUtilities {
          */
         let max_memory_size = constants.get_long(i64::min(
             (i32::MAX as i64) / (u16::MAX as i64),
-            memory_maximum.unwrap_or(u32::MAX) as i64,
+            memory_maximum.unwrap_or(u32::MAX as u64) as i64,
         ))?;
 
         // Generate the bootstrap attribute and return the index

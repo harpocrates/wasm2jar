@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 wasm2jar = { path = "../../lib" }
-wast = "36.0.0"
+wast = "38.0.0"
 clap = "2.33"
 log = "0.4"
 env_logger = "0.8"

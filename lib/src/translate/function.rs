@@ -1152,13 +1152,7 @@ where
         // If there are no cases apart from the default, we cannot use `tableswitch`
         if table.is_empty() {
             self.jvm_code.push_instruction(Instruction::Pop)?;
-            self.visit_branch(
-                table
-                    .targets()
-                    .next()
-                    .expect("at least one default branch")?
-                    .0,
-            )?;
+            self.visit_branch(table.default())?;
             return Ok(());
         }
 
@@ -1175,8 +1169,8 @@ where
          */
         let mut pending_branch_blocks = HashMap::new();
 
-        for target in table.targets() {
-            let (relative_depth, _is_default) = target?;
+        for target in table.targets().chain(std::iter::once(Ok(table.default()))) {
+            let relative_depth = target?;
             let (req_pops, ret_values, target_lbl_opt) = self.prepare_for_branch(relative_depth);
 
             // If there is no stack to unwind, go straight to the final target label

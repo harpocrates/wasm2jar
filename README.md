@@ -1,7 +1,7 @@
 # Translate WASM modules into JVM class files
 
 This is a library and CLI for converting any single WASM module into several JVM
-class files.
+class files (usually packaged into a JAR).
 
 ```
 $ cargo run --bin wasm2jar foo.wasm --output-class 'me/Foo' --jar foo.jar

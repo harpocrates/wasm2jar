@@ -22,7 +22,7 @@ is also a way to run against a bunch of `.wast` files at once. This assumes that
 
 ```bash
 $ cargo run --bin wast2jar -- tests/loop.wast   # Run the tests in `tests/loop.wast`
-$ cargo run --bin wast2jar -- tests/loop.wast   # Run all `*.wast` tests in `tests`
+$ cargo run --bin wast2jar -- tests             # Run all `*.wast` tests in `tests`
 ```
 
 ## Debugging

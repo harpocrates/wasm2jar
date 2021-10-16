@@ -46,6 +46,7 @@ Memory is represented using `java.nio.ByteBuffer`. This is because:
 
   - `ByteBuffer` allows unaligned access
   - `ByteBuffer` has low-overhead access (see direct bytebuffers)
+  - `ByteBuffer` has good `VarHandle` for more access modes (eg. atomic)
 
 Problem: `ByteBuffer`s are at most (2^32 - 1) elements , so are at most (2^32 - 1) elements
          OTOH, WASM tables can be up to 2^32 elements long.
@@ -54,8 +55,8 @@ Problem: `ByteBuffer`s are at most (2^32 - 1) elements , so are at most (2^32 - 
 
 Idea:
 
-  - all imports are just `java.lang.Object` arguments, so the entire set of
-    imports can have type `Map<String, Object>`
+  - all imports/exports are just `java.lang.Object` arguments, so the entire
+    set of imports can have type `Map<String, Object>`
 
   - since tables being resized, memories being resized, globals being set all
     entail interior mutability, the actual array, bytebuffer, etc. need to just

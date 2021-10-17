@@ -686,15 +686,15 @@ impl<'a> ModuleTranslator<'a> {
                         jvm_code.push_instruction(Instruction::Dup)?;
                         jvm_code.push_instruction(Instruction::ILoad(1))?;
                         match item {
-                            ElementItem::Null(_) => {
-                                jvm_code.push_instruction(Instruction::AConstNull)?
-                            }
                             ElementItem::Func(func_idx) => Self::translate_ref_func(
                                 &self.settings,
                                 &self.validator,
                                 *func_idx,
                                 jvm_code,
                             )?,
+                            ElementItem::Expr(elem_expr) => {
+                                self.translate_init_expr(jvm_code, &elem_expr)?
+                            }
                         }
                         jvm_code.push_instruction(Instruction::AAStore)?;
                         jvm_code.push_instruction(Instruction::IInc(1, 1))?;

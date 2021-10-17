@@ -101,7 +101,7 @@ pub struct Element<'a> {
     pub element_type: TableType,
 
     /// Entries in the element
-    pub items: Vec<ElementItem>,
+    pub items: Vec<ElementItem<'a>>,
 }
 
 /// WASM functions are represented as methods

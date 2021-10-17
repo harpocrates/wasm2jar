@@ -30,7 +30,8 @@ $ cargo run --bin wast2jar -- tests             # Run all `*.wast` tests in `tes
 Some handy tools/techniques for debugging
 
   * [`wat2wasm` and `wasm2wat`][0] (from WABT) for inspecting/manipulating WASM
-  * `javap` (usually comes with the JDK) for inspecting generated class files
+  * `javap` (in JDK) for inspecting generated class files
+  * `jshell` (in JDK 9+) for running the output (`jshelll --class-path foo.jar`)
   * [`cfr`][1] for decompiling JVM bytecode into Java code
   * `hexdump` or `xxd` for debugging serialized class files
 

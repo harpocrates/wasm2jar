@@ -378,8 +378,8 @@ impl<'a> TestHarness<'a> {
         let translation_result =
             || -> Result<Vec<(jvm::BinaryName, jvm::ClassFile)>, translate::Error> {
                 let mut translator = translate::ModuleTranslator::new(settings)?;
-                translator.parse_module(&wasm_bytes)?;
-                translator.result()
+                let types = translator.parse_module(&wasm_bytes)?;
+                translator.result(&types)
             };
 
         // TODO: catch should be removed once `wasm2jar` doesn't use `todo`

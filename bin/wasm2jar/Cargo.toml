@@ -2,11 +2,11 @@
 name = "wasm2jar-bin"
 version = "0.1.0"
 authors = ["Alec Theriault <alec.theriault@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 wasm2jar = { path = "../../lib" }
-clap = "2.33"
+clap = "3.1.2"
 log = "0.4"
 env_logger = "0.9"
 

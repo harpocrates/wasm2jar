@@ -12,11 +12,12 @@ use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourc
 use std::cell::RefCell;
 use std::iter;
 use std::rc::Rc;
+use wasmparser::types::Types;
 use wasmparser::{
     Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader, Export,
     ExportSectionReader, ExternalKind, FunctionBody, GlobalSectionReader, Import,
     ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
-    TableSectionReader, Validator,
+    TableSectionReader, TypeRef, Validator,
 };
 
 pub struct ModuleTranslator<'a> {
@@ -69,8 +70,7 @@ impl CurrentPart {
 
 impl<'a> ModuleTranslator<'a> {
     pub fn new(settings: Settings) -> Result<ModuleTranslator<'a>, Error> {
-        let mut validator = Validator::new();
-        validator.wasm_features(settings.wasm_features);
+        let validator = Validator::new_with_features(settings.wasm_features);
 
         let mut class_graph = ClassGraph::new();
         class_graph.insert_lang_types();
@@ -110,13 +110,16 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Parse a full module
-    pub fn parse_module(&mut self, data: &'a [u8]) -> Result<(), Error> {
+    pub fn parse_module(&mut self, data: &'a [u8]) -> Result<Types, Error> {
         let parser = Parser::new(0);
+        let mut types: Option<Types> = None;
         for payload in parser.parse_all(data) {
             let payload = payload?;
-            self.process_payload(payload)?;
+            if let Some(t) = self.process_payload(payload)? {
+                types = Some(t);
+            }
         }
-        Ok(())
+        Ok(types.expect("Types should be available after having processed all payloads"))
     }
 
     /// Construct a new inner class part
@@ -165,18 +168,13 @@ impl<'a> ModuleTranslator<'a> {
         })
     }
 
-    /// Process one payload
-    pub fn process_payload(&mut self, payload: Payload<'a>) -> Result<(), Error> {
+    /// Process one payload, return types on the final `End` payload
+    pub fn process_payload(&mut self, payload: Payload<'a>) -> Result<Option<Types>, Error> {
         log::trace!("Payload {:?}", payload);
 
         // TODO: find a better place to trigger generation of this code
         if !self.fields_generated
-            && matches!(
-                &payload,
-                Payload::CodeSectionStart { .. }
-                    | Payload::ModuleSectionStart { .. }
-                    | Payload::End
-            )
+            && matches!(&payload, Payload::CodeSectionStart { .. } | Payload::End(_))
         {
             self.generate_table_fields()?;
             self.generate_memory_fields()?;
@@ -185,7 +183,11 @@ impl<'a> ModuleTranslator<'a> {
         }
 
         match payload {
-            Payload::Version { num, range } => self.validator.version(num, &range)?,
+            Payload::Version {
+                num,
+                encoding,
+                range,
+            } => self.validator.version(num, encoding, &range)?,
             Payload::TypeSection(section) => self.validator.type_section(&section)?,
             Payload::ImportSection(section) => self.visit_imports(section)?,
             Payload::AliasSection(section) => self.validator.alias_section(&section)?,
@@ -207,21 +209,34 @@ impl<'a> ModuleTranslator<'a> {
                 self.validator.code_section_start(count, &range)?
             }
             Payload::CodeSectionEntry(function_body) => self.visit_function_body(function_body)?,
-            Payload::ModuleSectionStart { count, range, .. } => {
-                self.validator.module_section_start(count, &range)?
-            }
-            Payload::ModuleSectionEntry { .. } => self.validator.module_section_entry(),
+            Payload::ModuleSection { range, .. } => self.validator.module_section(&range)?,
             Payload::UnknownSection { id, range, .. } => {
                 self.validator.unknown_section(id, &range)?
             }
-            Payload::End => self.validator.end()?,
+            Payload::ComponentTypeSection(section) => {
+                self.validator.component_type_section(&section)?
+            }
+            Payload::ComponentImportSection(section) => {
+                self.validator.component_import_section(&section)?
+            }
+            Payload::ComponentFunctionSection(section) => {
+                self.validator.component_function_section(&section)?
+            }
+            Payload::ComponentSection { range, .. } => self.validator.component_section(&range)?,
+            Payload::ComponentExportSection(section) => {
+                self.validator.component_export_section(&section)?
+            }
+            Payload::ComponentStartSection(section) => {
+                self.validator.component_start_section(&section)?
+            }
+            Payload::End(offset) => return Ok(Some(self.validator.end(offset)?)),
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Visit a function body
     fn visit_function_body(&mut self, function_body: FunctionBody) -> Result<(), Error> {
-        let validator = self.validator.code_section_entry()?;
+        let validator = self.validator.code_section_entry(&function_body)?;
 
         // Build up the type and argument
         let typ = validator
@@ -322,21 +337,15 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     fn visit_import(&mut self, import: Import<'a>) -> Result<(), Error> {
-        use wasmparser::ImportSectionEntryType;
-
         let origin = MemberOrigin {
             imported: Some(Some(import.module.to_owned())),
             exported: false,
         };
 
-        // TODO: this is not the name we want
-        let name = match import.field {
-            None => unimplemented!(),
-            Some(name) => UnqualifiedName::from_string(name.to_owned()).unwrap(),
-        };
+        let name = UnqualifiedName::from_string(import.name.to_owned()).unwrap();
 
         match import.ty {
-            ImportSectionEntryType::Table(table_type) => self.tables.push(Table {
+            TypeRef::Table(table_type) => self.tables.push(Table {
                 origin,
                 field_name: name,
                 table_type: TableType::from_general(table_type.element_type)?,
@@ -344,7 +353,7 @@ impl<'a> ModuleTranslator<'a> {
                 maximum: table_type.maximum,
             }),
 
-            ImportSectionEntryType::Global(global_type) => {
+            TypeRef::Global(global_type) => {
                 self.globals.push(Global {
                     origin,
                     field_name: name,
@@ -354,11 +363,9 @@ impl<'a> ModuleTranslator<'a> {
                 });
             }
 
-            ImportSectionEntryType::Function(_) => todo!("import function"),
-            ImportSectionEntryType::Memory(_) => todo!("import memory"),
-            ImportSectionEntryType::Tag(_) => todo!("import tag"),
-            ImportSectionEntryType::Module(_) => todo!("import module"),
-            ImportSectionEntryType::Instance(_) => todo!("import instance"),
+            TypeRef::Func(_) => todo!("import function"),
+            TypeRef::Memory(_) => todo!("import memory"),
+            TypeRef::Tag(_) => todo!("import tag"),
         }
 
         Ok(())
@@ -465,7 +472,7 @@ impl<'a> ModuleTranslator<'a> {
                         .tables
                         .get_mut(export.index as usize)
                         .expect("Exporting function that doesn't exist");
-                    let name: String = self.settings.renamer.rename_table(export.field);
+                    let name: String = self.settings.renamer.rename_table(export.name);
                     table.field_name =
                         UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
                     table.origin.exported = true;
@@ -476,7 +483,7 @@ impl<'a> ModuleTranslator<'a> {
                         .memories
                         .get_mut(export.index as usize)
                         .expect("Exporting memory that ddoesn't exist");
-                    let name: String = self.settings.renamer.rename_memory(export.field);
+                    let name: String = self.settings.renamer.rename_memory(export.name);
                     memory.field_name =
                         UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
                     memory.origin.exported = true;
@@ -487,7 +494,7 @@ impl<'a> ModuleTranslator<'a> {
                         .globals
                         .get_mut(export.index as usize)
                         .expect("Exporting global that ddoesn't exist");
-                    let name: String = self.settings.renamer.rename_global(export.field);
+                    let name: String = self.settings.renamer.rename_global(export.name);
                     global.field_name =
                         UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
                     global.origin.exported = true;
@@ -500,16 +507,14 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Generate members in the outer class corresponding to exports
-    fn generate_exports(&mut self) -> Result<(), Error> {
+    fn generate_exports(&mut self, types: &Types) -> Result<(), Error> {
         for export in &self.exports {
             log::trace!("Export {:?}", export);
             match export.kind {
-                ExternalKind::Function => {
+                ExternalKind::Func => {
                     // Exported function
-                    let export_descriptor = self
-                        .validator
-                        .function_idx_type(export.index)?
-                        .method_descriptor();
+                    let export_descriptor =
+                        types.function_idx_type(export.index)?.method_descriptor();
 
                     // Implementation function
                     let mut underlying_descriptor = export_descriptor.clone();
@@ -517,7 +522,7 @@ impl<'a> ModuleTranslator<'a> {
                         self.settings.output_full_class_name.clone(),
                     ));
 
-                    let name: String = self.settings.renamer.rename_function(export.field);
+                    let name: String = self.settings.renamer.rename_function(export.name);
                     let mut method_builder = self.class.start_method(
                         MethodAccessFlags::PUBLIC,
                         UnqualifiedName::from_string(name).map_err(Error::MalformedName)?,
@@ -585,7 +590,7 @@ impl<'a> ModuleTranslator<'a> {
     }
 
     /// Generate a constructor
-    pub fn generate_constructor(&mut self) -> Result<(), Error> {
+    pub fn generate_constructor(&mut self, types: &Types) -> Result<(), Error> {
         let mut method_builder = self.class.start_method(
             MethodAccessFlags::PUBLIC,
             UnqualifiedName::INIT,
@@ -648,7 +653,7 @@ impl<'a> ModuleTranslator<'a> {
                 if !global.origin.exported {
                     if let Some(init_expr) = &global.initial {
                         jvm_code.push_instruction(Instruction::ALoad(0))?;
-                        self.translate_init_expr(jvm_code, init_expr)?;
+                        self.translate_init_expr(types, jvm_code, init_expr)?;
                         jvm_code.access_field(
                             &self.settings.output_full_class_name,
                             &global.field_name,
@@ -679,7 +684,7 @@ impl<'a> ModuleTranslator<'a> {
                     )?;
 
                     // Store the starting offset in a local variable
-                    self.translate_init_expr(jvm_code, &init_expr)?;
+                    self.translate_init_expr(types, jvm_code, &init_expr)?;
                     jvm_code.push_instruction(Instruction::IStore(1))?;
 
                     for item in &element.items {
@@ -688,12 +693,12 @@ impl<'a> ModuleTranslator<'a> {
                         match item {
                             ElementItem::Func(func_idx) => Self::translate_ref_func(
                                 &self.settings,
-                                &self.validator,
+                                types,
                                 *func_idx,
                                 jvm_code,
                             )?,
                             ElementItem::Expr(elem_expr) => {
-                                self.translate_init_expr(jvm_code, &elem_expr)?
+                                self.translate_init_expr(types, jvm_code, &elem_expr)?
                             }
                         }
                         jvm_code.push_instruction(Instruction::AAStore)?;
@@ -728,7 +733,7 @@ impl<'a> ModuleTranslator<'a> {
 
                     // Set the starting offset for the buffer
                     jvm_code.push_instruction(Instruction::Dup)?;
-                    self.translate_init_expr(jvm_code, &init_expr)?;
+                    self.translate_init_expr(types, jvm_code, &init_expr)?;
                     jvm_code.invoke(&BinaryName::BUFFER, &UnqualifiedName::POSITION)?;
                     jvm_code.push_instruction(Instruction::Pop)?;
 
@@ -765,6 +770,7 @@ impl<'a> ModuleTranslator<'a> {
     /// Translate a constant expression
     fn translate_init_expr<B: CodeBuilderExts>(
         &self,
+        types: &Types,
         jvm_code: &mut B,
         init_expr: &InitExpr,
     ) -> Result<(), Error> {
@@ -782,12 +788,9 @@ impl<'a> ModuleTranslator<'a> {
                     let ref_type = ref_type_from_general(ty)?;
                     jvm_code.const_null(ref_type)?;
                 }
-                Operator::RefFunc { function_index } => Self::translate_ref_func(
-                    &self.settings,
-                    &self.validator,
-                    function_index,
-                    jvm_code,
-                )?,
+                Operator::RefFunc { function_index } => {
+                    Self::translate_ref_func(&self.settings, types, function_index, jvm_code)?
+                }
                 Operator::End => (),
                 other => todo!(
                     "figure out which other expressions and valid, then rule out the rest {:?}",
@@ -805,7 +808,7 @@ impl<'a> ModuleTranslator<'a> {
     /// argument that is the module itself.
     fn translate_ref_func<B: CodeBuilderExts>(
         settings: &Settings,
-        validator: &Validator,
+        types: &Types,
         function_index: u32,
         jvm_code: &mut B,
     ) -> Result<(), Error> {
@@ -819,9 +822,7 @@ impl<'a> ModuleTranslator<'a> {
             settings.wasm_function_name_prefix.as_str(),
             function_index,
         );
-        let mut method_type = validator
-            .function_idx_type(function_index)?
-            .method_descriptor();
+        let mut method_type = types.function_idx_type(function_index)?.method_descriptor();
         method_type
             .parameters
             .push(FieldType::object(settings.output_full_class_name.clone()));
@@ -848,9 +849,9 @@ impl<'a> ModuleTranslator<'a> {
     ///
     /// The first element in the output vector is the output class. The rest of the elements are
     /// the "part" inner classes.
-    pub fn result(mut self) -> Result<Vec<(BinaryName, ClassFile)>, Error> {
-        self.generate_exports()?;
-        self.generate_constructor()?;
+    pub fn result(mut self, types: &Types) -> Result<Vec<(BinaryName, ClassFile)>, Error> {
+        self.generate_exports(types)?;
+        self.generate_constructor(types)?;
 
         // Assemble all the parts
         let mut parts = self.previous_parts;

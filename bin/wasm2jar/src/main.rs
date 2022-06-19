@@ -1,19 +1,19 @@
 use wasm2jar::jvm::Name;
 use wasm2jar::*;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use std::fs;
-use std::process::Command;
+use std::process;
 
 fn main() -> Result<(), translate::Error> {
     env_logger::init();
 
-    let matches = App::new("WASM to JAR converter")
+    let matches = Command::new("WASM to JAR converter")
         .version("0.1.0")
         .author("Alec Theriault <alec.theriault@gmail.com>")
         .about("Convert WASM modules into classes that run on a JVM")
         .arg(
-            Arg::with_name("class")
+            Arg::new("class")
                 .long("output-class")
                 .value_name("CLASS_NAME")
                 .required(true)
@@ -21,21 +21,22 @@ fn main() -> Result<(), translate::Error> {
                 .help("Output class name (eg. `foo/bar/Baz`)"),
         )
         .arg(
-            Arg::with_name("jar")
+            Arg::new("jar")
+                .allow_invalid_utf8(true)
                 .long("jar")
                 .required(false)
                 .takes_value(true)
                 .help("Produce a `jar` output with this name (uses `jar` utility on PATH)"),
         )
         .arg(
-            Arg::with_name("utils")
+            Arg::new("utils")
                 .long("utils")
                 .required(false)
                 .takes_value(true)
                 .help("Specify an external utility class to use"),
         )
         .arg(
-            Arg::with_name("INPUT")
+            Arg::new("INPUT")
                 .help("Sets the input WASM module file to use")
                 .required(true)
                 .index(1),
@@ -51,11 +52,11 @@ fn main() -> Result<(), translate::Error> {
     log::info!("Reading and translating '{}'", &wasm_file);
     let wasm_bytes = fs::read(&wasm_file).map_err(jvm::Error::IoError)?;
     let mut translator = translate::ModuleTranslator::new(settings)?;
-    translator.parse_module(&wasm_bytes)?;
+    let types = translator.parse_module(&wasm_bytes)?;
 
     // Write out the results
     let mut output_files = vec![];
-    for (class_name, class) in translator.result()? {
+    for (class_name, class) in translator.result(&types)? {
         let class_file = format!("{}.class", class_name.as_str());
         log::info!("Writing '{}'", &class_file);
         class
@@ -66,7 +67,7 @@ fn main() -> Result<(), translate::Error> {
 
     // Package the results in a JAR
     if let Some(jar_name) = matches.value_of_os("jar") {
-        let mut command = Command::new("jar");
+        let mut command = process::Command::new("jar");
         command.arg("cf").arg(&jar_name);
         for output_file in &output_files {
             command.arg(output_file);

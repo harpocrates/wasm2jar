@@ -91,17 +91,22 @@ pub enum UtilitiesStrategy {
 impl Settings {
     /// Supported WASM features
     pub const SUPPORTED_WASM_FEATURES: WasmFeatures = WasmFeatures {
+        mutable_global: true,
+        saturating_float_to_int: true,
+        sign_extension: true,
         reference_types: true,
         multi_value: true,
         bulk_memory: true,
-        module_linking: false,
         simd: false,
+        relaxed_simd: false,
         threads: false,
         tail_call: false,
         deterministic_only: true,
         multi_memory: false,
         exceptions: false,
         memory64: false,
+        extended_const: false,
+        component_model: false,
     };
 
     pub fn new(

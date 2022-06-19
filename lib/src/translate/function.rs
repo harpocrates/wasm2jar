@@ -14,11 +14,12 @@ use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::ops::Not;
 use wasmparser::{
-    BrTable, FuncValidator, FunctionBody, MemoryImmediate, Operator, Type, TypeOrFuncType,
+    BlockType, BrTable, FuncValidator, FunctionBody, MemoryImmediate, Operator, Type,
+    ValidatorResources,
 };
 
 /// Context for translating a WASM function into a JVM one
-pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
+pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized> {
     /// WASM type of the function being translated
     function_typ: FunctionType,
 
@@ -47,7 +48,7 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
     jvm_locals: LocalsLayout,
 
     /// Validator for the WASM function
-    wasm_validator: FuncValidator<R>,
+    wasm_validator: FuncValidator<ValidatorResources>,
 
     /// Previous height of the WASM stack
     wasm_prev_operand_stack_height: u32,
@@ -62,10 +63,9 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized, R> {
     wasm_unreachable_frame_count: usize,
 }
 
-impl<'a, 'b, B, R> FunctionTranslator<'a, 'b, B, R>
+impl<'a, 'b, B> FunctionTranslator<'a, 'b, B>
 where
     B: CodeBuilderExts + Sized,
-    R: WasmModuleResourcesExt,
 {
     pub fn new(
         function_typ: FunctionType,
@@ -77,8 +77,8 @@ where
         wasm_memories: &'b [Memory],
         wasm_globals: &'b [Global<'a>],
         wasm_function: FunctionBody<'a>,
-        wasm_validator: FuncValidator<R>,
-    ) -> Result<FunctionTranslator<'a, 'b, B, R>, Error> {
+        wasm_validator: FuncValidator<ValidatorResources>,
+    ) -> Result<FunctionTranslator<'a, 'b, B>, Error> {
         let jvm_locals = LocalsLayout::new(
             function_typ
                 .inputs
@@ -237,8 +237,13 @@ where
             Operator::BrTable { table } => self.visit_branch_table(table)?,
             Operator::Return => self.visit_return()?,
             Operator::Call { function_index } => self.visit_call(function_index)?,
-            Operator::CallIndirect { index, table_index } => {
-                self.visit_call_indirect(TypeOrFuncType::FuncType(index), table_index)?
+            Operator::CallIndirect {
+                index,
+                table_index,
+                table_byte: _,
+            } => {
+                // TODO: pick the right table
+                self.visit_call_indirect(BlockType::FuncType(index), table_index)?
             }
 
             // Parametric Instructions
@@ -909,7 +914,7 @@ where
     }
 
     /// Visit the start of an `if` block
-    fn visit_if(&mut self, ty: TypeOrFuncType, condition: BranchCond) -> Result<(), Error> {
+    fn visit_if(&mut self, ty: BlockType, condition: BranchCond) -> Result<(), Error> {
         let ty = self.wasm_validator.resources().block_type(ty)?;
         let else_block = self.jvm_code.fresh_label();
         let end_block = self.jvm_code.fresh_label();
@@ -957,7 +962,7 @@ where
     }
 
     /// Visit a `block` block
-    fn visit_block(&mut self, ty: TypeOrFuncType) -> Result<(), Error> {
+    fn visit_block(&mut self, ty: BlockType) -> Result<(), Error> {
         let ty = self.wasm_validator.resources().block_type(ty)?;
         let end_block = self.jvm_code.fresh_label();
 
@@ -975,7 +980,7 @@ where
     }
 
     /// Visit a `loop` block
-    fn visit_loop(&mut self, ty: TypeOrFuncType) -> Result<(), Error> {
+    fn visit_loop(&mut self, ty: BlockType) -> Result<(), Error> {
         let ty = self.wasm_validator.resources().block_type(ty)?;
         let start_loop = self.jvm_code.fresh_label();
         let after_block = self.jvm_code.fresh_label();
@@ -1343,8 +1348,8 @@ where
     }
 
     /// Visit a `call_indirect`
-    fn visit_call_indirect(&mut self, typ: TypeOrFuncType, table_idx: u32) -> Result<(), Error> {
-        let func_typ = self.wasm_validator.resources().function_type(typ)?;
+    fn visit_call_indirect(&mut self, typ: BlockType, table_idx: u32) -> Result<(), Error> {
+        let func_typ = self.wasm_validator.resources().block_type(typ)?;
         let table = &self.wasm_tables[table_idx as usize];
 
         // Compute the method descriptor we'll actually be calling

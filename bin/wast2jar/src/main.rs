@@ -3,7 +3,7 @@ mod harness;
 mod java_harness;
 mod java_writer;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use error::TestOutcome;
 use harness::*;
 use std::collections::HashSet;
@@ -17,12 +17,13 @@ use walkdir::WalkDir;
 fn main() -> io::Result<()> {
     env_logger::init();
 
-    let matches = App::new("WAST tester for WASM to JAR converter")
+    let matches = Command::new("WAST tester for WASM to JAR converter")
         .version("0.1.0")
         .author("Alec Theriault <alec.theriault@gmail.com>")
         .about("Run WAST tests on the JVM against converted JARs")
         .arg(
-            Arg::with_name("output")
+            Arg::new("output")
+                .allow_invalid_utf8(true)
                 .long("output-directory")
                 .value_name("DIRECTORY")
                 .required(false)
@@ -31,7 +32,7 @@ fn main() -> io::Result<()> {
                 .default_value("out"),
         )
         .arg(
-            Arg::with_name("java")
+            Arg::new("java")
                 .long("java")
                 .value_name("JAVA")
                 .required(false)
@@ -39,7 +40,7 @@ fn main() -> io::Result<()> {
                 .help("Sets the `java` executable to use"),
         )
         .arg(
-            Arg::with_name("javac")
+            Arg::new("javac")
                 .long("javac")
                 .value_name("JAVA_COMPILER")
                 .required(false)
@@ -47,14 +48,15 @@ fn main() -> io::Result<()> {
                 .help("Sets the `javac` executable to use"),
         )
         .arg(
-            Arg::with_name("incremental")
+            Arg::new("incremental")
                 .long("incremental")
                 .required(false)
                 .takes_value(false)
                 .help("Specifies to run in a more incremental (slower) mode"),
         )
         .arg(
-            Arg::with_name("INPUT")
+            Arg::new("INPUT")
+                .allow_invalid_utf8(true)
                 .help("Sets the input file or folder")
                 .required(true)
                 .index(1),

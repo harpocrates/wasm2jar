@@ -52,6 +52,11 @@ impl JavaHarness {
         // Class pre-amble
         harness
             .writer
+            .inline_code("import java.lang.invoke.MethodHandle;")?;
+        harness.writer.newline()?;
+
+        harness
+            .writer
             .inline_code_fmt(format_args!("public class {}", &harness.class_name))?;
         harness.writer.open_curly_block()?;
 

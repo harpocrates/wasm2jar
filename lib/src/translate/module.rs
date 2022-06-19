@@ -471,7 +471,7 @@ impl<'a> ModuleTranslator<'a> {
                     let table: &mut Table = self
                         .tables
                         .get_mut(export.index as usize)
-                        .expect("Exporting function that doesn't exist");
+                        .expect("Exporting table that doesn't exist");
                     let name: String = self.settings.renamer.rename_table(export.name);
                     table.field_name =
                         UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
@@ -760,6 +760,93 @@ impl<'a> ModuleTranslator<'a> {
                 }
             }
         }
+
+        // Exports object
+        // TODO: make unmodifiable
+        jvm_code.push_instruction(Instruction::ALoad(0))?;
+        self.class.add_field_with_signature(
+            FieldAccessFlags::PUBLIC | FieldAccessFlags::FINAL,
+            UnqualifiedName::EXPORTS,
+            FieldType::Ref(RefType::MAP).render(),
+            Some(String::from(
+                "Ljava/util/Map<Ljava/lang/String;Ljava/lang/Object;>;",
+            )),
+        )?;
+        let this_cls = jvm_code.get_class_idx(&RefType::Object(self.class.class_name().clone()))?;
+        let exports_field = {
+            let mut constants = self.class.constants();
+            let name_index = constants.get_utf8(UnqualifiedName::EXPORTS.as_str())?;
+            let descriptor_index = constants.get_utf8(&FieldType::Ref(RefType::MAP).render())?;
+            let name_and_type = constants.get_name_and_type(name_index, descriptor_index)?;
+            constants.get_field_ref(this_cls, name_and_type)?
+        };
+
+        let hashmap_cls = jvm_code.get_class_idx(&RefType::HASHMAP)?;
+        jvm_code.push_instruction(Instruction::New(hashmap_cls))?;
+        jvm_code.push_instruction(Instruction::Dup)?;
+        jvm_code.invoke(&BinaryName::HASHMAP, &UnqualifiedName::INIT)?;
+
+        // Add exports to the exports map
+        for export in &self.exports {
+            jvm_code.push_instruction(Instruction::Dup)?;
+            match export.kind {
+                ExternalKind::Func => {
+                    jvm_code.const_string(export.name.to_string())?;
+
+                    // Exported function
+                    let export_descriptor =
+                        types.function_idx_type(export.index)?.method_descriptor();
+
+                    // Implementation function
+                    let mut underlying_descriptor = export_descriptor.clone();
+                    underlying_descriptor.parameters.push(FieldType::object(
+                        self.settings.output_full_class_name.clone(),
+                    ));
+                    let underlying_method_name = &self
+                        .settings
+                        .wasm_function_name_prefix
+                        .concat(&UnqualifiedName::number(export.index as usize));
+
+                    // Push method handle on the stack
+                    let method_handle = {
+                        let mut constants = self.class.constants();
+                        let class_utf8 =
+                            constants.get_utf8(self.current_part.class.class_name().as_str())?;
+                        let class_index = constants.get_class(class_utf8)?;
+                        let name_index = constants.get_utf8(underlying_method_name.as_str())?;
+                        let descriptor_index =
+                            constants.get_utf8(underlying_descriptor.render())?;
+                        let name_and_type =
+                            constants.get_name_and_type(name_index, descriptor_index)?;
+                        let method_ref =
+                            constants.get_method_ref(class_index, name_and_type, false)?;
+                        constants.get_method_handle(HandleKind::InvokeStatic, method_ref.into())?
+                    };
+
+                    // `MethodHandles.insertArguments(hdl, n - 1, new Object[1] { this })`
+                    jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
+                    jvm_code.const_int((underlying_descriptor.parameters.len() - 1) as i32)?;
+                    jvm_code.const_int(1)?;
+                    jvm_code.new_ref_array(&RefType::OBJECT)?;
+                    jvm_code.dup()?;
+                    jvm_code.const_int(0)?;
+                    jvm_code.push_instruction(Instruction::ALoad(0))?;
+                    jvm_code.push_instruction(Instruction::AAStore)?;
+                    jvm_code.invoke(
+                        &BinaryName::METHODHANDLES,
+                        &UnqualifiedName::INSERTARGUMENTS,
+                    )?;
+
+                    // Put the value in the map
+                    jvm_code.invoke(&BinaryName::MAP, &UnqualifiedName::PUT)?;
+                    jvm_code.pop()?;
+                }
+
+                _ => unimplemented!("non-function export"),
+            }
+        }
+
+        jvm_code.push_instruction(Instruction::PutField(exports_field))?;
 
         jvm_code.push_branch_instruction(BranchInstruction::Return)?;
         self.class.finish_method(method_builder)?;

@@ -1086,6 +1086,47 @@ impl ClassGraph {
                 },
             );
         }
+
+        // java.util.Map
+        {
+            let java_util_map = self
+                .classes
+                .entry(BinaryName::MAP)
+                .or_insert(ClassData::new(BinaryName::OBJECT, true));
+            java_util_map.add_method(
+                false,
+                UnqualifiedName::PUT,
+                MethodDescriptor {
+                    parameters: vec![FieldType::OBJECT, FieldType::OBJECT],
+                    return_type: Some(FieldType::OBJECT),
+                },
+            );
+            java_util_map.add_method(
+                false,
+                UnqualifiedName::GET,
+                MethodDescriptor {
+                    parameters: vec![FieldType::OBJECT],
+                    return_type: Some(FieldType::OBJECT),
+                },
+            );
+        }
+
+        // java.util.HashMap
+        {
+            let java_util_hashmap = self
+                .classes
+                .entry(BinaryName::HASHMAP)
+                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            java_util_hashmap.add_interfaces([BinaryName::MAP]);
+            java_util_hashmap.add_method(
+                false,
+                UnqualifiedName::INIT,
+                MethodDescriptor {
+                    parameters: vec![],
+                    return_type: None,
+                },
+            );
+        }
     }
 
     pub fn insert_buffer_types(&mut self) {

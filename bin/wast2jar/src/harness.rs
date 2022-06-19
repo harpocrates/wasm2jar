@@ -8,7 +8,6 @@ use std::io;
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::process::Command;
-use wasm2jar::translate::Renamer;
 use wasm2jar::{jvm, translate};
 use wast::parser::{self, ParseBuffer};
 use wast::{Float32, Float64, Id, Module, QuoteModule, Span, Wast, WastDirective, Wat};
@@ -157,7 +156,8 @@ impl<'a> TestHarness<'a> {
                     }
                     [result] => {
                         let (typ, _boxed_ty, _unbox) = Self::java_assert_type(result);
-                        harness.inline_code_fmt(format_args!("{} result = ", typ))?;
+                        harness
+                            .inline_code_fmt(format_args!("{typ} result = ({typ})", typ = typ))?;
                         Self::java_execute(&exec, harness)?;
                         harness.inline_code(";")?;
                         harness.newline()?;
@@ -179,7 +179,7 @@ impl<'a> TestHarness<'a> {
                         harness.close_curly_block()?;
                     }
                     _ => {
-                        harness.inline_code("Object[] result = ")?;
+                        harness.inline_code("Object[] result = (Object[])")?;
                         Self::java_execute(&exec, harness)?;
                         harness.inline_code(";")?;
                         harness.newline()?;
@@ -540,11 +540,10 @@ impl<'a> TestHarness<'a> {
             Some(id) => format!("mod_{}", id.name()),
         };
 
-        let renamed_method = java_writer.export_renamer.rename_function(invoke.name);
         java_writer.inline_code_fmt(format_args!(
-            "{name}.{method}(",
+            "((MethodHandle){name}.exports.get(\"{method}\")).invoke(",
             name = name,
-            method = renamed_method,
+            method = invoke.name,
         ))?;
         let mut needs_comma = false;
         for arg in &invoke.args {

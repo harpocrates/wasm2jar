@@ -302,3 +302,19 @@ impl Serialize for InnerClass {
         Ok(())
     }
 }
+
+#[derive(Debug)]
+pub struct Signature {
+    pub signature: Utf8ConstantIndex,
+}
+
+impl AttributeLike for Signature {
+    const NAME: &'static str = "Signature";
+}
+
+impl Serialize for Signature {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.signature.serialize(writer)?;
+        Ok(())
+    }
+}

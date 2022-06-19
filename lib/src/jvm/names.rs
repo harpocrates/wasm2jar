@@ -226,6 +226,7 @@ impl UnqualifiedName {
     pub const CALLINDIRECT: Self = Self::name("call_indirect");
     pub const COPYRESIZEDARRAY: Self = Self::name("copyResizedArray");
     pub const COPYRESIZEDBYTEBUFFER: Self = Self::name("copyResizedByteBuffer");
+    pub const EXPORTS: Self = Self::name("exports");
     pub const EXTERNREFTABLEBOOTSTRAP: Self = Self::name("externrefTableBootstrap");
     pub const F32ABS: Self = Self::name("f32Abs");
     pub const F32CONVERTI32U: Self = Self::name("f32ConvertI32U");
@@ -304,9 +305,11 @@ impl BinaryName {
     pub const ERROR: Self = Self::name("java/lang/Error");
     pub const EXCEPTION: Self = Self::name("java/lang/Exception");
     pub const FLOAT: Self = Self::name("java/lang/Float");
+    pub const HASHMAP: Self = Self::name("java/util/HashMap");
     pub const ILLEGALARGUMENTEXCEPTION: Self = Self::name("java/lang/IllegalArgumentException");
     pub const INTEGER: Self = Self::name("java/lang/Integer");
     pub const LONG: Self = Self::name("java/lang/Long");
+    pub const MAP: Self = Self::name("java/util/Map");
     pub const MATH: Self = Self::name("java/lang/Math");
     pub const METHODHANDLE: Self = Self::name("java/lang/invoke/MethodHandle");
     pub const METHODHANDLES: Self = Self::name("java/lang/invoke/MethodHandles");

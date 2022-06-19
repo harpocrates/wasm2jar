@@ -94,15 +94,34 @@ impl ClassBuilder {
         name: UnqualifiedName,
         descriptor: String,
     ) -> Result<(), Error> {
+        self.add_field_with_signature(access_flags, name, descriptor, None)
+    }
+
+    /// Add a field with a generic signature to the class
+    pub fn add_field_with_signature(
+        &mut self,
+        access_flags: FieldAccessFlags,
+        name: UnqualifiedName,
+        descriptor: String,
+        signature: Option<String>,
+    ) -> Result<(), Error> {
         let name_index = self.constants_pool.borrow_mut().get_utf8(name.as_str())?;
         let descriptor_index = self.constants_pool.borrow_mut().get_utf8(&descriptor)?;
         let descriptor = FieldType::parse(&descriptor).map_err(Error::IoError)?;
+        let mut attributes: Vec<Attribute> = vec![];
+
+        // Add the optional generic `Signature` attribute
+        if let Some(generic_sig) = signature {
+            let sig = self.constants_pool.borrow_mut().get_utf8(generic_sig)?;
+            let sig = Signature { signature: sig };
+            attributes.push(self.constants_pool.borrow_mut().get_attribute(sig)?);
+        }
 
         self.class.fields.push(Field {
             access_flags,
             name_index,
             descriptor_index,
-            attributes: vec![],
+            attributes,
         });
 
         let class_str: &BinaryName = &self.this_class;

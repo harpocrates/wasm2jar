@@ -191,8 +191,10 @@ impl RefType {
     pub const ERROR: RefType = Self::Object(BinaryName::ERROR);
     pub const EXCEPTION: RefType = Self::Object(BinaryName::EXCEPTION);
     pub const FLOAT: RefType = Self::Object(BinaryName::FLOAT);
+    pub const HASHMAP: RefType = Self::Object(BinaryName::HASHMAP);
     pub const INTEGER: RefType = Self::Object(BinaryName::INTEGER);
     pub const LONG: RefType = Self::Object(BinaryName::LONG);
+    pub const MAP: RefType = Self::Object(BinaryName::MAP);
     pub const METHODHANDLE: RefType = Self::Object(BinaryName::METHODHANDLE);
     pub const METHODTYPE: RefType = Self::Object(BinaryName::METHODTYPE);
     pub const OBJECT: RefType = Self::Object(BinaryName::OBJECT);

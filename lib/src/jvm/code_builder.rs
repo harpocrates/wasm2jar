@@ -42,7 +42,7 @@ pub trait CodeBuilder<E: Debug = Error> {
     ) -> Result<(), E>;
 
     /// Get the constant pool
-    fn constants(&self) -> RefMut<ConstantsPool>;
+    fn constants(&self) -> &ConstantsPool;
 
     /// Get the class graph
     fn class_graph(&self) -> RefMut<ClassGraph>;

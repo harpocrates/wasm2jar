@@ -61,7 +61,7 @@ struct CurrentPart {
     bootstrap: BootstrapUtilities,
 }
 impl CurrentPart {
-    fn result(mut self) -> Result<ClassBuilder, Error> {
+    fn result(self) -> Result<ClassBuilder, Error> {
         self.class
             .add_attribute(BootstrapMethods::from(self.bootstrap))?;
         Ok(self.class)
@@ -131,7 +131,7 @@ impl<'a> ModuleTranslator<'a> {
         let name = settings
             .part_short_class_name
             .concat(&UnqualifiedName::number(part_idx));
-        let mut class = ClassBuilder::new(
+        let class = ClassBuilder::new(
             ClassAccessFlags::SYNTHETIC | ClassAccessFlags::SUPER,
             settings
                 .output_full_class_name
@@ -145,7 +145,7 @@ impl<'a> ModuleTranslator<'a> {
 
         // Add the `NestHost` and `InnerClasses` attributes
         let (nest_host, inner_classes): (NestHost, InnerClasses) = {
-            let mut constants = class.constants();
+            let constants = &class.constants_pool;
             let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
             let inner_class_name = constants.get_utf8(class.class_name().as_str())?;
@@ -271,7 +271,7 @@ impl<'a> ModuleTranslator<'a> {
         )?;
         function_translator.translate()?;
 
-        self.current_part.class.finish_method(method_builder)?;
+        method_builder.finish()?;
         self.current_func_idx += 1;
 
         Ok(())
@@ -552,7 +552,7 @@ impl<'a> ModuleTranslator<'a> {
                     )?;
                     method_builder.code.return_(export_descriptor.return_type)?;
 
-                    self.class.finish_method(method_builder)?;
+                    method_builder.finish()?;
                 }
                 _ => todo!(),
             }
@@ -774,7 +774,7 @@ impl<'a> ModuleTranslator<'a> {
         )?;
         let this_cls = jvm_code.get_class_idx(&RefType::Object(self.class.class_name().clone()))?;
         let exports_field = {
-            let mut constants = self.class.constants();
+            let constants = &self.class.constants_pool;
             let name_index = constants.get_utf8(UnqualifiedName::EXPORTS.as_str())?;
             let descriptor_index = constants.get_utf8(&FieldType::Ref(RefType::MAP).render())?;
             let name_and_type = constants.get_name_and_type(name_index, descriptor_index)?;
@@ -809,7 +809,7 @@ impl<'a> ModuleTranslator<'a> {
 
                     // Push method handle on the stack
                     let method_handle = {
-                        let mut constants = self.class.constants();
+                        let constants = &self.class.constants_pool;
                         let class_utf8 =
                             constants.get_utf8(self.current_part.class.class_name().as_str())?;
                         let class_index = constants.get_class(class_utf8)?;
@@ -849,7 +849,7 @@ impl<'a> ModuleTranslator<'a> {
         jvm_code.push_instruction(Instruction::PutField(exports_field))?;
 
         jvm_code.push_branch_instruction(BranchInstruction::Return)?;
-        self.class.finish_method(method_builder)?;
+        method_builder.finish()?;
 
         Ok(())
     }
@@ -914,7 +914,7 @@ impl<'a> ModuleTranslator<'a> {
             .parameters
             .push(FieldType::object(settings.output_full_class_name.clone()));
         let method_handle: ConstantIndex = {
-            let mut constants = jvm_code.constants();
+            let constants = jvm_code.constants();
             let class_name_idx = constants.get_utf8(class_name)?;
             let class_idx = constants.get_class(class_name_idx)?;
             let name_idx = constants.get_utf8(method_name)?;
@@ -948,7 +948,7 @@ impl<'a> ModuleTranslator<'a> {
         let (nest_members, inner_classes): (NestMembers, InnerClasses) = {
             let mut nest_members = vec![];
             let mut inner_class_attrs = vec![];
-            let mut constants = self.class.constants();
+            let constants = &self.class.constants_pool;
             let outer_class_name =
                 constants.get_utf8(self.settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;

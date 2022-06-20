@@ -49,7 +49,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// Push a constant string to the stack
     fn const_string(&mut self, string: impl Into<Cow<'static, str>>) -> Result<(), Error> {
         let str_idx = {
-            let mut constants = self.constants();
+            let constants = self.constants();
             let utf8_idx = constants.get_utf8(string)?;
             constants.get_string(utf8_idx)?
         };
@@ -267,7 +267,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         };
 
         let method_handle = {
-            let mut constants = self.constants();
+            let constants = self.constants();
             let class_utf8 = constants.get_utf8(class_name.as_str())?;
             let class_idx = constants.get_class(class_utf8)?;
             let method_utf8 = constants.get_utf8(method_name.as_str())?;
@@ -364,7 +364,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         };
 
         let method_ref = {
-            let mut constants = self.constants();
+            let constants = self.constants();
             let class_utf8 = constants.get_utf8(class_name.as_str())?;
             let class_idx = constants.get_class(class_utf8)?;
             let method_utf8 = constants.get_utf8(method_name.as_str())?;
@@ -385,7 +385,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     ) -> Result<(), Error> {
         let descriptor = descriptor.render();
         let invoke_dyn = {
-            let mut constants = self.constants();
+            let constants = self.constants();
             let method_utf8 = constants.get_utf8(method_name.as_str())?;
             let desc_utf8 = constants.get_utf8(descriptor)?;
             let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
@@ -418,7 +418,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
         let descriptor = descriptor.render();
 
         let field_ref = {
-            let mut constants = self.constants();
+            let constants = self.constants();
             let class_utf8 = constants.get_utf8(class_name.as_str())?;
             let class_idx = constants.get_class(class_utf8)?;
             let field_utf8 = constants.get_utf8(field_name.as_str())?;
@@ -444,7 +444,7 @@ pub trait CodeBuilderExts: CodeBuilder<Error> {
     /// Get a class index from a name
     fn get_class_idx(&mut self, class_name: &RefType) -> Result<ClassConstantIndex, Error> {
         let rendered = class_name.render_class_info();
-        let mut constants = self.constants();
+        let constants = self.constants();
         let object_name = constants.get_utf8(rendered)?;
         Ok(constants.get_class(object_name)?)
     }

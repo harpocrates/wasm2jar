@@ -1,20 +1,42 @@
 use super::*;
 
-use std::cell::{RefCell, RefMut};
+use elsa::FrozenVec;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 pub struct ClassBuilder {
-    /// This class name
+    /// Class file version
+    version: Version,
+
+    /// Constants pool
+    pub constants_pool: ConstantsPool,
+
+    /// Class access flags
+    access_flags: ClassAccessFlags,
+
+    /// Class name
     this_class: BinaryName,
 
-    /// Class file, but with `constants` left blank
-    class: ClassFile,
+    /// Class name constant
+    this_class_index: ClassConstantIndex,
+
+    /// Superclass name constant
+    super_class_index: ClassConstantIndex,
+
+    /// Implemented interfaces constants
+    interfaces: Vec<ClassConstantIndex>,
+
+    /// Fields
+    fields: FrozenVec<Box<Field>>,
+
+    /// Methods
+    methods: FrozenVec<Box<Method>>,
+
+    /// Attributes
+    attributes: FrozenVec<Box<Attribute>>,
 
     /// Class graph
     class_graph: Rc<RefCell<ClassGraph>>,
-
-    /// Constants pool
-    constants_pool: Rc<RefCell<ConstantsPool>>,
 }
 
 impl ClassBuilder {
@@ -38,58 +60,61 @@ impl ClassBuilder {
             .or_insert(class_data);
 
         // Construct a fresh constant pool
-        let mut constants = ConstantsPool::new();
-        let this_class_utf8 = constants.get_utf8(this_class.as_str())?;
-        let super_class_utf8 = constants.get_utf8(super_class.as_str())?;
-
-        let class = ClassFile {
-            version: Version::JAVA11,
-            constants: OffsetVec::new(),
-            access_flags,
-            this_class: constants.get_class(this_class_utf8)?,
-            super_class: constants.get_class(super_class_utf8)?,
-            interfaces: interfaces
-                .iter()
-                .map(|interface| {
-                    let interface_utf8 = constants.get_utf8(interface.as_str())?;
-                    constants.get_class(interface_utf8)
-                })
-                .collect::<Result<_, _>>()?,
-            fields: vec![],
-            methods: vec![],
-            attributes: vec![],
-        };
+        let constants_pool = ConstantsPool::new();
+        let this_class_utf8 = constants_pool.get_utf8(this_class.as_str())?;
+        let super_class_utf8 = constants_pool.get_utf8(super_class.as_str())?;
+        let this_class_index = constants_pool.get_class(this_class_utf8)?;
+        let super_class_index = constants_pool.get_class(super_class_utf8)?;
+        let interfaces = interfaces
+            .iter()
+            .map(|interface| {
+                let interface_utf8 = constants_pool.get_utf8(interface.as_str())?;
+                constants_pool.get_class(interface_utf8)
+            })
+            .collect::<Result<_, _>>()?;
 
         Ok(ClassBuilder {
+            version: Version::JAVA11,
+            constants_pool,
+            access_flags,
             this_class,
-            class,
+            this_class_index,
+            super_class_index,
+            interfaces,
+            fields: FrozenVec::new(),
+            methods: FrozenVec::new(),
+            attributes: FrozenVec::new(),
             class_graph,
-            constants_pool: Rc::new(RefCell::new(constants)),
         })
     }
 
     /// Consume the builder and return the file class file
     ///
     /// Only call this if all associated builders have been released
-    pub fn result(mut self) -> ClassFile {
-        self.class.constants = Rc::try_unwrap(self.constants_pool)
-            .ok()
-            .expect("cannot unwrap reference constant pool (there is still a reference to it)")
-            .into_inner()
-            .into_offset_vec();
-        self.class
+    pub fn result(self) -> ClassFile {
+        ClassFile {
+            version: self.version,
+            constants: self.constants_pool.into_offset_vec(),
+            access_flags: self.access_flags,
+            this_class: self.this_class_index,
+            super_class: self.super_class_index,
+            interfaces: self.interfaces,
+            fields: self.fields.into_vec().into_iter().map(|x| *x).collect(),
+            methods: self.methods.into_vec().into_iter().map(|x| *x).collect(),
+            attributes: self.attributes.into_vec().into_iter().map(|x| *x).collect(),
+        }
     }
 
     /// Add an attribute to the class
-    pub fn add_attribute(&mut self, attribute: impl AttributeLike) -> Result<(), Error> {
-        let attribute = self.constants_pool.borrow_mut().get_attribute(attribute)?;
-        self.class.attributes.push(attribute);
+    pub fn add_attribute(&self, attribute: impl AttributeLike) -> Result<(), Error> {
+        let attribute = self.constants_pool.get_attribute(attribute)?;
+        self.attributes.push(Box::new(attribute));
         Ok(())
     }
 
     /// Add a field to the class
     pub fn add_field(
-        &mut self,
+        &self,
         access_flags: FieldAccessFlags,
         name: UnqualifiedName,
         descriptor: String,
@@ -99,30 +124,30 @@ impl ClassBuilder {
 
     /// Add a field with a generic signature to the class
     pub fn add_field_with_signature(
-        &mut self,
+        &self,
         access_flags: FieldAccessFlags,
         name: UnqualifiedName,
         descriptor: String,
         signature: Option<String>,
     ) -> Result<(), Error> {
-        let name_index = self.constants_pool.borrow_mut().get_utf8(name.as_str())?;
-        let descriptor_index = self.constants_pool.borrow_mut().get_utf8(&descriptor)?;
+        let name_index = self.constants_pool.get_utf8(name.as_str())?;
+        let descriptor_index = self.constants_pool.get_utf8(&descriptor)?;
         let descriptor = FieldType::parse(&descriptor).map_err(Error::IoError)?;
         let mut attributes: Vec<Attribute> = vec![];
 
         // Add the optional generic `Signature` attribute
         if let Some(generic_sig) = signature {
-            let sig = self.constants_pool.borrow_mut().get_utf8(generic_sig)?;
+            let sig = self.constants_pool.get_utf8(generic_sig)?;
             let sig = Signature { signature: sig };
-            attributes.push(self.constants_pool.borrow_mut().get_attribute(sig)?);
+            attributes.push(self.constants_pool.get_attribute(sig)?);
         }
 
-        self.class.fields.push(Field {
+        self.fields.push(Box::new(Field {
             access_flags,
             name_index,
             descriptor_index,
             attributes,
-        });
+        }));
 
         let class_str: &BinaryName = &self.this_class;
         self.class_graph
@@ -141,27 +166,27 @@ impl ClassBuilder {
 
     /// Add a method to the class
     pub fn add_method(
-        &mut self,
+        &self,
         access_flags: MethodAccessFlags,
         name: UnqualifiedName,
         descriptor: String,
         code: Option<Code>,
     ) -> Result<(), Error> {
-        let name_index = self.constants_pool.borrow_mut().get_utf8(name.as_str())?;
-        let descriptor_index = self.constants_pool.borrow_mut().get_utf8(&descriptor)?;
+        let name_index = self.constants_pool.get_utf8(name.as_str())?;
+        let descriptor_index = self.constants_pool.get_utf8(&descriptor)?;
         let descriptor = MethodDescriptor::parse(&descriptor).map_err(Error::IoError)?;
         let mut attributes = vec![];
 
         if let Some(code) = code {
-            attributes.push(self.constants_pool.borrow_mut().get_attribute(code)?);
+            attributes.push(self.constants_pool.get_attribute(code)?);
         }
 
-        self.class.methods.push(Method {
+        self.methods.push(Box::new(Method {
             access_flags,
             name_index,
             descriptor_index,
             attributes,
-        });
+        }));
 
         let class_str: &BinaryName = &self.this_class;
         self.class_graph
@@ -179,7 +204,7 @@ impl ClassBuilder {
     }
 
     pub fn start_method(
-        &mut self,
+        &self,
         access_flags: MethodAccessFlags,
         name: UnqualifiedName,
         descriptor: MethodDescriptor,
@@ -199,7 +224,7 @@ impl ClassBuilder {
             !is_static,
             &name == &UnqualifiedName::INIT,
             self.class_graph.clone(),
-            self.constants_pool.clone(),
+            &self.constants_pool,
             RefType::Object(self.this_class.clone()),
         );
 
@@ -208,34 +233,9 @@ impl ClassBuilder {
             access_flags,
             descriptor: rendered_descriptor,
             code,
+            methods: &self.methods,
+            constants_pool: &self.constants_pool,
         })
-    }
-
-    pub fn finish_method(&mut self, builder: MethodBuilder) -> Result<(), Error> {
-        let name_index = self
-            .constants_pool
-            .borrow_mut()
-            .get_utf8(builder.name.as_str())?;
-        let descriptor_index = self
-            .constants_pool
-            .borrow_mut()
-            .get_utf8(&builder.descriptor)?;
-
-        let code = builder.code.result()?;
-        let code = self.constants_pool.borrow_mut().get_attribute(code)?;
-
-        self.class.methods.push(Method {
-            access_flags: builder.access_flags,
-            name_index,
-            descriptor_index,
-            attributes: vec![code],
-        });
-
-        Ok(())
-    }
-
-    pub fn constants(&self) -> RefMut<ConstantsPool> {
-        self.constants_pool.borrow_mut()
     }
 
     pub fn class_name(&self) -> &BinaryName {
@@ -243,7 +243,7 @@ impl ClassBuilder {
     }
 }
 
-pub struct MethodBuilder {
+pub struct MethodBuilder<'a> {
     /// This method name
     name: UnqualifiedName,
 
@@ -254,7 +254,33 @@ pub struct MethodBuilder {
     descriptor: String,
 
     /// Code builder
-    pub code: BytecodeBuilder,
+    pub code: BytecodeBuilder<'a>,
+
+    /// Where to ultimately push the result
+    methods: &'a FrozenVec<Box<Method>>,
+
+    /// Constants pool
+    constants_pool: &'a ConstantsPool,
+}
+
+impl<'a> MethodBuilder<'a> {
+    pub fn finish(self) -> Result<(), Error> {
+        let name_index = self.constants_pool.get_utf8(self.name.as_str())?;
+        let descriptor_index = self.constants_pool.get_utf8(&self.descriptor)?;
+
+        let code = self.code.result()?;
+        let code = self.constants_pool.get_attribute(code)?;
+        let method = Method {
+            access_flags: self.access_flags,
+            name_index,
+            descriptor_index,
+            attributes: vec![code],
+        };
+
+        self.methods.push(Box::new(method));
+
+        Ok(())
+    }
 }
 
 #[test]
@@ -336,7 +362,7 @@ fn sample_class() -> Result<(), Error> {
     code.place_label(end)?;
     code.push_branch_instruction(Return)?;
 
-    class_builder.finish_method(method_builder)?;
+    method_builder.finish()?;
 
     let class_file = class_builder.result();
 

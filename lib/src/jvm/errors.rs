@@ -7,7 +7,7 @@ use super::{
 pub enum Error {
     ConstantPoolOverflow {
         constant: Constant,
-        offset: usize,
+        offset: u16,
     },
     IoError(std::io::Error),
     MethodCodeMaxStackOverflow(Offset),

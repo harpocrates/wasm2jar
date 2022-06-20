@@ -63,7 +63,7 @@ impl Frame<RefType, (RefType, Offset)> {
     /// Resolve the frame into its serializable form
     pub fn into_serializable(
         &self,
-        constants_pool: &mut ConstantsPool,
+        constants_pool: &ConstantsPool,
         block_offset: Offset,
     ) -> Result<Frame<ClassConstantIndex, u16>, Error> {
         Ok(Frame {
@@ -270,7 +270,7 @@ impl VerificationType<RefType, (RefType, Offset)> {
     /// Resolve the type into its serializable form
     fn into_serializable(
         &self,
-        constants_pool: &mut ConstantsPool,
+        constants_pool: &ConstantsPool,
         block_offset: Offset,
     ) -> Result<VerificationType<ClassConstantIndex, u16>, Error> {
         match self {

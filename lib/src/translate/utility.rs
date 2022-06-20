@@ -394,7 +394,7 @@ impl UtilityClass {
             .concat(&UnqualifiedName::DOLLAR)
             .concat(&inner_class_short_name);
 
-        let mut class = ClassBuilder::new(
+        let class = ClassBuilder::new(
             ClassAccessFlags::SYNTHETIC,
             class_name,
             BinaryName::OBJECT,
@@ -405,7 +405,7 @@ impl UtilityClass {
 
         // Add the `InnerClasses` attribute
         let inner_classes: InnerClasses = {
-            let mut constants = class.constants();
+            let constants = &class.constants_pool;
             let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
             let inner_class_name = constants.get_utf8(class.class_name().as_str())?;
@@ -543,7 +543,7 @@ impl UtilityClass {
             }
         }
 
-        class.finish_method(method_builder)?;
+        method_builder.finish()?;
         Ok(true)
     }
 
@@ -2822,7 +2822,7 @@ impl BootstrapUtilities {
         table: &Table,
         table_field_class: &BinaryName,
         utilities: &mut UtilityClass,
-        constants: &mut ConstantsPool,
+        constants: &ConstantsPool,
     ) -> Result<u16, Error> {
         if let Some(bootstrap) = self.table_bootstrap_methods.get(&table_index) {
             return Ok(*bootstrap);
@@ -2894,7 +2894,7 @@ impl BootstrapUtilities {
         memory: &Memory,
         memory_field_class: &BinaryName,
         utilities: &mut UtilityClass,
-        constants: &mut ConstantsPool,
+        constants: &ConstantsPool,
     ) -> Result<u16, Error> {
         if let Some(bootstrap) = self.memory_bootstrap_methods.get(&memory_index) {
             return Ok(*bootstrap);

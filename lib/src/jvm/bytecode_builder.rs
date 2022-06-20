@@ -50,7 +50,7 @@ Notes:
 /// enforce that labels cannot be placed unless they are reachable (either with a fall-through from
 /// above, or there has already been a jump to the label). This is also important for the sake of
 /// always being able to find the initial frame of the block.
-pub struct BytecodeBuilder {
+pub struct BytecodeBuilder<'a> {
     /// This method signature
     descriptor: MethodDescriptor,
 
@@ -83,22 +83,22 @@ pub struct BytecodeBuilder {
     class_graph: Rc<RefCell<ClassGraph>>,
 
     /// Constants pool
-    constants_pool: Rc<RefCell<ConstantsPool>>,
+    pub constants_pool: &'a ConstantsPool,
 
     /// Enclosing type
     this_type: RefType,
 }
 
-impl BytecodeBuilder {
+impl<'a> BytecodeBuilder<'a> {
     /// Create a builder for a new method
     pub fn new(
         descriptor: MethodDescriptor,
         is_instance_method: bool,
         is_constructor: bool,
         class_graph: Rc<RefCell<ClassGraph>>,
-        constants_pool: Rc<RefCell<ConstantsPool>>,
+        constants_pool: &'a ConstantsPool,
         this_type: RefType,
-    ) -> BytecodeBuilder {
+    ) -> Self {
         // The initial local variables are just the parameters (including maybe "this")
         let mut locals = OffsetVec::new();
         if is_constructor {
@@ -175,7 +175,7 @@ impl BytecodeBuilder {
         let mut code_array: BytecodeArray = BytecodeArray(vec![]);
         let implicit_frame: Frame<ClassConstantIndex, u16> = self.blocks[&SynLabel::START]
             .frame
-            .into_serializable(&mut self.constants_pool.borrow_mut(), Offset(0))?;
+            .into_serializable(&self.constants_pool, Offset(0))?;
         let mut frames: Vec<(Offset, Frame<ClassConstantIndex, u16>)> = vec![];
         let mut fallthrough_label: Option<SynLabel> = None;
 
@@ -192,10 +192,9 @@ impl BytecodeBuilder {
             if jump_targets.contains(&block_label) {
                 frames.push((
                     basic_block.offset_from_start,
-                    basic_block.frame.into_serializable(
-                        &mut self.constants_pool.borrow_mut(),
-                        basic_block.offset_from_start,
-                    )?,
+                    basic_block
+                        .frame
+                        .into_serializable(&self.constants_pool, basic_block.offset_from_start)?,
                 ));
             }
 
@@ -254,11 +253,7 @@ impl BytecodeBuilder {
         // Add `StackMapTable` attribute only if there are frames
         if !stack_map_frames.is_empty() {
             let stack_map_table = StackMapTable(stack_map_frames);
-            attributes.push(
-                self.constants_pool
-                    .borrow_mut()
-                    .get_attribute(stack_map_table)?,
-            );
+            attributes.push(self.constants_pool.get_attribute(stack_map_table)?);
         }
 
         Ok(Code {
@@ -342,7 +337,7 @@ impl BytecodeBuilder {
     }
 }
 
-impl CodeBuilder<Error> for BytecodeBuilder {
+impl<'a> CodeBuilder<Error> for BytecodeBuilder<'a> {
     type Lbl = SynLabel;
 
     fn fresh_label(&mut self) -> SynLabel {
@@ -359,7 +354,7 @@ impl CodeBuilder<Error> for BytecodeBuilder {
                     &insn,
                     current_block.instructions.offset_len(),
                     &self.class_graph.borrow(),
-                    &self.constants_pool.borrow(),
+                    &self.constants_pool,
                     &self.this_type,
                 )
                 .map_err(|kind| Error::VerifierError {
@@ -476,8 +471,8 @@ impl CodeBuilder<Error> for BytecodeBuilder {
         self.place_label(label)
     }
 
-    fn constants(&self) -> RefMut<ConstantsPool> {
-        self.constants_pool.borrow_mut()
+    fn constants(&self) -> &'a ConstantsPool {
+        self.constants_pool
     }
 
     fn class_graph(&self) -> RefMut<ClassGraph> {

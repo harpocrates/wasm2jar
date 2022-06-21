@@ -2,7 +2,9 @@ use super::{
     BinaryName, Descriptor, Error, FieldType, InvokeType, MethodDescriptor, RefType,
     UnqualifiedName,
 };
-use std::collections::{HashMap, HashSet};
+use elsa::map::FrozenMap;
+use elsa::FrozenVec;
+use std::collections::HashSet;
 
 /// Tracks the relationships between classes/interfaces and the members on those classes
 ///
@@ -10,14 +12,14 @@ use std::collections::{HashMap, HashSet};
 /// of the types/members in the generated code. Then, when a class needs to access some member, it
 /// can import the necessary segment of the class graph into its constant pool.
 pub struct ClassGraph {
-    pub classes: HashMap<BinaryName, ClassData>,
+    classes: FrozenMap<BinaryName, Box<ClassData>>,
 }
 
 impl ClassGraph {
     /// New empty graph
     pub fn new() -> ClassGraph {
         ClassGraph {
-            classes: HashMap::new(),
+            classes: FrozenMap::new(),
         }
     }
 
@@ -100,49 +102,49 @@ impl ClassGraph {
                 .get(class_name)
                 .ok_or_else(|| Error::MissingClass(class_name.clone()))?;
             let is_interface = class.is_interface;
-            if let Some(matching_methods) = class.methods.get(method_name) {
-                let mut method_overloads = matching_methods
-                    .iter()
-                    .map(|(desc, is_static)| {
-                        let typ = if *is_static {
-                            InvokeType::Static
-                        } else if method_name == &UnqualifiedName::INIT
-                            || method_name == &UnqualifiedName::CLINIT
-                        {
-                            InvokeType::Special
-                        } else if is_interface {
-                            let n = desc.parameter_length(true) as u8;
-                            InvokeType::Interface(n)
-                        } else {
-                            InvokeType::Virtual
-                        };
-                        (typ, desc.clone())
-                    })
-                    .collect::<Vec<_>>();
+            let mut method_overloads = class
+                .methods
+                .iter()
+                .filter(|(name, _, _)| name == method_name)
+                .map(|(_, desc, is_static)| {
+                    let typ = if *is_static {
+                        InvokeType::Static
+                    } else if method_name == &UnqualifiedName::INIT
+                        || method_name == &UnqualifiedName::CLINIT
+                    {
+                        InvokeType::Special
+                    } else if is_interface {
+                        let n = desc.parameter_length(true) as u8;
+                        InvokeType::Interface(n)
+                    } else {
+                        InvokeType::Virtual
+                    };
+                    (typ, desc.clone())
+                })
+                .collect::<Vec<_>>();
 
-                if method_overloads.len() == 1 {
-                    return Ok(method_overloads.pop().unwrap());
-                } else {
-                    let mut alts = String::new();
-                    for (_, alt) in &method_overloads {
-                        if !alts.is_empty() {
-                            alts.push_str(", ");
-                        }
-                        alts.push_str(&alt.render());
-                    }
-                    log::error!(
-                        "Ambiguous overloads for {:?}.{:?}: {}",
-                        class_name,
-                        method_name,
-                        alts
-                    );
-                    return Err(Error::AmbiguousMethod(
-                        class_name.clone(),
-                        method_name.clone(),
-                    ));
-                }
-            } else {
+            if method_overloads.len() == 1 {
+                return Ok(method_overloads.pop().unwrap());
+            } else if method_overloads.len() == 0 {
                 next_class_name_opt = class.superclass.as_ref();
+            } else {
+                let mut alts = String::new();
+                for (_, alt) in &method_overloads {
+                    if !alts.is_empty() {
+                        alts.push_str(", ");
+                    }
+                    alts.push_str(&alt.render());
+                }
+                log::error!(
+                    "Ambiguous overloads for {:?}.{:?}: {}",
+                    class_name,
+                    method_name,
+                    alts
+                );
+                return Err(Error::AmbiguousMethod(
+                    class_name.clone(),
+                    method_name.clone(),
+                ));
             }
         }
 
@@ -175,17 +177,27 @@ impl ClassGraph {
         Err(Error::MissingMember(class_name.clone(), field_name.clone()))
     }
 
+    // TODO: remove uses of this
+    pub fn lookup_class(&self, name: &BinaryName) -> Option<&ClassData> {
+        self.classes.get(name)
+    }
+
+    /// Add a new class to the class graph
+    pub fn add_class(&self, name: BinaryName, data: ClassData) -> &ClassData {
+        self.classes.insert(name, Box::new(data))
+    }
+
     /// Add standard types to the class graph
-    pub fn insert_lang_types(&mut self) {
+    pub fn insert_lang_types(&self) {
         // java.lang.Object
         {
-            let java_lang_object = self.classes.entry(BinaryName::OBJECT).or_insert(ClassData {
+            let java_lang_object = ClassData {
                 superclass: None,
                 interfaces: HashSet::new(),
                 is_interface: false,
-                methods: HashMap::new(),
-                fields: HashMap::new(),
-            });
+                methods: FrozenVec::new(),
+                fields: FrozenMap::new(),
+            };
             java_lang_object.add_method(
                 false,
                 UnqualifiedName::EQUALS,
@@ -210,14 +222,12 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::OBJECT, java_lang_object);
         }
 
         // java.lang.CharSequence
         {
-            let java_lang_charsequence = self
-                .classes
-                .entry(BinaryName::CHARSEQUENCE)
-                .or_insert(ClassData::new(BinaryName::OBJECT, true));
+            let java_lang_charsequence = ClassData::new(BinaryName::OBJECT, true);
             java_lang_charsequence.add_method(
                 false,
                 UnqualifiedName::LENGTH,
@@ -226,14 +236,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::INT),
                 },
             );
+            self.add_class(BinaryName::CHARSEQUENCE, java_lang_charsequence);
         }
 
         // java.lang.String
         {
-            let java_lang_string = self
-                .classes
-                .entry(BinaryName::STRING)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let mut java_lang_string = ClassData::new(BinaryName::OBJECT, false);
             java_lang_string.interfaces.insert(BinaryName::CHARSEQUENCE);
             java_lang_string.add_method(
                 false,
@@ -243,22 +251,18 @@ impl ClassGraph {
                     return_type: Some(FieldType::array(FieldType::BYTE)),
                 },
             );
+            self.add_class(BinaryName::STRING, java_lang_string);
         }
 
         // java.lang.Class
         {
-            let _java_lang_class = self
-                .classes
-                .entry(BinaryName::CLASS)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_class = ClassData::new(BinaryName::OBJECT, false);
+            self.add_class(BinaryName::CLASS, java_lang_class);
         }
 
         // java.lang.invoke.MethodType
         {
-            let java_lang_invoke_methodtype = self
-                .classes
-                .entry(BinaryName::METHODTYPE)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_invoke_methodtype = ClassData::new(BinaryName::OBJECT, false);
             java_lang_invoke_methodtype.add_method(
                 false,
                 UnqualifiedName::PARAMETERCOUNT,
@@ -310,14 +314,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
                 },
             );
+            self.add_class(BinaryName::METHODTYPE, java_lang_invoke_methodtype);
         }
 
         // java.lang.invoke.MethodHandle
         {
-            let java_lang_invoke_methodhandle = self
-                .classes
-                .entry(BinaryName::METHODHANDLE)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_invoke_methodhandle = ClassData::new(BinaryName::OBJECT, false);
             java_lang_invoke_methodhandle.add_method(
                 false,
                 UnqualifiedName::TYPE,
@@ -342,14 +344,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::Ref(RefType::METHODTYPE)),
                 },
             );
+            self.add_class(BinaryName::METHODHANDLE, java_lang_invoke_methodhandle);
         }
 
         // java.lang.invoke.MethodHandles
         {
-            let java_lang_invoke_methodhandles = self
-                .classes
-                .entry(BinaryName::METHODHANDLES)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_invoke_methodhandles = ClassData::new(BinaryName::OBJECT, false);
             java_lang_invoke_methodhandles.add_method(
                 true,
                 UnqualifiedName::DROPARGUMENTS,
@@ -460,14 +460,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
                 },
             );
+            self.add_class(BinaryName::METHODHANDLES, java_lang_invoke_methodhandles);
         }
 
         // java.lang.invoke.MethodHandles#Lookup
         {
-            let java_lang_invoke_methodhandles_lookup = self
-                .classes
-                .entry(BinaryName::METHODHANDLES_LOOKUP)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_invoke_methodhandles_lookup = ClassData::new(BinaryName::OBJECT, false);
             java_lang_invoke_methodhandles_lookup.add_method(
                 true,
                 UnqualifiedName::FINDSTATIC,
@@ -480,14 +478,15 @@ impl ClassGraph {
                     return_type: Some(FieldType::Ref(RefType::METHODHANDLE)),
                 },
             );
+            self.add_class(
+                BinaryName::METHODHANDLES_LOOKUP,
+                java_lang_invoke_methodhandles_lookup,
+            );
         }
 
         // java.lang.invoke.CallSite
         {
-            let java_lang_invoke_callsite = self
-                .classes
-                .entry(BinaryName::CALLSITE)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_invoke_callsite = ClassData::new(BinaryName::OBJECT, false);
             java_lang_invoke_callsite.add_method(
                 false,
                 UnqualifiedName::DYNAMICINVOKER,
@@ -520,14 +519,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::object(BinaryName::METHODTYPE)),
                 },
             );
+            self.add_class(BinaryName::CALLSITE, java_lang_invoke_callsite);
         }
 
         // java.lang.invoke.ConstantCallSite
         {
-            let java_lang_invoke_constantcallsite = self
-                .classes
-                .entry(BinaryName::CONSTANTCALLSITE)
-                .or_insert(ClassData::new(BinaryName::CALLSITE, false));
+            let java_lang_invoke_constantcallsite = ClassData::new(BinaryName::CALLSITE, false);
             java_lang_invoke_constantcallsite.add_method(
                 false,
                 UnqualifiedName::INIT,
@@ -536,14 +533,15 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(
+                BinaryName::CONSTANTCALLSITE,
+                java_lang_invoke_constantcallsite,
+            );
         }
 
         // java.lang.invoke.MutableCallSite
         {
-            let java_lang_invoke_mutablecallsite = self
-                .classes
-                .entry(BinaryName::MUTABLECALLSITE)
-                .or_insert(ClassData::new(BinaryName::CALLSITE, false));
+            let java_lang_invoke_mutablecallsite = ClassData::new(BinaryName::CALLSITE, false);
             java_lang_invoke_mutablecallsite.add_method(
                 true,
                 UnqualifiedName::SYNCALL,
@@ -564,14 +562,15 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(
+                BinaryName::MUTABLECALLSITE,
+                java_lang_invoke_mutablecallsite,
+            );
         }
 
         // java.lang.Number
         {
-            let java_lang_number = self
-                .classes
-                .entry(BinaryName::NUMBER)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_number = ClassData::new(BinaryName::OBJECT, false);
             for (extractor, extracted_type) in vec![
                 (UnqualifiedName::BYTEVALUE, FieldType::BYTE),
                 (UnqualifiedName::DOUBLEVALUE, FieldType::DOUBLE),
@@ -589,14 +588,12 @@ impl ClassGraph {
                     },
                 );
             }
+            self.add_class(BinaryName::NUMBER, java_lang_number);
         }
 
         // java.lang.Integer
         {
-            let java_lang_integer = self
-                .classes
-                .entry(BinaryName::INTEGER)
-                .or_insert(ClassData::new(BinaryName::NUMBER, false));
+            let java_lang_integer = ClassData::new(BinaryName::NUMBER, false);
             for (name, output_ty) in vec![
                 (UnqualifiedName::VALUEOF, FieldType::Ref(RefType::INTEGER)),
                 (UnqualifiedName::BITCOUNT, FieldType::INT),
@@ -637,14 +634,12 @@ impl ClassGraph {
                 UnqualifiedName::UPPERCASE_TYPE,
                 FieldType::Ref(RefType::CLASS),
             );
+            self.add_class(BinaryName::INTEGER, java_lang_integer);
         }
 
         // java.lang.Float
         {
-            let java_lang_float = self
-                .classes
-                .entry(BinaryName::FLOAT)
-                .or_insert(ClassData::new(BinaryName::NUMBER, false));
+            let java_lang_float = ClassData::new(BinaryName::NUMBER, false);
             for (name, input_ty, output_ty) in vec![
                 (
                     UnqualifiedName::VALUEOF,
@@ -695,14 +690,12 @@ impl ClassGraph {
                 UnqualifiedName::UPPERCASE_TYPE,
                 FieldType::Ref(RefType::CLASS),
             );
+            self.add_class(BinaryName::FLOAT, java_lang_float);
         }
 
         // java.lang.Long
         {
-            let java_lang_long = self
-                .classes
-                .entry(BinaryName::LONG)
-                .or_insert(ClassData::new(BinaryName::NUMBER, false));
+            let java_lang_long = ClassData::new(BinaryName::NUMBER, false);
             for (name, output_ty) in vec![
                 (UnqualifiedName::VALUEOF, FieldType::Ref(RefType::LONG)),
                 (UnqualifiedName::BITCOUNT, FieldType::INT),
@@ -767,14 +760,12 @@ impl ClassGraph {
                 UnqualifiedName::UPPERCASE_TYPE,
                 FieldType::Ref(RefType::CLASS),
             );
+            self.add_class(BinaryName::LONG, java_lang_long);
         }
 
         // java.lang.Double
         {
-            let java_lang_double = self
-                .classes
-                .entry(BinaryName::DOUBLE)
-                .or_insert(ClassData::new(BinaryName::NUMBER, false));
+            let java_lang_double = ClassData::new(BinaryName::NUMBER, false);
             for (name, input_ty, output_ty) in vec![
                 (
                     UnqualifiedName::VALUEOF,
@@ -825,27 +816,23 @@ impl ClassGraph {
                 UnqualifiedName::UPPERCASE_TYPE,
                 FieldType::Ref(RefType::CLASS),
             );
+            self.add_class(BinaryName::DOUBLE, java_lang_double);
         }
 
         // java.lang.Void
         {
-            let java_lang_void = self
-                .classes
-                .entry(BinaryName::VOID)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_void = ClassData::new(BinaryName::OBJECT, false);
             java_lang_void.add_field(
                 true,
                 UnqualifiedName::UPPERCASE_TYPE,
                 FieldType::Ref(RefType::CLASS),
             );
+            self.add_class(BinaryName::VOID, java_lang_void);
         }
 
         // java.lang.Boolean
         {
-            let java_lang_boolean = self
-                .classes
-                .entry(BinaryName::BOOLEAN)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_boolean = ClassData::new(BinaryName::OBJECT, false);
             java_lang_boolean.add_field(
                 true,
                 UnqualifiedName::UPPERCASE_TYPE,
@@ -859,14 +846,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::Ref(RefType::Object(BinaryName::BOOLEAN))),
                 },
             );
+            self.add_class(BinaryName::BOOLEAN, java_lang_boolean);
         }
 
         // java.lang.Math
         {
-            let java_lang_math = self
-                .classes
-                .entry(BinaryName::MATH)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_math = ClassData::new(BinaryName::OBJECT, false);
             for name in vec![
                 UnqualifiedName::CEIL,
                 UnqualifiedName::FLOOR,
@@ -916,14 +901,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::INT),
                 },
             );
+            self.add_class(BinaryName::MATH, java_lang_math);
         }
 
         // java.lang.System
         {
-            let java_lang_system = self
-                .classes
-                .entry(BinaryName::SYSTEM)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_system = ClassData::new(BinaryName::OBJECT, false);
             java_lang_system.add_method(
                 true,
                 UnqualifiedName::ARRAYCOPY,
@@ -938,17 +921,15 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::SYSTEM, java_lang_system);
         }
     }
 
     /// Add standard exception/error types to the class graph
-    pub fn insert_error_types(&mut self) {
+    pub fn insert_error_types(&self) {
         // java.lang.Throwable
         {
-            let java_lang_throwable = self
-                .classes
-                .entry(BinaryName::THROWABLE)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_lang_throwable = ClassData::new(BinaryName::OBJECT, false);
             java_lang_throwable.add_method(
                 false,
                 UnqualifiedName::INIT,
@@ -957,14 +938,12 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::THROWABLE, java_lang_throwable);
         }
 
         // java.lang.Error
         {
-            let java_lang_error = self
-                .classes
-                .entry(BinaryName::ERROR)
-                .or_insert(ClassData::new(BinaryName::THROWABLE, false));
+            let java_lang_error = ClassData::new(BinaryName::THROWABLE, false);
             java_lang_error.add_method(
                 false,
                 UnqualifiedName::INIT,
@@ -973,14 +952,12 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::ERROR, java_lang_error);
         }
 
         // java.lang.AssertionError
         {
-            let java_lang_assertionerror = self
-                .classes
-                .entry(BinaryName::ASSERTIONERROR)
-                .or_insert(ClassData::new(BinaryName::ERROR, false));
+            let java_lang_assertionerror = ClassData::new(BinaryName::ERROR, false);
             java_lang_assertionerror.add_method(
                 false,
                 UnqualifiedName::INIT,
@@ -989,14 +966,12 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::ASSERTIONERROR, java_lang_assertionerror);
         }
 
         // java.lang.Exception
         {
-            let java_lang_error = self
-                .classes
-                .entry(BinaryName::EXCEPTION)
-                .or_insert(ClassData::new(BinaryName::THROWABLE, false));
+            let java_lang_error = ClassData::new(BinaryName::THROWABLE, false);
             java_lang_error.add_method(
                 false,
                 UnqualifiedName::INIT,
@@ -1005,14 +980,12 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::EXCEPTION, java_lang_error);
         }
 
         // java.lang.RuntimeException
         {
-            let java_lang_error = self
-                .classes
-                .entry(BinaryName::RUNTIMEEXCEPTION)
-                .or_insert(ClassData::new(BinaryName::EXCEPTION, false));
+            let java_lang_error = ClassData::new(BinaryName::EXCEPTION, false);
             java_lang_error.add_method(
                 false,
                 UnqualifiedName::INIT,
@@ -1021,14 +994,12 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::RUNTIMEEXCEPTION, java_lang_error);
         }
 
         // java.lang.ArithmeticException
         {
-            let java_lang_error = self
-                .classes
-                .entry(BinaryName::ARITHMETICEXCEPTION)
-                .or_insert(ClassData::new(BinaryName::RUNTIMEEXCEPTION, false));
+            let java_lang_error = ClassData::new(BinaryName::RUNTIMEEXCEPTION, false);
             java_lang_error.add_method(
                 false,
                 UnqualifiedName::INIT,
@@ -1037,14 +1008,12 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::ARITHMETICEXCEPTION, java_lang_error);
         }
 
         // java.lang.IllegalArgumentException
         {
-            let java_lang_error = self
-                .classes
-                .entry(BinaryName::ILLEGALARGUMENTEXCEPTION)
-                .or_insert(ClassData::new(BinaryName::RUNTIMEEXCEPTION, false));
+            let java_lang_error = ClassData::new(BinaryName::RUNTIMEEXCEPTION, false);
             java_lang_error.add_method(
                 false,
                 UnqualifiedName::INIT,
@@ -1053,17 +1022,15 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::ILLEGALARGUMENTEXCEPTION, java_lang_error);
         }
     }
 
     /// Add standard util types to the class graph
-    pub fn insert_util_types(&mut self) {
+    pub fn insert_util_types(&self) {
         // java.util.Arrays
         {
-            let java_util_arrays = self
-                .classes
-                .entry(BinaryName::ARRAYS)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_util_arrays = ClassData::new(BinaryName::OBJECT, false);
             java_util_arrays.add_method(
                 true,
                 UnqualifiedName::COPYOF,
@@ -1085,14 +1052,12 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::ARRAYS, java_util_arrays);
         }
 
         // java.util.Map
         {
-            let java_util_map = self
-                .classes
-                .entry(BinaryName::MAP)
-                .or_insert(ClassData::new(BinaryName::OBJECT, true));
+            let java_util_map = ClassData::new(BinaryName::OBJECT, true);
             java_util_map.add_method(
                 false,
                 UnqualifiedName::PUT,
@@ -1109,14 +1074,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::OBJECT),
                 },
             );
+            self.add_class(BinaryName::MAP, java_util_map);
         }
 
         // java.util.HashMap
         {
-            let java_util_hashmap = self
-                .classes
-                .entry(BinaryName::HASHMAP)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let mut java_util_hashmap = ClassData::new(BinaryName::OBJECT, true);
             java_util_hashmap.add_interfaces([BinaryName::MAP]);
             java_util_hashmap.add_method(
                 false,
@@ -1126,16 +1089,14 @@ impl ClassGraph {
                     return_type: None,
                 },
             );
+            self.add_class(BinaryName::HASHMAP, java_util_hashmap);
         }
     }
 
-    pub fn insert_buffer_types(&mut self) {
+    pub fn insert_buffer_types(&self) {
         // java.nio.Buffer
         {
-            let java_nio_buffer = self
-                .classes
-                .entry(BinaryName::BUFFER)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_nio_buffer = ClassData::new(BinaryName::OBJECT, false);
             java_nio_buffer.add_method(
                 false,
                 UnqualifiedName::POSITION,
@@ -1152,14 +1113,12 @@ impl ClassGraph {
                     return_type: Some(FieldType::INT),
                 },
             );
+            self.add_class(BinaryName::BUFFER, java_nio_buffer);
         }
 
         // java.nio.ByteOrder
         {
-            let java_nio_byteorder = self
-                .classes
-                .entry(BinaryName::BYTEORDER)
-                .or_insert(ClassData::new(BinaryName::OBJECT, false));
+            let java_nio_byteorder = ClassData::new(BinaryName::OBJECT, false);
             java_nio_byteorder.add_field(
                 true,
                 UnqualifiedName::BIGENDIAN,
@@ -1170,14 +1129,12 @@ impl ClassGraph {
                 UnqualifiedName::LITTLEENDIAN,
                 FieldType::object(BinaryName::BYTEORDER),
             );
+            self.add_class(BinaryName::BYTEORDER, java_nio_byteorder);
         }
 
         // java.nio.ByteBuffer
         {
-            let java_nio_bytebuffer = self
-                .classes
-                .entry(BinaryName::BYTEBUFFER)
-                .or_insert(ClassData::new(BinaryName::BUFFER, false));
+            let java_nio_bytebuffer = ClassData::new(BinaryName::BUFFER, false);
             java_nio_bytebuffer.add_method(
                 true,
                 UnqualifiedName::ALLOCATE,
@@ -1263,6 +1220,7 @@ impl ClassGraph {
                     return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
                 },
             );
+            self.add_class(BinaryName::BYTEBUFFER, java_nio_bytebuffer);
         }
     }
 }
@@ -1279,10 +1237,10 @@ pub struct ClassData {
     pub is_interface: bool,
 
     /// Methods
-    pub methods: HashMap<UnqualifiedName, HashMap<MethodDescriptor, bool>>,
+    pub methods: FrozenVec<Box<(UnqualifiedName, MethodDescriptor, bool)>>,
 
     /// Fields
-    pub fields: HashMap<UnqualifiedName, (bool, FieldType)>,
+    pub fields: FrozenMap<UnqualifiedName, Box<(bool, FieldType)>>,
 }
 
 impl ClassData {
@@ -1291,8 +1249,8 @@ impl ClassData {
             superclass: Some(superclass),
             interfaces: HashSet::new(),
             is_interface,
-            methods: HashMap::new(),
-            fields: HashMap::new(),
+            methods: FrozenVec::new(),
+            fields: FrozenMap::new(),
         }
     }
 
@@ -1300,19 +1258,14 @@ impl ClassData {
         self.interfaces.extend(interfaces);
     }
 
-    pub fn add_field(&mut self, is_static: bool, name: UnqualifiedName, descriptor: FieldType) {
-        self.fields.insert(name, (is_static, descriptor));
+    pub fn add_field(&self, is_static: bool, name: UnqualifiedName, descriptor: FieldType) {
+        self.fields.insert(name, Box::new((is_static, descriptor)));
     }
 
-    pub fn add_method(
-        &mut self,
-        is_static: bool,
-        name: UnqualifiedName,
-        descriptor: MethodDescriptor,
-    ) {
-        self.methods
-            .entry(name)
-            .or_insert(HashMap::new())
-            .insert(descriptor, is_static);
+    pub fn add_method(&self, is_static: bool, name: UnqualifiedName, descriptor: MethodDescriptor) {
+        let method = (name, descriptor, is_static);
+        if self.methods.iter().all(|m| m != &method) {
+            self.methods.push(Box::new(method));
+        }
     }
 }

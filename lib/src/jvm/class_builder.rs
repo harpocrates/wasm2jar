@@ -1,10 +1,8 @@
 use super::*;
 
 use elsa::FrozenVec;
-use std::cell::RefCell;
-use std::rc::Rc;
 
-pub struct ClassBuilder {
+pub struct ClassBuilder<'g> {
     /// Class file version
     version: Version,
 
@@ -36,10 +34,13 @@ pub struct ClassBuilder {
     attributes: FrozenVec<Box<Attribute>>,
 
     /// Class graph
-    class_graph: Rc<RefCell<ClassGraph>>,
+    class_graph: &'g ClassGraph,
+
+    /// Reference to class data in the class graph
+    class_data: &'g ClassData,
 }
 
-impl ClassBuilder {
+impl<'g> ClassBuilder<'g> {
     /// Create a new class builder
     pub fn new(
         access_flags: ClassAccessFlags,
@@ -47,17 +48,13 @@ impl ClassBuilder {
         super_class: BinaryName,
         is_interface: bool,
         interfaces: Vec<BinaryName>,
-        class_graph: Rc<RefCell<ClassGraph>>,
-    ) -> Result<ClassBuilder, Error> {
+        class_graph: &'g ClassGraph,
+    ) -> Result<ClassBuilder<'g>, Error> {
         let mut class_data = ClassData::new(super_class.clone(), is_interface);
         class_data.add_interfaces(interfaces.iter().cloned());
 
         // Make sure this class is in the class graph
-        class_graph
-            .borrow_mut()
-            .classes
-            .entry(this_class.clone())
-            .or_insert(class_data);
+        let class_data = class_graph.add_class(this_class.clone(), class_data);
 
         // Construct a fresh constant pool
         let constants_pool = ConstantsPool::new();
@@ -85,6 +82,7 @@ impl ClassBuilder {
             methods: FrozenVec::new(),
             attributes: FrozenVec::new(),
             class_graph,
+            class_data,
         })
     }
 
@@ -149,17 +147,11 @@ impl ClassBuilder {
             attributes,
         }));
 
-        let class_str: &BinaryName = &self.this_class;
-        self.class_graph
-            .borrow_mut()
-            .classes
-            .get_mut(class_str)
-            .expect("class cannot be found in class graph")
-            .add_field(
-                access_flags.contains(FieldAccessFlags::STATIC),
-                name,
-                descriptor,
-            );
+        self.class_data.add_field(
+            access_flags.contains(FieldAccessFlags::STATIC),
+            name,
+            descriptor,
+        );
 
         Ok(())
     }
@@ -188,17 +180,11 @@ impl ClassBuilder {
             attributes,
         }));
 
-        let class_str: &BinaryName = &self.this_class;
-        self.class_graph
-            .borrow_mut()
-            .classes
-            .get_mut(class_str)
-            .expect("class cannot be found in class graph")
-            .add_method(
-                access_flags.contains(MethodAccessFlags::STATIC),
-                name,
-                descriptor,
-            );
+        self.class_data.add_method(
+            access_flags.contains(MethodAccessFlags::STATIC),
+            name,
+            descriptor,
+        );
 
         Ok(())
     }
@@ -210,20 +196,14 @@ impl ClassBuilder {
         descriptor: MethodDescriptor,
     ) -> Result<MethodBuilder, Error> {
         let is_static = access_flags.contains(MethodAccessFlags::STATIC);
-        let class_str: &BinaryName = &self.this_class;
         let rendered_descriptor = descriptor.render();
-        self.class_graph
-            .borrow_mut()
-            .classes
-            .get_mut(class_str)
-            .expect("class cannot be found in class graph")
-            .add_method(is_static, name.clone(), descriptor.clone());
+        self.class_data.add_method(is_static, name.clone(), descriptor.clone());
 
         let code = BytecodeBuilder::new(
             descriptor,
             !is_static,
             &name == &UnqualifiedName::INIT,
-            self.class_graph.clone(),
+            self.class_graph,
             &self.constants_pool,
             RefType::Object(self.this_class.clone()),
         );
@@ -243,7 +223,7 @@ impl ClassBuilder {
     }
 }
 
-pub struct MethodBuilder<'a> {
+pub struct MethodBuilder<'a, 'g> {
     /// This method name
     name: UnqualifiedName,
 
@@ -254,7 +234,7 @@ pub struct MethodBuilder<'a> {
     descriptor: String,
 
     /// Code builder
-    pub code: BytecodeBuilder<'a>,
+    pub code: BytecodeBuilder<'a, 'g>,
 
     /// Where to ultimately push the result
     methods: &'a FrozenVec<Box<Method>>,
@@ -263,7 +243,7 @@ pub struct MethodBuilder<'a> {
     constants_pool: &'a ConstantsPool,
 }
 
-impl<'a> MethodBuilder<'a> {
+impl<'a, 'g> MethodBuilder<'a, 'g> {
     pub fn finish(self) -> Result<(), Error> {
         let name_index = self.constants_pool.get_utf8(self.name.as_str())?;
         let descriptor_index = self.constants_pool.get_utf8(&self.descriptor)?;
@@ -288,17 +268,16 @@ fn sample_class() -> Result<(), Error> {
     use BranchInstruction::*;
     use Instruction::*;
 
-    let mut class_graph = ClassGraph::new();
+    let class_graph = ClassGraph::new();
     class_graph.insert_lang_types();
-    let class_graph = Rc::new(RefCell::new(class_graph));
 
-    let mut class_builder = ClassBuilder::new(
+    let class_builder = ClassBuilder::new(
         ClassAccessFlags::PUBLIC,
         BinaryName::from_string(String::from("me/alec/Point")).unwrap(),
         BinaryName::from_string(String::from("java/lang/Object")).unwrap(),
         false,
         vec![],
-        class_graph,
+        &class_graph,
     )?;
 
     class_builder.add_field(

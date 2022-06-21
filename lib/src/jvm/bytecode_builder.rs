@@ -1,10 +1,8 @@
 use super::*;
 
-use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
-use std::rc::Rc;
 
 /*
 
@@ -50,7 +48,7 @@ Notes:
 /// enforce that labels cannot be placed unless they are reachable (either with a fall-through from
 /// above, or there has already been a jump to the label). This is also important for the sake of
 /// always being able to find the initial frame of the block.
-pub struct BytecodeBuilder<'a> {
+pub struct BytecodeBuilder<'a, 'g> {
     /// This method signature
     descriptor: MethodDescriptor,
 
@@ -80,7 +78,7 @@ pub struct BytecodeBuilder<'a> {
     next_label: SynLabel,
 
     /// Class graph
-    class_graph: Rc<RefCell<ClassGraph>>,
+    class_graph: &'g ClassGraph,
 
     /// Constants pool
     pub constants_pool: &'a ConstantsPool,
@@ -89,13 +87,13 @@ pub struct BytecodeBuilder<'a> {
     this_type: RefType,
 }
 
-impl<'a> BytecodeBuilder<'a> {
+impl<'a, 'g> BytecodeBuilder<'a, 'g> {
     /// Create a builder for a new method
     pub fn new(
         descriptor: MethodDescriptor,
         is_instance_method: bool,
         is_constructor: bool,
-        class_graph: Rc<RefCell<ClassGraph>>,
+        class_graph: &'g ClassGraph,
         constants_pool: &'a ConstantsPool,
         this_type: RefType,
     ) -> Self {
@@ -337,7 +335,7 @@ impl<'a> BytecodeBuilder<'a> {
     }
 }
 
-impl<'a> CodeBuilder<Error> for BytecodeBuilder<'a> {
+impl<'a, 'g> CodeBuilder<Error> for BytecodeBuilder<'a, 'g> {
     type Lbl = SynLabel;
 
     fn fresh_label(&mut self) -> SynLabel {
@@ -353,7 +351,7 @@ impl<'a> CodeBuilder<Error> for BytecodeBuilder<'a> {
                 .interpret_instruction(
                     &insn,
                     current_block.instructions.offset_len(),
-                    &self.class_graph.borrow(),
+                    &self.class_graph,
                     &self.constants_pool,
                     &self.this_type,
                 )
@@ -378,7 +376,7 @@ impl<'a> CodeBuilder<Error> for BytecodeBuilder<'a> {
                 .latest_frame
                 .interpret_branch_instruction(
                     &insn,
-                    &self.class_graph.borrow(),
+                    &self.class_graph,
                     &self.descriptor.return_type,
                 )
                 .map_err(|kind| Error::VerifierBranchingError {
@@ -422,7 +420,7 @@ impl<'a> CodeBuilder<Error> for BytecodeBuilder<'a> {
                 .latest_frame
                 .interpret_branch_instruction(
                     &fall_through_insn,
-                    &self.class_graph.borrow(),
+                    &self.class_graph,
                     &self.descriptor.return_type,
                 )
                 .map_err(|kind| Error::VerifierBranchingError {
@@ -475,8 +473,8 @@ impl<'a> CodeBuilder<Error> for BytecodeBuilder<'a> {
         self.constants_pool
     }
 
-    fn class_graph(&self) -> RefMut<ClassGraph> {
-        self.class_graph.borrow_mut()
+    fn class_graph(&self) -> &'g ClassGraph {
+        self.class_graph
     }
 
     fn current_frame(&self) -> Option<&Frame<RefType, (RefType, Offset)>> {

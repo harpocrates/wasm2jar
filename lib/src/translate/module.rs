@@ -9,9 +9,7 @@ use crate::jvm::{
     MethodDescriptor, Name, NestHost, NestMembers, RefType, UnqualifiedName, Width,
 };
 use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourcesExt};
-use std::cell::RefCell;
 use std::iter;
-use std::rc::Rc;
 use wasmparser::types::Types;
 use wasmparser::{
     Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader, Export,
@@ -20,19 +18,19 @@ use wasmparser::{
     TableSectionReader, TypeRef, Validator,
 };
 
-pub struct ModuleTranslator<'a> {
+pub struct ModuleTranslator<'a, 'g> {
     settings: Settings,
     validator: Validator,
     #[allow(dead_code)]
-    class_graph: Rc<RefCell<ClassGraph>>,
-    class: ClassBuilder,
-    previous_parts: Vec<ClassBuilder>,
+    class_graph: &'g ClassGraph,
+    class: ClassBuilder<'g>,
+    previous_parts: Vec<ClassBuilder<'g>>,
     fields_generated: bool,
 
-    current_part: CurrentPart,
+    current_part: CurrentPart<'g>,
 
     /// Utility class (just a carrier for whatever helper methods we may want)
-    utilities: UtilityClass,
+    utilities: UtilityClass<'g>,
 
     /// Populated when we visit exports
     exports: Vec<Export<'a>>,
@@ -56,28 +54,21 @@ pub struct ModuleTranslator<'a> {
     current_func_idx: u32,
 }
 
-struct CurrentPart {
-    class: ClassBuilder,
+struct CurrentPart<'g> {
+    class: ClassBuilder<'g>,
     bootstrap: BootstrapUtilities,
 }
-impl CurrentPart {
-    fn result(self) -> Result<ClassBuilder, Error> {
+impl<'g> CurrentPart<'g> {
+    fn result(self) -> Result<ClassBuilder<'g>, Error> {
         self.class
             .add_attribute(BootstrapMethods::from(self.bootstrap))?;
         Ok(self.class)
     }
 }
 
-impl<'a> ModuleTranslator<'a> {
-    pub fn new(settings: Settings) -> Result<ModuleTranslator<'a>, Error> {
+impl<'a, 'g> ModuleTranslator<'a, 'g> {
+    pub fn new(settings: Settings, class_graph: &'g ClassGraph) -> Result<Self, Error> {
         let validator = Validator::new_with_features(settings.wasm_features);
-
-        let mut class_graph = ClassGraph::new();
-        class_graph.insert_lang_types();
-        class_graph.insert_error_types();
-        class_graph.insert_util_types();
-        class_graph.insert_buffer_types();
-        let class_graph = Rc::new(RefCell::new(class_graph));
 
         let class = ClassBuilder::new(
             ClassAccessFlags::PUBLIC | ClassAccessFlags::SUPER,
@@ -87,8 +78,8 @@ impl<'a> ModuleTranslator<'a> {
             vec![],
             class_graph.clone(),
         )?;
-        let current_part = Self::new_part(&settings, class_graph.clone(), 0)?;
-        let utilities = UtilityClass::new(&settings, class_graph.clone())?;
+        let current_part = Self::new_part(&settings, class_graph, 0)?;
+        let utilities = UtilityClass::new(&settings, class_graph)?;
 
         Ok(ModuleTranslator {
             settings,
@@ -125,9 +116,9 @@ impl<'a> ModuleTranslator<'a> {
     /// Construct a new inner class part
     fn new_part(
         settings: &Settings,
-        class_graph: Rc<RefCell<ClassGraph>>,
+        class_graph: &'g ClassGraph,
         part_idx: usize,
-    ) -> Result<CurrentPart, Error> {
+    ) -> Result<CurrentPart<'g>, Error> {
         let name = settings
             .part_short_class_name
             .concat(&UnqualifiedName::number(part_idx));

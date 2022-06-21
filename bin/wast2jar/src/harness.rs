@@ -377,7 +377,13 @@ impl<'a> TestHarness<'a> {
 
         let translation_result =
             || -> Result<Vec<(jvm::BinaryName, jvm::ClassFile)>, translate::Error> {
-                let mut translator = translate::ModuleTranslator::new(settings)?;
+                let class_graph = jvm::ClassGraph::new();
+                class_graph.insert_lang_types();
+                class_graph.insert_error_types();
+                class_graph.insert_util_types();
+                class_graph.insert_buffer_types();
+
+                let mut translator = translate::ModuleTranslator::new(settings, &class_graph)?;
                 let types = translator.parse_module(&wasm_bytes)?;
                 translator.result(&types)
             };

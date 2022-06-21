@@ -1,7 +1,6 @@
 use super::{
     BranchInstruction, ClassGraph, ConstantsPool, Error, Frame, Instruction, Offset, RefType,
 };
-use std::cell::RefMut;
 use std::fmt::Debug;
 
 /// Abstract code building trait
@@ -45,7 +44,7 @@ pub trait CodeBuilder<E: Debug = Error> {
     fn constants(&self) -> &ConstantsPool;
 
     /// Get the class graph
-    fn class_graph(&self) -> RefMut<ClassGraph>;
+    fn class_graph(&self) -> &ClassGraph;
 
     /// Get the current frame
     fn current_frame(&self) -> Option<&Frame<RefType, (RefType, Offset)>>;

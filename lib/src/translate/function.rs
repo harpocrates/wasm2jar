@@ -19,7 +19,7 @@ use wasmparser::{
 };
 
 /// Context for translating a WASM function into a JVM one
-pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized> {
+pub struct FunctionTranslator<'a, 'b, 'g, B: CodeBuilder + Sized> {
     /// WASM type of the function being translated
     function_typ: FunctionType,
 
@@ -27,7 +27,7 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized> {
     settings: &'b Settings,
 
     /// Utilities
-    utilities: &'b mut UtilityClass,
+    utilities: &'b mut UtilityClass<'g>,
 
     /// Bootstrap utilities (unlike `utilities`, these get cleared across parts)
     bootstrap_utilities: &'b mut BootstrapUtilities,
@@ -63,14 +63,14 @@ pub struct FunctionTranslator<'a, 'b, B: CodeBuilder + Sized> {
     wasm_unreachable_frame_count: usize,
 }
 
-impl<'a, 'b, B> FunctionTranslator<'a, 'b, B>
+impl<'a, 'b, 'g, B> FunctionTranslator<'a, 'b, 'g, B>
 where
     B: CodeBuilderExts + Sized,
 {
     pub fn new(
         function_typ: FunctionType,
         settings: &'b Settings,
-        utilities: &'b mut UtilityClass,
+        utilities: &'b mut UtilityClass<'g>,
         bootstrap_utilities: &'b mut BootstrapUtilities,
         jvm_code: &'b mut B,
         wasm_tables: &'b [Table],
@@ -78,7 +78,7 @@ where
         wasm_globals: &'b [Global<'a>],
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<ValidatorResources>,
-    ) -> Result<FunctionTranslator<'a, 'b, B>, Error> {
+    ) -> Result<Self, Error> {
         let jvm_locals = LocalsLayout::new(
             function_typ
                 .inputs
@@ -1333,14 +1333,13 @@ where
             .wasm_function_name_prefix
             .concat(&UnqualifiedName::number(func_idx as usize));
 
-        let mut class_graph = self.jvm_code.class_graph();
+        let class_graph = self.jvm_code.class_graph();
         let mut desc = func_typ.method_descriptor();
         desc.parameters.push(FieldType::object(
             self.settings.output_full_class_name.clone(),
         ));
         class_graph
-            .classes
-            .get_mut(&class_name)
+            .lookup_class(&class_name)
             .expect("part class not in class graph")
             .add_method(true, method_name.clone(), desc);
 

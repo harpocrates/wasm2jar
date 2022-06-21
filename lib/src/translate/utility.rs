@@ -5,9 +5,7 @@ use crate::jvm::{
     HandleKind, InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType,
     MethodAccessFlags, MethodDescriptor, Name, OrdComparison, RefType, ShiftType, UnqualifiedName,
 };
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 /// Potential utility methods.
 ///
@@ -356,27 +354,27 @@ impl UtilityMethod {
 /// Class that serves a shared carrier of utility methods. In the name of keeping the translation
 /// outputs lean, these features are enumerated so that they can be requested then generated only
 /// on demand.
-enum UtilityClassInner {
+enum UtilityClassInner<'g> {
     /// Use an external class with this name
     External(BinaryName),
 
     /// Generate an internal utility class
     Internal {
         /// Builder for the inner class
-        class: ClassBuilder,
+        class: ClassBuilder<'g>,
 
         /// Set of the utility methods that have already been generated
         methods: HashSet<UtilityMethod>,
     },
 }
 
-pub struct UtilityClass(UtilityClassInner);
+pub struct UtilityClass<'g>(UtilityClassInner<'g>);
 
-impl UtilityClass {
+impl<'g> UtilityClass<'g> {
     pub fn new(
         settings: &Settings,
-        class_graph: Rc<RefCell<ClassGraph>>,
-    ) -> Result<UtilityClass, Error> {
+        class_graph: &'g ClassGraph,
+    ) -> Result<UtilityClass<'g>, Error> {
         // TODO: generate_all
         let (inner_class_short_name, _generate_all) = match &settings.utilities_strategy {
             UtilitiesStrategy::ReferenceExisting(external) => {
@@ -400,7 +398,7 @@ impl UtilityClass {
             BinaryName::OBJECT,
             false,
             vec![],
-            class_graph.clone(),
+            class_graph,
         )?;
 
         // Add the `InnerClasses` attribute
@@ -436,7 +434,7 @@ impl UtilityClass {
     }
 
     /// If there is a class being built, finalize and return it
-    pub fn into_builder(self) -> Option<ClassBuilder> {
+    pub fn into_builder(self) -> Option<ClassBuilder<'g>> {
         match self.0 {
             UtilityClassInner::External(_) => None,
             UtilityClassInner::Internal { class, .. } => Some(class),

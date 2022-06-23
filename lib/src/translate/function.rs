@@ -3,8 +3,9 @@ use super::{
     Table, UtilityClass, UtilityMethod,
 };
 use crate::jvm::{
-    BaseType, BinaryName, BranchInstruction, CodeBuilder, EqComparison, FieldType, Instruction,
-    InvokeType, MethodDescriptor, OffsetVec, OrdComparison, RefType, UnqualifiedName, Width,
+    BaseType, BranchInstruction, BytecodeBuilder, ClassData, EqComparison, FieldType, Instruction,
+    MethodData, MethodDescriptor, OffsetVec, OrdComparison, RefType, SynLabel, UnqualifiedName,
+    Width,
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
@@ -19,7 +20,7 @@ use wasmparser::{
 };
 
 /// Context for translating a WASM function into a JVM one
-pub struct FunctionTranslator<'a, 'b, 'g, B: CodeBuilder + Sized> {
+pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
     /// WASM type of the function being translated
     function_typ: FunctionType,
 
@@ -30,22 +31,25 @@ pub struct FunctionTranslator<'a, 'b, 'g, B: CodeBuilder + Sized> {
     utilities: &'b mut UtilityClass<'g>,
 
     /// Bootstrap utilities (unlike `utilities`, these get cleared across parts)
-    bootstrap_utilities: &'b mut BootstrapUtilities,
+    bootstrap_utilities: &'b mut BootstrapUtilities<'g>,
 
     /// Code builder
-    jvm_code: &'b mut B,
+    jvm_code: &'b mut BytecodeBuilder<'c, 'g>,
+
+    /// Main module class
+    class: &'g ClassData<'g>,
 
     /// Tables
-    wasm_tables: &'b [Table],
+    wasm_tables: &'b [Table<'g>],
 
     /// Memories
-    wasm_memories: &'b [Memory],
+    wasm_memories: &'b [Memory<'g>],
 
     /// Globals
-    wasm_globals: &'b [Global<'a>],
+    wasm_globals: &'b [Global<'a, 'g>],
 
     /// Local variables
-    jvm_locals: LocalsLayout,
+    jvm_locals: LocalsLayout<'g>,
 
     /// Validator for the WASM function
     wasm_validator: FuncValidator<ValidatorResources>,
@@ -57,25 +61,23 @@ pub struct FunctionTranslator<'a, 'b, 'g, B: CodeBuilder + Sized> {
     wasm_function: FunctionBody<'a>,
 
     /// Stack of WASM structured control flow frames
-    wasm_frames: Vec<ControlFrame<B::Lbl>>,
+    wasm_frames: Vec<ControlFrame<SynLabel>>,
 
     /// Count of WASM control frames which are unreachable
     wasm_unreachable_frame_count: usize,
 }
 
-impl<'a, 'b, 'g, B> FunctionTranslator<'a, 'b, 'g, B>
-where
-    B: CodeBuilderExts + Sized,
-{
+impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
     pub fn new(
         function_typ: FunctionType,
         settings: &'b Settings,
         utilities: &'b mut UtilityClass<'g>,
-        bootstrap_utilities: &'b mut BootstrapUtilities,
-        jvm_code: &'b mut B,
-        wasm_tables: &'b [Table],
-        wasm_memories: &'b [Memory],
-        wasm_globals: &'b [Global<'a>],
+        bootstrap_utilities: &'b mut BootstrapUtilities<'g>,
+        jvm_code: &'b mut BytecodeBuilder<'c, 'g>,
+        class: &'g ClassData<'g>,
+        wasm_tables: &'b [Table<'g>],
+        wasm_memories: &'b [Memory<'g>],
+        wasm_globals: &'b [Global<'a, 'g>],
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<ValidatorResources>,
     ) -> Result<Self, Error> {
@@ -83,8 +85,8 @@ where
             function_typ
                 .inputs
                 .iter()
-                .map(|wasm_ty| wasm_ty.field_type()),
-            RefType::Object(settings.output_full_class_name.clone()),
+                .map(|wasm_ty| wasm_ty.field_type(&jvm_code.java.classes)),
+            RefType::Object(class),
         );
 
         Ok(FunctionTranslator {
@@ -94,6 +96,7 @@ where
             bootstrap_utilities,
             jvm_code,
             jvm_locals,
+            class,
             wasm_tables,
             wasm_memories,
             wasm_globals,
@@ -129,7 +132,7 @@ where
             // WASM locals are zero initialized
             let local_type = StackType::from_general(local_type)?;
             for _ in 0..count {
-                let field_type = local_type.field_type();
+                let field_type = local_type.field_type(&self.jvm_code.java.classes);
                 let idx = self.jvm_locals.push_local(field_type.clone())?;
                 self.jvm_code.zero_local(idx, field_type)?;
             }
@@ -241,10 +244,7 @@ where
                 index,
                 table_index,
                 table_byte: _,
-            } => {
-                // TODO: pick the right table
-                self.visit_call_indirect(BlockType::FuncType(index), table_index)?
-            }
+            } => self.visit_call_indirect(BlockType::FuncType(index), table_index)?,
 
             // Parametric Instructions
             Operator::Drop => self.jvm_code.pop()?,
@@ -256,16 +256,16 @@ where
             // Variable Instructions
             Operator::LocalGet { local_index } => {
                 let (off, field_type) = self.jvm_locals.lookup_local(local_index)?;
-                self.jvm_code.get_local(off, field_type)?;
+                self.jvm_code.get_local(off, &field_type)?;
             }
             Operator::LocalSet { local_index } => {
                 let (off, field_type) = self.jvm_locals.lookup_local(local_index)?;
-                self.jvm_code.set_local(off, field_type)?;
+                self.jvm_code.set_local(off, &field_type)?;
             }
             Operator::LocalTee { local_index } => {
                 let (off, field_type) = self.jvm_locals.lookup_local(local_index)?;
                 self.jvm_code.dup()?;
-                self.jvm_code.set_local(off, field_type)?;
+                self.jvm_code.set_local(off, &field_type)?;
             }
             Operator::GlobalGet { global_index } => self.visit_global_get(global_index)?,
             Operator::GlobalSet { global_index } => self.visit_global_set(global_index)?,
@@ -280,99 +280,77 @@ where
             Operator::TableFill { table } => self.visit_table_fill(table)?,
 
             // Memory Instructions
-            Operator::I32Load { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETINT, BaseType::Int)?;
-            }
-            Operator::I64Load { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETLONG, BaseType::Long)?;
-            }
-            Operator::F32Load { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETFLOAT, BaseType::Float)?;
-            }
-            Operator::F64Load { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETDOUBLE, BaseType::Double)?;
-            }
-            Operator::I32Load8S { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GET, BaseType::Byte)?;
-            }
+            Operator::I32Load { memarg } => self.visit_memory_load(memarg, BaseType::Int)?,
+            Operator::I64Load { memarg } => self.visit_memory_load(memarg, BaseType::Long)?,
+            Operator::F32Load { memarg } => self.visit_memory_load(memarg, BaseType::Float)?,
+            Operator::F64Load { memarg } => self.visit_memory_load(memarg, BaseType::Double)?,
+            Operator::I32Load8S { memarg } => self.visit_memory_load(memarg, BaseType::Byte)?,
             Operator::I32Load8U { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GET, BaseType::Byte)?;
+                self.visit_memory_load(memarg, BaseType::Byte)?;
                 self.jvm_code.const_int(0xFF)?;
                 self.jvm_code.push_instruction(Instruction::IAnd)?;
             }
             Operator::I32Load16S { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETSHORT, BaseType::Short)?;
+                self.visit_memory_load(memarg, BaseType::Short)?;
             }
             Operator::I32Load16U { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETSHORT, BaseType::Short)?;
+                self.visit_memory_load(memarg, BaseType::Short)?;
                 self.jvm_code.const_int(0xFFFF)?;
                 self.jvm_code.push_instruction(Instruction::IAnd)?;
             }
             Operator::I64Load8S { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GET, BaseType::Byte)?;
+                self.visit_memory_load(memarg, BaseType::Byte)?;
                 self.jvm_code.push_instruction(Instruction::I2L)?;
             }
             Operator::I64Load8U { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GET, BaseType::Byte)?;
+                self.visit_memory_load(memarg, BaseType::Byte)?;
                 self.jvm_code.const_int(0xFF)?;
                 self.jvm_code.push_instruction(Instruction::IAnd)?;
                 self.jvm_code.push_instruction(Instruction::I2L)?;
             }
             Operator::I64Load16S { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETSHORT, BaseType::Short)?;
+                self.visit_memory_load(memarg, BaseType::Short)?;
                 self.jvm_code.push_instruction(Instruction::I2L)?;
             }
             Operator::I64Load16U { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETSHORT, BaseType::Short)?;
+                self.visit_memory_load(memarg, BaseType::Short)?;
                 self.jvm_code.const_int(0xFFFF)?;
                 self.jvm_code.push_instruction(Instruction::IAnd)?;
                 self.jvm_code.push_instruction(Instruction::I2L)?;
             }
             Operator::I64Load32S { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETINT, BaseType::Int)?;
+                self.visit_memory_load(memarg, BaseType::Int)?;
                 self.jvm_code.push_instruction(Instruction::I2L)?;
             }
             Operator::I64Load32U { memarg } => {
-                self.visit_memory_load(memarg, &UnqualifiedName::GETINT, BaseType::Int)?;
+                self.visit_memory_load(memarg, BaseType::Int)?;
                 self.jvm_code.push_instruction(Instruction::I2L)?;
                 self.jvm_code.const_long(0xFFFFFFFF)?;
                 self.jvm_code.push_instruction(Instruction::LAnd)?;
             }
-            Operator::I32Store { memarg } => {
-                self.visit_memory_store(memarg, &UnqualifiedName::PUTINT, BaseType::Int)?;
-            }
-            Operator::I64Store { memarg } => {
-                self.visit_memory_store(memarg, &UnqualifiedName::PUTLONG, BaseType::Long)?;
-            }
-            Operator::F32Store { memarg } => {
-                self.visit_memory_store(memarg, &UnqualifiedName::PUTFLOAT, BaseType::Float)?;
-            }
-            Operator::F64Store { memarg } => {
-                self.visit_memory_store(memarg, &UnqualifiedName::PUTDOUBLE, BaseType::Double)?;
-            }
-            Operator::I32Store8 { memarg } => {
-                self.visit_memory_store(memarg, &UnqualifiedName::PUT, BaseType::Byte)?;
-            }
-            Operator::I32Store16 { memarg } => {
-                self.visit_memory_store(memarg, &UnqualifiedName::PUTSHORT, BaseType::Short)?;
-            }
+            Operator::I32Store { memarg } => self.visit_memory_store(memarg, BaseType::Int)?,
+            Operator::I64Store { memarg } => self.visit_memory_store(memarg, BaseType::Long)?,
+            Operator::F32Store { memarg } => self.visit_memory_store(memarg, BaseType::Float)?,
+            Operator::F64Store { memarg } => self.visit_memory_store(memarg, BaseType::Double)?,
+            Operator::I32Store8 { memarg } => self.visit_memory_store(memarg, BaseType::Byte)?,
+            Operator::I32Store16 { memarg } => self.visit_memory_store(memarg, BaseType::Short)?,
             Operator::I64Store8 { memarg } => {
                 self.jvm_code.const_long(0xFF)?;
                 self.jvm_code.push_instruction(Instruction::LAnd)?;
                 self.jvm_code.push_instruction(Instruction::L2I)?;
-                self.visit_memory_store(memarg, &UnqualifiedName::PUT, BaseType::Byte)?;
+                self.visit_memory_store(memarg, BaseType::Byte)?;
             }
             Operator::I64Store16 { memarg } => {
                 self.jvm_code.const_long(0xFFFF)?;
                 self.jvm_code.push_instruction(Instruction::LAnd)?;
                 self.jvm_code.push_instruction(Instruction::L2I)?;
-                self.visit_memory_store(memarg, &UnqualifiedName::PUTSHORT, BaseType::Short)?;
+                self.visit_memory_store(memarg, BaseType::Short)?;
             }
             Operator::I64Store32 { memarg } => {
                 self.jvm_code.const_long(0xFFFFFFFF)?;
                 self.jvm_code.push_instruction(Instruction::LAnd)?;
                 self.jvm_code.push_instruction(Instruction::L2I)?;
-                self.visit_memory_store(memarg, &UnqualifiedName::PUTINT, BaseType::Int)?;
+                self.visit_memory_store(memarg, BaseType::Int)?;
             }
             Operator::MemorySize { mem, .. } => self.visit_memory_size(mem)?, // TODO: what is `mem_byte` for?
             Operator::MemoryGrow { mem, .. } => self.visit_memory_grow(mem)?,
@@ -398,25 +376,25 @@ where
             Operator::I32LtS => self.visit_cond(BranchCond::IfICmp(OrdComparison::LT), next_op)?,
             Operator::I32LtU => {
                 self.jvm_code
-                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::COMPAREUNSIGNED)?;
+                    .invoke(self.jvm_code.java.members.lang.integer.compare_unsigned)?;
                 self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
             }
             Operator::I32GtS => self.visit_cond(BranchCond::IfICmp(OrdComparison::GT), next_op)?,
             Operator::I32GtU => {
                 self.jvm_code
-                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::COMPAREUNSIGNED)?;
+                    .invoke(self.jvm_code.java.members.lang.integer.compare_unsigned)?;
                 self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
             }
             Operator::I32LeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::LE), next_op)?,
             Operator::I32LeU => {
                 self.jvm_code
-                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::COMPAREUNSIGNED)?;
+                    .invoke(self.jvm_code.java.members.lang.integer.compare_unsigned)?;
                 self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
             }
             Operator::I32GeS => self.visit_cond(BranchCond::IfICmp(OrdComparison::GE), next_op)?,
             Operator::I32GeU => {
                 self.jvm_code
-                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::COMPAREUNSIGNED)?;
+                    .invoke(self.jvm_code.java.members.lang.integer.compare_unsigned)?;
                 self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
             }
 
@@ -489,7 +467,7 @@ where
             }
             Operator::I64LtU => {
                 self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::COMPAREUNSIGNED)?;
+                    .invoke(self.jvm_code.java.members.lang.long.compare_unsigned)?;
                 self.visit_cond(BranchCond::If(OrdComparison::LT), next_op)?;
             }
             Operator::I64GtS => {
@@ -498,7 +476,7 @@ where
             }
             Operator::I64GtU => {
                 self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::COMPAREUNSIGNED)?;
+                    .invoke(self.jvm_code.java.members.lang.long.compare_unsigned)?;
                 self.visit_cond(BranchCond::If(OrdComparison::GT), next_op)?;
             }
             Operator::I64LeS => {
@@ -507,7 +485,7 @@ where
             }
             Operator::I64LeU => {
                 self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::COMPAREUNSIGNED)?;
+                    .invoke(self.jvm_code.java.members.lang.long.compare_unsigned)?;
                 self.visit_cond(BranchCond::If(OrdComparison::LE), next_op)?;
             }
             Operator::I64GeS => {
@@ -516,20 +494,29 @@ where
             }
             Operator::I64GeU => {
                 self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::COMPAREUNSIGNED)?;
+                    .invoke(self.jvm_code.java.members.lang.long.compare_unsigned)?;
                 self.visit_cond(BranchCond::If(OrdComparison::GE), next_op)?;
             }
 
-            Operator::I32Clz => self
-                .jvm_code
-                .invoke(&BinaryName::INTEGER, &UnqualifiedName::NUMBEROFLEADINGZEROS)?,
+            Operator::I32Clz => self.jvm_code.invoke(
+                self.jvm_code
+                    .java
+                    .members
+                    .lang
+                    .integer
+                    .number_of_leading_zeros,
+            )?,
             Operator::I32Ctz => self.jvm_code.invoke(
-                &BinaryName::INTEGER,
-                &UnqualifiedName::NUMBEROFTRAILINGZEROS,
+                self.jvm_code
+                    .java
+                    .members
+                    .lang
+                    .integer
+                    .number_of_trailing_zeros,
             )?,
             Operator::I32Popcnt => self
                 .jvm_code
-                .invoke(&BinaryName::INTEGER, &UnqualifiedName::BITCOUNT)?,
+                .invoke(self.jvm_code.java.members.lang.integer.bit_count)?,
             Operator::I32Add => self.jvm_code.push_instruction(IAdd)?,
             Operator::I32Sub => self.jvm_code.push_instruction(ISub)?,
             Operator::I32Mul => self.jvm_code.push_instruction(IMul)?,
@@ -543,11 +530,11 @@ where
             }
             Operator::I32DivU => self
                 .jvm_code
-                .invoke(&BinaryName::INTEGER, &UnqualifiedName::DIVIDEUNSIGNED)?,
+                .invoke(self.jvm_code.java.members.lang.integer.divide_unsigned)?,
             Operator::I32RemS => self.jvm_code.push_instruction(IRem)?,
             Operator::I32RemU => self
                 .jvm_code
-                .invoke(&BinaryName::INTEGER, &UnqualifiedName::REMAINDERUNSIGNED)?,
+                .invoke(self.jvm_code.java.members.lang.integer.remainder_unsigned)?,
             Operator::I32And => self.jvm_code.push_instruction(IAnd)?,
             Operator::I32Or => self.jvm_code.push_instruction(IOr)?,
             Operator::I32Xor => self.jvm_code.push_instruction(IXor)?,
@@ -556,24 +543,30 @@ where
             Operator::I32ShrU => self.jvm_code.push_instruction(ISh(LogicalRight))?,
             Operator::I32Rotl => self
                 .jvm_code
-                .invoke(&BinaryName::INTEGER, &UnqualifiedName::ROTATELEFT)?,
+                .invoke(self.jvm_code.java.members.lang.integer.rotate_left)?,
             Operator::I32Rotr => self
                 .jvm_code
-                .invoke(&BinaryName::INTEGER, &UnqualifiedName::ROTATERIGHT)?,
+                .invoke(self.jvm_code.java.members.lang.integer.rotate_right)?,
 
             Operator::I64Clz => {
                 self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::NUMBEROFLEADINGZEROS)?;
+                    .invoke(self.jvm_code.java.members.lang.long.number_of_leading_zeros)?;
                 self.jvm_code.push_instruction(I2L)?;
             }
             Operator::I64Ctz => {
-                self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::NUMBEROFTRAILINGZEROS)?;
+                self.jvm_code.invoke(
+                    self.jvm_code
+                        .java
+                        .members
+                        .lang
+                        .long
+                        .number_of_trailing_zeros,
+                )?;
                 self.jvm_code.push_instruction(I2L)?;
             }
             Operator::I64Popcnt => {
                 self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::BITCOUNT)?;
+                    .invoke(self.jvm_code.java.members.lang.long.bit_count)?;
                 self.jvm_code.push_instruction(I2L)?;
             }
             Operator::I64Add => self.jvm_code.push_instruction(LAdd)?,
@@ -590,10 +583,10 @@ where
             Operator::I64RemS => self.jvm_code.push_instruction(LRem)?,
             Operator::I64DivU => self
                 .jvm_code
-                .invoke(&BinaryName::LONG, &UnqualifiedName::DIVIDEUNSIGNED)?,
+                .invoke(self.jvm_code.java.members.lang.long.divide_unsigned)?,
             Operator::I64RemU => self
                 .jvm_code
-                .invoke(&BinaryName::LONG, &UnqualifiedName::REMAINDERUNSIGNED)?,
+                .invoke(self.jvm_code.java.members.lang.long.remainder_unsigned)?,
             Operator::I64And => self.jvm_code.push_instruction(LAnd)?,
             Operator::I64Or => self.jvm_code.push_instruction(LOr)?,
             Operator::I64Xor => self.jvm_code.push_instruction(LXor)?,
@@ -612,12 +605,12 @@ where
             Operator::I64Rotl => {
                 self.jvm_code.push_instruction(L2I)?;
                 self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::ROTATELEFT)?;
+                    .invoke(self.jvm_code.java.members.lang.long.rotate_left)?;
             }
             Operator::I64Rotr => {
                 self.jvm_code.push_instruction(L2I)?;
                 self.jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::ROTATERIGHT)?;
+                    .invoke(self.jvm_code.java.members.lang.long.rotate_right)?;
             }
 
             Operator::F32Abs => {
@@ -625,29 +618,21 @@ where
                     self.utilities
                         .invoke_utility(UtilityMethod::F32Abs, self.jvm_code)?;
                 } else {
-                    let desc = MethodDescriptor {
-                        parameters: vec![FieldType::FLOAT],
-                        return_type: Some(FieldType::FLOAT),
-                    };
-                    self.jvm_code.invoke_explicit(
-                        InvokeType::Static,
-                        &BinaryName::MATH,
-                        &UnqualifiedName::ABS,
-                        &desc,
-                    )?;
+                    self.jvm_code
+                        .invoke(self.jvm_code.java.members.lang.math.abs_float)?;
                 }
             }
             Operator::F32Neg => self.jvm_code.push_instruction(FNeg)?,
             Operator::F32Ceil => {
                 self.jvm_code.push_instruction(F2D)?;
                 self.jvm_code
-                    .invoke(&BinaryName::MATH, &UnqualifiedName::CEIL)?;
+                    .invoke(self.jvm_code.java.members.lang.math.ceil)?;
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Floor => {
                 self.jvm_code.push_instruction(F2D)?;
                 self.jvm_code
-                    .invoke(&BinaryName::MATH, &UnqualifiedName::FLOOR)?;
+                    .invoke(self.jvm_code.java.members.lang.math.floor)?;
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Trunc => {
@@ -657,13 +642,13 @@ where
             Operator::F32Nearest => {
                 self.jvm_code.push_instruction(F2D)?;
                 self.jvm_code
-                    .invoke(&BinaryName::MATH, &UnqualifiedName::RINT)?;
+                    .invoke(self.jvm_code.java.members.lang.math.rint)?;
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Sqrt => {
                 self.jvm_code.push_instruction(F2D)?;
                 self.jvm_code
-                    .invoke(&BinaryName::MATH, &UnqualifiedName::SQRT)?;
+                    .invoke(self.jvm_code.java.members.lang.math.sqrt)?;
                 self.jvm_code.push_instruction(D2F)?;
             }
             Operator::F32Add => self.jvm_code.push_instruction(FAdd)?,
@@ -672,77 +657,52 @@ where
             Operator::F32Div => self.jvm_code.push_instruction(FDiv)?,
             Operator::F32Min => self
                 .jvm_code
-                .invoke(&BinaryName::FLOAT, &UnqualifiedName::MIN)?,
+                .invoke(self.jvm_code.java.members.lang.float.min)?,
             Operator::F32Max => self
                 .jvm_code
-                .invoke(&BinaryName::FLOAT, &UnqualifiedName::MAX)?,
-            Operator::F32Copysign => {
-                let desc = MethodDescriptor {
-                    parameters: vec![FieldType::FLOAT, FieldType::FLOAT],
-                    return_type: Some(FieldType::FLOAT),
-                };
-                self.jvm_code.invoke_explicit(
-                    InvokeType::Static,
-                    &BinaryName::MATH,
-                    &UnqualifiedName::COPYSIGN,
-                    &desc,
-                )?;
-            }
+                .invoke(self.jvm_code.java.members.lang.float.max)?,
+            Operator::F32Copysign => self
+                .jvm_code
+                .invoke(self.jvm_code.java.members.lang.math.copy_sign_float)?,
             Operator::F64Abs => {
                 if self.settings.bitwise_floating_abs {
                     self.utilities
                         .invoke_utility(UtilityMethod::F64Abs, self.jvm_code)?;
                 } else {
-                    let desc = MethodDescriptor {
-                        parameters: vec![FieldType::DOUBLE],
-                        return_type: Some(FieldType::DOUBLE),
-                    };
-                    self.jvm_code.invoke_explicit(
-                        InvokeType::Static,
-                        &BinaryName::MATH,
-                        &UnqualifiedName::ABS,
-                        &desc,
-                    )?;
+                    self.jvm_code
+                        .invoke(self.jvm_code.java.members.lang.math.abs_double)?;
                 }
             }
             Operator::F64Neg => self.jvm_code.push_instruction(DNeg)?,
             Operator::F64Ceil => self
                 .jvm_code
-                .invoke(&BinaryName::MATH, &UnqualifiedName::CEIL)?,
+                .invoke(self.jvm_code.java.members.lang.math.ceil)?,
             Operator::F64Floor => self
                 .jvm_code
-                .invoke(&BinaryName::MATH, &UnqualifiedName::FLOOR)?,
+                .invoke(self.jvm_code.java.members.lang.math.floor)?,
             Operator::F64Trunc => {
                 self.utilities
                     .invoke_utility(UtilityMethod::F64Trunc, self.jvm_code)?;
             }
             Operator::F64Nearest => self
                 .jvm_code
-                .invoke(&BinaryName::MATH, &UnqualifiedName::RINT)?,
+                .invoke(self.jvm_code.java.members.lang.math.rint)?,
             Operator::F64Sqrt => self
                 .jvm_code
-                .invoke(&BinaryName::MATH, &UnqualifiedName::SQRT)?,
+                .invoke(self.jvm_code.java.members.lang.math.sqrt)?,
             Operator::F64Add => self.jvm_code.push_instruction(DAdd)?,
             Operator::F64Sub => self.jvm_code.push_instruction(DSub)?,
             Operator::F64Mul => self.jvm_code.push_instruction(DMul)?,
             Operator::F64Div => self.jvm_code.push_instruction(DDiv)?,
             Operator::F64Min => self
                 .jvm_code
-                .invoke(&BinaryName::DOUBLE, &UnqualifiedName::MIN)?,
+                .invoke(self.jvm_code.java.members.lang.double.min)?,
             Operator::F64Max => self
                 .jvm_code
-                .invoke(&BinaryName::DOUBLE, &UnqualifiedName::MAX)?,
+                .invoke(self.jvm_code.java.members.lang.double.max)?,
             Operator::F64Copysign => {
-                let desc = MethodDescriptor {
-                    parameters: vec![FieldType::DOUBLE, FieldType::DOUBLE],
-                    return_type: Some(FieldType::DOUBLE),
-                };
-                self.jvm_code.invoke_explicit(
-                    InvokeType::Static,
-                    &BinaryName::MATH,
-                    &UnqualifiedName::COPYSIGN,
-                    &desc,
-                )?;
+                self.jvm_code
+                    .invoke(self.jvm_code.java.members.lang.math.copy_sign_double)?;
             }
 
             Operator::I32WrapI64 => self.jvm_code.push_instruction(L2I)?,
@@ -808,16 +768,21 @@ where
 
             Operator::I32ReinterpretF32 => self
                 .jvm_code
-                .invoke(&BinaryName::FLOAT, &UnqualifiedName::FLOATTORAWINTBITS)?,
-            Operator::I64ReinterpretF64 => self
-                .jvm_code
-                .invoke(&BinaryName::DOUBLE, &UnqualifiedName::DOUBLETORAWLONGBITS)?,
+                .invoke(self.jvm_code.java.members.lang.float.float_to_raw_int_bits)?,
+            Operator::I64ReinterpretF64 => self.jvm_code.invoke(
+                self.jvm_code
+                    .java
+                    .members
+                    .lang
+                    .double
+                    .double_to_raw_long_bits,
+            )?,
             Operator::F32ReinterpretI32 => self
                 .jvm_code
-                .invoke(&BinaryName::FLOAT, &UnqualifiedName::INTBITSTOFLOAT)?,
+                .invoke(self.jvm_code.java.members.lang.float.int_bits_to_float)?,
             Operator::F64ReinterpretI64 => self
                 .jvm_code
-                .invoke(&BinaryName::DOUBLE, &UnqualifiedName::LONGBITSTODOUBLE)?,
+                .invoke(self.jvm_code.java.members.lang.double.long_bits_to_double)?,
 
             Operator::I32Extend8S => self.jvm_code.push_instruction(I2B)?,
             Operator::I32Extend16S => self.jvm_code.push_instruction(I2S)?,
@@ -855,7 +820,7 @@ where
 
             // Reference Instructions
             Operator::RefNull { ty } => {
-                let ref_type = ref_type_from_general(ty)?;
+                let ref_type = ref_type_from_general(ty, &self.jvm_code.java.classes)?;
                 self.jvm_code.const_null(ref_type)?;
             }
             Operator::RefIsNull => {
@@ -867,9 +832,8 @@ where
                     .resources()
                     .function_idx_type(function_index)?;
 
-                let (class_name, method_name) = self.bad_get_func(function_index, &func_typ);
-                self.jvm_code
-                    .const_methodhandle(&class_name, &method_name)?;
+                let method = self.bad_get_func(function_index, &func_typ);
+                self.jvm_code.const_methodhandle(method)?;
             }
 
             _ => todo!(),
@@ -1065,7 +1029,7 @@ where
     /// Most of the time, just calling `visit_branch` is enough. However, sometimes, we can
     /// optimize some branches differently (eg. if we are in a `br_table` and there is no stack to
     /// unwind, we'd prefer the `lookuptable` jump straight to the right label).
-    fn prepare_for_branch(&self, relative_depth: u32) -> (u32, Vec<StackType>, Option<B::Lbl>) {
+    fn prepare_for_branch(&self, relative_depth: u32) -> (u32, Vec<StackType>, Option<SynLabel>) {
         let relative_depth = relative_depth as usize;
 
         // Detect the case where the branch is really a return
@@ -1095,7 +1059,7 @@ where
         &mut self,
         required_pops: u32,
         branch_values: Vec<StackType>,
-        target_label: B::Lbl,
+        target_label: SynLabel,
     ) -> Result<(), Error> {
         #[cfg(debug_assertions)]
         self.assert_top_stack(&branch_values);
@@ -1103,8 +1067,8 @@ where
         if required_pops > 0 {
             // Stash branch values (so we can unwind the stack under them)
             for branch_value in branch_values.iter().rev() {
-                let field_type = branch_value.field_type();
-                let local_idx = self.jvm_locals.push_local(field_type.clone())?;
+                let field_type = branch_value.field_type(&self.jvm_code.java.classes);
+                let local_idx = self.jvm_locals.push_local(field_type)?;
                 self.jvm_code.set_local(local_idx, &field_type)?;
             }
 
@@ -1221,8 +1185,8 @@ where
             Some(ty) => Some(StackType::from_general(ty)?),
         };
 
-        // The hint only matter for reference types
-        let ref_ty_hint: Option<RefType> = ty.and_then(|st| match st.field_type() {
+        // The hint only matters for reference types
+        let ref_ty_hint = ty.and_then(|st| match st.field_type(&self.jvm_code.java.classes) {
             FieldType::Ref(hint_ref) => Some(hint_ref),
             _ => None,
         });
@@ -1283,8 +1247,11 @@ where
             self.pack_stack_into_array(&self.function_typ.outputs.clone())?
         }
 
-        self.jvm_code
-            .return_(self.function_typ.method_descriptor().return_type)?;
+        self.jvm_code.return_(
+            self.function_typ
+                .method_descriptor(&self.jvm_code.java.classes)
+                .return_type,
+        )?;
         Ok(())
     }
 
@@ -1297,11 +1264,11 @@ where
 
         // Load the module reference onto the stack (it is always the last argument)
         let (off, field_type) = self.jvm_locals.lookup_this()?;
-        self.jvm_code.get_local(off, field_type)?;
+        self.jvm_code.get_local(off, &field_type)?;
 
-        let (class_name, method_name) = self.bad_get_func(func_idx, &func_typ);
+        let method = self.bad_get_func(func_idx, &func_typ);
 
-        self.jvm_code.invoke(&class_name, &method_name)?;
+        self.jvm_code.invoke(method)?;
         if func_typ.outputs.len() > 1 {
             self.unpack_stack_from_array(&func_typ.outputs)?;
         }
@@ -1317,11 +1284,7 @@ where
     //   - we shouldn't assume that the function index is directly into functions defined in
     //     this module (imported functions come first!)
     //
-    fn bad_get_func(
-        &self,
-        func_idx: u32,
-        func_typ: &FunctionType,
-    ) -> (BinaryName, UnqualifiedName) {
+    fn bad_get_func(&self, func_idx: u32, func_typ: &FunctionType) -> &'g MethodData<'g> {
         let class_name = self
             .settings
             .output_full_class_name
@@ -1333,17 +1296,17 @@ where
             .wasm_function_name_prefix
             .concat(&UnqualifiedName::number(func_idx as usize));
 
-        let class_graph = self.jvm_code.class_graph();
-        let mut desc = func_typ.method_descriptor();
-        desc.parameters.push(FieldType::object(
-            self.settings.output_full_class_name.clone(),
-        ));
-        class_graph
-            .lookup_class(&class_name)
-            .expect("part class not in class graph")
-            .add_method(true, method_name.clone(), desc);
-
-        (class_name, method_name)
+        let class_graph = self.jvm_code.class_graph;
+        let mut desc = func_typ.method_descriptor(&self.jvm_code.java.classes);
+        desc.parameters.push(FieldType::object(self.class));
+        class_graph.add_method(MethodData {
+            class: class_graph
+                .lookup_class(&class_name)
+                .expect("part class not in class graph"),
+            name: method_name.clone(),
+            descriptor: desc,
+            is_static: true,
+        })
     }
 
     /// Visit a `call_indirect`
@@ -1352,19 +1315,17 @@ where
         let table = &self.wasm_tables[table_idx as usize];
 
         // Compute the method descriptor we'll actually be calling
-        let mut desc: MethodDescriptor = func_typ.method_descriptor();
-        desc.parameters.push(FieldType::INT);
-        desc.parameters.push(FieldType::object(
-            self.settings.output_full_class_name.clone(),
-        ));
+        let mut desc = func_typ.method_descriptor(&self.jvm_code.java.classes);
+        desc.parameters.push(FieldType::int());
+        desc.parameters.push(FieldType::object(self.class));
 
         let this_off = self.jvm_locals.lookup_this()?.0;
-        let bootstrap_method: u16 = self.bootstrap_utilities.get_table_bootstrap(
+        let bootstrap_method = self.bootstrap_utilities.get_table_bootstrap(
             table_idx,
             table,
-            &self.settings.output_full_class_name,
+            &self.jvm_code.class_graph,
             &mut self.utilities,
-            &mut self.jvm_code.constants(),
+            &self.jvm_code.java.classes,
         )?;
 
         self.jvm_code
@@ -1384,41 +1345,42 @@ where
     /// TODO: this could be made into a powerful `invokedynamic` packer (since the `MethodType` is
     /// enough to figure out what to do).
     fn pack_stack_into_array(&mut self, expected: &[StackType]) -> Result<(), Error> {
+        let object = FieldType::object(self.jvm_code.java.classes.lang.object);
+
         // Initialize the variable containing the array for packing values
-        let arr_offset = self
-            .jvm_locals
-            .push_local(FieldType::array(FieldType::OBJECT))?;
-        let object_cls = self.jvm_code.get_class_idx(&RefType::OBJECT)?;
+        let arr_offset = self.jvm_locals.push_local(FieldType::array(object))?;
         self.jvm_code.const_int(expected.len() as i32)?;
         self.jvm_code
-            .push_instruction(Instruction::ANewArray(object_cls))?;
+            .push_instruction(Instruction::ANewArray(RefType::Object(
+                self.jvm_code.java.classes.lang.object,
+            )))?;
         self.jvm_code
-            .set_local(arr_offset, &FieldType::array(FieldType::OBJECT))?;
+            .set_local(arr_offset, &FieldType::array(object))?;
 
         // Initialize the variable containing the index
-        let idx_offset = self.jvm_locals.push_local(FieldType::INT)?;
+        let idx_offset = self.jvm_locals.push_local(FieldType::int())?;
         self.jvm_code.const_int(expected.len() as i32 - 1)?;
-        self.jvm_code.set_local(idx_offset, &FieldType::INT)?;
+        self.jvm_code.set_local(idx_offset, &FieldType::int())?;
 
         // Initialize the a temporary variable for stashing boxed values
-        let tmp_offset = self.jvm_locals.push_local(FieldType::OBJECT)?;
-        self.jvm_code.zero_local(tmp_offset, FieldType::OBJECT)?;
+        let tmp_offset = self.jvm_locals.push_local(object)?;
+        self.jvm_code.zero_local(tmp_offset, object)?;
 
         for stack_value in expected.iter().rev() {
             // Turn the top value into an object and stack it in the temp variable
             match stack_value {
                 StackType::I32 => self
                     .jvm_code
-                    .invoke(&BinaryName::INTEGER, &UnqualifiedName::VALUEOF)?,
+                    .invoke(self.jvm_code.java.members.lang.integer.value_of)?,
                 StackType::I64 => self
                     .jvm_code
-                    .invoke(&BinaryName::LONG, &UnqualifiedName::VALUEOF)?,
+                    .invoke(self.jvm_code.java.members.lang.long.value_of)?,
                 StackType::F32 => self
                     .jvm_code
-                    .invoke(&BinaryName::FLOAT, &UnqualifiedName::VALUEOF)?,
+                    .invoke(self.jvm_code.java.members.lang.float.value_of)?,
                 StackType::F64 => self
                     .jvm_code
-                    .invoke(&BinaryName::DOUBLE, &UnqualifiedName::VALUEOF)?,
+                    .invoke(self.jvm_code.java.members.lang.double.value_of)?,
                 StackType::FuncRef | StackType::ExternRef => (), // already reference types
             }
             self.jvm_code
@@ -1460,15 +1422,15 @@ where
     ///
     /// This is used when calling functions that return multiple values.
     fn unpack_stack_from_array(&mut self, expected: &[StackType]) -> Result<(), Error> {
+        let object = FieldType::object(self.jvm_code.java.classes.lang.object);
+
         // Initialize the variable containing the array for packing values
-        let arr_offset = self
-            .jvm_locals
-            .push_local(FieldType::array(FieldType::OBJECT))?;
+        let arr_offset = self.jvm_locals.push_local(FieldType::array(object))?;
         self.jvm_code
             .push_instruction(Instruction::AStore(arr_offset))?;
 
         // Initialize the variable containing the index
-        let idx_offset = self.jvm_locals.push_local(FieldType::INT)?;
+        let idx_offset = self.jvm_locals.push_local(FieldType::int())?;
         self.jvm_code.push_instruction(Instruction::IConst0)?;
         self.jvm_code
             .push_instruction(Instruction::IStore(idx_offset))?;
@@ -1484,35 +1446,36 @@ where
             // Unbox the top of the stack
             match stack_value {
                 StackType::I32 => {
-                    let integer_cls = self.jvm_code.get_class_idx(&RefType::INTEGER)?;
+                    let integer_cls = RefType::Object(self.jvm_code.java.classes.lang.integer);
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(integer_cls))?;
                     self.jvm_code
-                        .invoke(&BinaryName::NUMBER, &UnqualifiedName::INTVALUE)?;
+                        .invoke(self.jvm_code.java.members.lang.number.int_value)?;
                 }
                 StackType::I64 => {
-                    let long_cls = self.jvm_code.get_class_idx(&RefType::LONG)?;
+                    let long_cls = RefType::Object(self.jvm_code.java.classes.lang.long);
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(long_cls))?;
                     self.jvm_code
-                        .invoke(&BinaryName::NUMBER, &UnqualifiedName::LONGVALUE)?;
+                        .invoke(self.jvm_code.java.members.lang.number.long_value)?;
                 }
                 StackType::F32 => {
-                    let float_cls = self.jvm_code.get_class_idx(&RefType::FLOAT)?;
+                    let float_cls = RefType::Object(self.jvm_code.java.classes.lang.float);
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(float_cls))?;
                     self.jvm_code
-                        .invoke(&BinaryName::NUMBER, &UnqualifiedName::FLOATVALUE)?;
+                        .invoke(self.jvm_code.java.members.lang.number.float_value)?;
                 }
                 StackType::F64 => {
-                    let double_cls = self.jvm_code.get_class_idx(&RefType::DOUBLE)?;
+                    let double_cls = RefType::Object(self.jvm_code.java.classes.lang.double);
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(double_cls))?;
                     self.jvm_code
-                        .invoke(&BinaryName::NUMBER, &UnqualifiedName::DOUBLEVALUE)?;
+                        .invoke(self.jvm_code.java.members.lang.number.double_value)?;
                 }
                 StackType::FuncRef => {
-                    let handle_cls = self.jvm_code.get_class_idx(&RefType::METHODHANDLE)?;
+                    let handle_cls =
+                        RefType::Object(self.jvm_code.java.classes.lang.invoke.method_handle);
                     self.jvm_code
                         .push_instruction(Instruction::CheckCast(handle_cls))?;
                 }
@@ -1552,7 +1515,7 @@ where
         let expected_verification_types = expected.iter().rev();
         let types_match = found_verification_types
             .zip(expected_verification_types)
-            .all(|(ty1, ty2)| *ty1 == ty2.field_type().into());
+            .all(|(ty1, ty2)| *ty1 == ty2.field_type(&self.jvm_code.java.classes).into());
 
         assert!(types_match, "Stack does not match expected input types");
     }
@@ -1564,11 +1527,8 @@ where
             let this_off = self.jvm_locals.lookup_this()?.0;
             self.jvm_code
                 .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code.access_field(
-                &self.settings.output_full_class_name,
-                &global.field_name,
-                AccessMode::Read,
-            )?;
+            self.jvm_code
+                .access_field(global.field.unwrap(), AccessMode::Read)?;
         } else {
             todo!()
         }
@@ -1579,7 +1539,7 @@ where
     /// Visit a global set operator
     fn visit_global_set(&mut self, global_index: u32) -> Result<(), Error> {
         let global = &self.wasm_globals[global_index as usize];
-        let global_field_type = global.global_type.field_type();
+        let global_field_type = global.global_type.field_type(&self.jvm_code.java.classes);
 
         // Stash the value being set in a local
         let temp_index = self.jvm_locals.push_local(global_field_type.clone())?;
@@ -1590,11 +1550,8 @@ where
             self.jvm_code
                 .push_instruction(Instruction::ALoad(this_off))?;
             self.jvm_code.get_local(temp_index, &global_field_type)?;
-            self.jvm_code.access_field(
-                &self.settings.output_full_class_name,
-                &global.field_name,
-                AccessMode::Write,
-            )?;
+            self.jvm_code
+                .access_field(global.field.unwrap(), AccessMode::Write)?;
         } else {
             todo!()
         }
@@ -1610,8 +1567,8 @@ where
         let table = &self.wasm_tables[table_idx as usize];
 
         let desc = MethodDescriptor {
-            parameters: vec![FieldType::INT],
-            return_type: Some(table.table_type.field_type()),
+            parameters: vec![FieldType::int()],
+            return_type: Some(table.table_type.field_type(&self.jvm_code.java.classes)),
         };
         self.visit_table_operator(table_idx, &UnqualifiedName::TABLEGET, desc)?;
 
@@ -1623,7 +1580,10 @@ where
         let table = &self.wasm_tables[table_idx as usize];
 
         let desc = MethodDescriptor {
-            parameters: vec![FieldType::INT, table.table_type.field_type()],
+            parameters: vec![
+                FieldType::int(),
+                table.table_type.field_type(&self.jvm_code.java.classes),
+            ],
             return_type: None,
         };
         self.visit_table_operator(table_idx, &UnqualifiedName::TABLESET, desc)?;
@@ -1636,8 +1596,11 @@ where
         let table = &self.wasm_tables[table_idx as usize];
 
         let desc = MethodDescriptor {
-            parameters: vec![table.table_type.field_type(), FieldType::INT],
-            return_type: Some(FieldType::INT),
+            parameters: vec![
+                table.table_type.field_type(&self.jvm_code.java.classes),
+                FieldType::int(),
+            ],
+            return_type: Some(FieldType::int()),
         };
         self.visit_table_operator(table_idx, &UnqualifiedName::TABLEGROW, desc)?;
 
@@ -1648,7 +1611,7 @@ where
     fn visit_table_size(&mut self, table_idx: u32) -> Result<(), Error> {
         let desc = MethodDescriptor {
             parameters: vec![],
-            return_type: Some(FieldType::INT),
+            return_type: Some(FieldType::int()),
         };
         self.visit_table_operator(table_idx, &UnqualifiedName::TABLESIZE, desc)?;
 
@@ -1661,9 +1624,9 @@ where
 
         let desc = MethodDescriptor {
             parameters: vec![
-                FieldType::INT,
-                table.table_type.field_type(),
-                FieldType::INT,
+                FieldType::int(),
+                table.table_type.field_type(&self.jvm_code.java.classes),
+                FieldType::int(),
             ],
             return_type: None,
         };
@@ -1678,22 +1641,20 @@ where
         &mut self,
         table_idx: u32,
         method_name: &UnqualifiedName,
-        mut method_type: MethodDescriptor,
+        mut method_type: MethodDescriptor<&'g ClassData<'g>>,
     ) -> Result<(), Error> {
         let table = &self.wasm_tables[table_idx as usize];
 
         // Compute the method descriptor we'll actually be calling
-        method_type.parameters.push(FieldType::object(
-            self.settings.output_full_class_name.clone(),
-        ));
+        method_type.parameters.push(FieldType::object(self.class));
 
         let this_off = self.jvm_locals.lookup_this()?.0;
-        let bootstrap_method: u16 = self.bootstrap_utilities.get_table_bootstrap(
+        let bootstrap_method = self.bootstrap_utilities.get_table_bootstrap(
             table_idx,
             table,
-            &self.settings.output_full_class_name,
+            &self.jvm_code.class_graph,
             &mut self.utilities,
-            &mut self.jvm_code.constants(),
+            &self.jvm_code.java.classes,
         )?;
 
         self.jvm_code
@@ -1704,12 +1665,7 @@ where
         Ok(())
     }
 
-    fn visit_memory_load(
-        &mut self,
-        memarg: MemoryImmediate,
-        load: &UnqualifiedName,
-        ty: BaseType,
-    ) -> Result<(), Error> {
+    fn visit_memory_load(&mut self, memarg: MemoryImmediate, ty: BaseType) -> Result<(), Error> {
         let memory = &self.wasm_memories[memarg.memory as usize];
 
         // Adjust the offset
@@ -1722,33 +1678,26 @@ where
         let this_off = self.jvm_locals.lookup_this()?.0;
         self.jvm_code
             .push_instruction(Instruction::ALoad(this_off))?;
-        self.jvm_code.access_field(
-            &self.settings.output_full_class_name,
-            &memory.field_name,
-            AccessMode::Read,
-        )?;
+        self.jvm_code
+            .access_field(memory.field.unwrap(), AccessMode::Read)?;
 
         // Re-order the stack and call the get function
         self.jvm_code.push_instruction(Instruction::Swap)?;
-        self.jvm_code.invoke_explicit(
-            InvokeType::Virtual,
-            &BinaryName::BYTEBUFFER,
-            load,
-            &MethodDescriptor {
-                parameters: vec![FieldType::INT],
-                return_type: Some(FieldType::Base(ty)),
-            },
-        )?;
+        let get_func = match ty {
+            BaseType::Byte => self.jvm_code.java.members.nio.byte_buffer.get_byte,
+            BaseType::Short => self.jvm_code.java.members.nio.byte_buffer.get_short,
+            BaseType::Int => self.jvm_code.java.members.nio.byte_buffer.get_int,
+            BaseType::Float => self.jvm_code.java.members.nio.byte_buffer.get_float,
+            BaseType::Long => self.jvm_code.java.members.nio.byte_buffer.get_long,
+            BaseType::Double => self.jvm_code.java.members.nio.byte_buffer.get_double,
+            t => panic!("Cannot get {:?}", t),
+        };
+        self.jvm_code.invoke(get_func)?;
 
         Ok(())
     }
 
-    fn visit_memory_store(
-        &mut self,
-        memarg: MemoryImmediate,
-        store: &UnqualifiedName,
-        ty: BaseType,
-    ) -> Result<(), Error> {
+    fn visit_memory_store(&mut self, memarg: MemoryImmediate, ty: BaseType) -> Result<(), Error> {
         let memory = &self.wasm_memories[memarg.memory as usize];
 
         if ty.width() == 1 && memarg.offset == 0 {
@@ -1756,11 +1705,8 @@ where
             let this_off = self.jvm_locals.lookup_this()?.0;
             self.jvm_code
                 .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code.access_field(
-                &self.settings.output_full_class_name,
-                &memory.field_name,
-                AccessMode::Read,
-            )?;
+            self.jvm_code
+                .access_field(memory.field.unwrap(), AccessMode::Read)?;
 
             // Re-order the stack
             self.jvm_code.push_instruction(Instruction::DupX2)?;
@@ -1780,11 +1726,8 @@ where
             let this_off = self.jvm_locals.lookup_this()?.0;
             self.jvm_code
                 .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code.access_field(
-                &self.settings.output_full_class_name,
-                &memory.field_name,
-                AccessMode::Read,
-            )?;
+            self.jvm_code
+                .access_field(memory.field.unwrap(), AccessMode::Read)?;
 
             // Re-order the stack
             self.jvm_code.push_instruction(Instruction::Swap)?;
@@ -1794,15 +1737,16 @@ where
         }
 
         // Call the store function
-        self.jvm_code.invoke_explicit(
-            InvokeType::Virtual,
-            &BinaryName::BYTEBUFFER,
-            store,
-            &MethodDescriptor {
-                parameters: vec![FieldType::INT, FieldType::Base(ty)],
-                return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
-            },
-        )?;
+        let put_func = match ty {
+            BaseType::Byte => self.jvm_code.java.members.nio.byte_buffer.put_byte,
+            BaseType::Short => self.jvm_code.java.members.nio.byte_buffer.put_short,
+            BaseType::Int => self.jvm_code.java.members.nio.byte_buffer.put_int,
+            BaseType::Float => self.jvm_code.java.members.nio.byte_buffer.put_float,
+            BaseType::Long => self.jvm_code.java.members.nio.byte_buffer.put_long,
+            BaseType::Double => self.jvm_code.java.members.nio.byte_buffer.put_double,
+            t => panic!("Cannot store {:?}", t),
+        };
+        self.jvm_code.invoke(put_func)?;
         self.jvm_code.push_instruction(Instruction::Pop)?;
 
         Ok(())
@@ -1811,8 +1755,8 @@ where
     /// Visit a memory grow operator
     fn visit_memory_grow(&mut self, memory_idx: u32) -> Result<(), Error> {
         let desc = MethodDescriptor {
-            parameters: vec![FieldType::INT],
-            return_type: Some(FieldType::INT),
+            parameters: vec![FieldType::int()],
+            return_type: Some(FieldType::int()),
         };
         self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYGROW, desc)?;
 
@@ -1822,7 +1766,7 @@ where
     /// Visit a memory fill operator
     fn visit_memory_fill(&mut self, memory_idx: u32) -> Result<(), Error> {
         let desc = MethodDescriptor {
-            parameters: vec![FieldType::INT, FieldType::INT, FieldType::INT],
+            parameters: vec![FieldType::int(), FieldType::int(), FieldType::int()],
             return_type: None,
         };
         self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYFILL, desc)?;
@@ -1834,7 +1778,7 @@ where
     fn visit_memory_size(&mut self, memory_idx: u32) -> Result<(), Error> {
         let desc = MethodDescriptor {
             parameters: vec![],
-            return_type: Some(FieldType::INT),
+            return_type: Some(FieldType::int()),
         };
         self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYSIZE, desc)?;
 
@@ -1847,22 +1791,20 @@ where
         &mut self,
         memory_idx: u32,
         method_name: &UnqualifiedName,
-        mut method_type: MethodDescriptor,
+        mut method_type: MethodDescriptor<&'g ClassData<'g>>,
     ) -> Result<(), Error> {
         let memory = &self.wasm_memories[memory_idx as usize];
 
         // Compute the method descriptor we'll actually be calling
-        method_type.parameters.push(FieldType::object(
-            self.settings.output_full_class_name.clone(),
-        ));
+        method_type.parameters.push(FieldType::object(self.class));
 
         let this_off = self.jvm_locals.lookup_this()?.0;
-        let bootstrap_method: u16 = self.bootstrap_utilities.get_memory_bootstrap(
+        let bootstrap_method = self.bootstrap_utilities.get_memory_bootstrap(
             memory_idx,
             memory,
-            &self.settings.output_full_class_name,
+            &self.jvm_code.class_graph,
             &mut self.utilities,
-            &mut self.jvm_code.constants(),
+            &self.jvm_code.java.classes,
         )?;
 
         self.jvm_code
@@ -1877,22 +1819,25 @@ where
     const BAD_OFFSET: usize = 0;
 }
 
-#[derive(Debug)]
-struct LocalsLayout {
+// #[derive(Debug)]
+struct LocalsLayout<'g> {
     /// Stack of locals, built up of
     ///
     ///   * the function arguments
     ///   * a reference to the module class
     ///   * a stack of additional tempporary locals
     ///
-    jvm_locals: OffsetVec<FieldType>,
+    jvm_locals: OffsetVec<FieldType<&'g ClassData<'g>>>,
 
     /// Index into `jvm_locals` for getting the "this" argument
     jvm_module_idx: usize,
 }
 
-impl LocalsLayout {
-    fn new(method_arguments: impl Iterator<Item = FieldType>, module_typ: RefType) -> Self {
+impl<'g> LocalsLayout<'g> {
+    fn new(
+        method_arguments: impl Iterator<Item = FieldType<&'g ClassData<'g>>>,
+        module_typ: RefType<&'g ClassData<'g>>,
+    ) -> Self {
         let mut jvm_locals = OffsetVec::from_iter(method_arguments);
         let jvm_module_idx = jvm_locals.len();
         jvm_locals.push(FieldType::Ref(module_typ));
@@ -1903,19 +1848,22 @@ impl LocalsLayout {
     }
 
     /// Lookup the JVM local and index associated with the "this" argument
-    fn lookup_this(&self) -> Result<(u16, &FieldType), Error> {
+    fn lookup_this(&self) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
         let (off, field_type) = self
             .jvm_locals
             .get_index(self.jvm_module_idx)
             .expect("missing this local");
-        Ok((off.0 as u16, &field_type))
+        Ok((off.0 as u16, *field_type))
     }
 
     /// Lookup the JVM local and type associated with a WASM local index
     ///
     /// Adjusts for the fact that JVM locals sometimes take two slots, and that there is an extra
     /// local argument corresponding to the parameter that is used to pass around the module.
-    fn lookup_local(&self, mut local_idx: u32) -> Result<(u16, &FieldType), Error> {
+    fn lookup_local(
+        &self,
+        mut local_idx: u32,
+    ) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
         if local_idx as usize >= self.jvm_module_idx {
             local_idx += 1;
         }
@@ -1923,11 +1871,11 @@ impl LocalsLayout {
             .jvm_locals
             .get_index(local_idx as usize)
             .expect("missing local");
-        Ok((off.0 as u16, &field_type))
+        Ok((off.0 as u16, *field_type))
     }
 
     /// Push a new local onto our "stack" of locals
-    fn push_local(&mut self, field_type: FieldType) -> Result<u16, Error> {
+    fn push_local(&mut self, field_type: FieldType<&'g ClassData<'g>>) -> Result<u16, Error> {
         let next_local_idx =
             u16::try_from(self.jvm_locals.offset_len().0).map_err(|_| Error::LocalsOverflow)?;
         self.jvm_locals.push(field_type);
@@ -1935,7 +1883,7 @@ impl LocalsLayout {
     }
 
     /// Pop a local from our "stack" of locals
-    fn pop_local(&mut self) -> Result<(u16, FieldType), Error> {
+    fn pop_local(&mut self) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
         self.jvm_locals
             .pop()
             .map(|(offset, _, field_type)| (offset.0 as u16, field_type))

@@ -10,6 +10,12 @@ pub enum Error {
     LocalsOverflow,
 }
 
+impl From<jvm::ConstantPoolOverflow> for Error {
+    fn from(err: jvm::ConstantPoolOverflow) -> Error {
+        Error::BytecodeGen(jvm::Error::ConstantPoolOverflow(err))
+    }
+}
+
 impl From<jvm::Error> for Error {
     fn from(err: jvm::Error) -> Error {
         Error::BytecodeGen(err)

@@ -1,10 +1,10 @@
 use super::{BinaryName, Name, Width};
-use std::borrow::Cow;
 use std::io::{Error, ErrorKind, Result};
+use std::iter::Peekable;
 use std::str::Chars;
 
 /// Utility trait for converting descriptors to and from string representations
-pub trait Descriptor: Sized {
+pub trait RenderDescriptor {
     /// Turn the descriptor into a string
     fn render(&self) -> String {
         let mut string = String::new();
@@ -12,24 +12,26 @@ pub trait Descriptor: Sized {
         string
     }
 
+    /// Write the descriptor to a string
+    fn render_to(&self, write_to: &mut String);
+}
+
+pub trait ParseDescriptor: Sized {
     /// Parse a descriptor from a string
     fn parse(source: &str) -> Result<Self> {
-        let mut chars = source.chars();
-        let ret = Descriptor::parse_from(&mut chars)?;
-        let rest = chars.as_str();
-        if rest.is_empty() {
-            Ok(ret)
-        } else {
-            let msg = format!("Unexpected leftover input '{}'", rest);
-            Err(Error::new(ErrorKind::InvalidInput, msg))
+        let mut chars = source.chars().peekable();
+        let ret = Self::parse_from(&mut chars)?;
+        match chars.next() {
+            None => Ok(ret),
+            Some(c) => {
+                let msg = format!("Unexpected leftover input '{}'", c);
+                Err(Error::new(ErrorKind::InvalidInput, msg))
+            }
         }
     }
 
-    /// Write the descriptor to a string
-    fn render_to(&self, write_to: &mut String);
-
     /// Read the descriptor from a character buffer
-    fn parse_from(source: &mut Chars) -> Result<Self>;
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self>;
 }
 
 /// Primitive value types
@@ -59,7 +61,7 @@ impl Width for BaseType {
     }
 }
 
-impl Descriptor for BaseType {
+impl RenderDescriptor for BaseType {
     fn render_to(&self, write_to: &mut String) {
         let c = match self {
             BaseType::Byte => 'B',
@@ -73,8 +75,10 @@ impl Descriptor for BaseType {
         };
         write_to.push(c);
     }
+}
 
-    fn parse_from<'a>(source: &mut Chars) -> Result<Self> {
+impl ParseDescriptor for BaseType {
+    fn parse_from<'a>(source: &mut Peekable<Chars>) -> Result<Self> {
         let typ = match source.next() {
             Some('B') => BaseType::Byte,
             Some('C') => BaseType::Char,
@@ -98,48 +102,128 @@ impl Descriptor for BaseType {
 }
 
 /// Reference type
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum RefType {
-    Object(BinaryName),
-    Array(Box<FieldType>), // TODO: consider including dimension depth so as to avoid nested boxes
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum RefType<Class> {
+    Object(Class),
+    ObjectArray(ArrayType<Class>),
+    PrimitiveArray(ArrayType<BaseType>),
 }
 
-impl Descriptor for RefType {
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ArrayType<T> {
+    /// Additional dimensions (`A[]` has 0 additional dimensions, `A[][][][]` has 3)
+    pub additional_dimensions: usize,
+
+    /// Underlying element type (`A` is the underlying element type of `A[][]`)
+    pub element_type: T,
+}
+
+impl<T> ArrayType<T> {
+    pub fn map<T2>(&self, map_element: impl FnOnce(&T) -> T2) -> ArrayType<T2> {
+        ArrayType {
+            additional_dimensions: self.additional_dimensions,
+            element_type: map_element(&self.element_type),
+        }
+    }
+}
+
+impl<T: RenderDescriptor> RenderDescriptor for ArrayType<T> {
+    fn render_to(&self, write_to: &mut String) {
+        for _ in 0..=self.additional_dimensions {
+            write_to.push('[');
+        }
+        self.element_type.render_to(write_to);
+    }
+}
+
+impl<T: ParseDescriptor> ParseDescriptor for ArrayType<T> {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
+        let mut additional_dimensions = 0;
+        while source.next_if_eq(&'[').is_some() {
+            additional_dimensions += 1;
+        }
+        if additional_dimensions < 1 {
+            let msg = "Expected at least on `[` for array type";
+            return Err(Error::new(ErrorKind::InvalidInput, msg));
+        }
+        Ok(ArrayType {
+            additional_dimensions: additional_dimensions - 1,
+            element_type: T::parse_from(source)?,
+        })
+    }
+}
+
+impl RenderDescriptor for BinaryName {
+    fn render_to(&self, write_to: &mut String) {
+        write_to.push('L');
+        write_to.push_str(self.as_str());
+        write_to.push(';');
+    }
+}
+
+impl ParseDescriptor for BinaryName {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
+        if let Some('L') = source.next() {
+            let mut class_name = String::new();
+            loop {
+                let c: char = source.next().ok_or_else(|| {
+                    let msg = format!("Missing terminator for 'L{}'", class_name);
+                    Error::new(ErrorKind::UnexpectedEof, msg)
+                })?;
+                if c == ';' {
+                    return BinaryName::from_string(class_name)
+                        .map_err(|msg| Error::new(ErrorKind::InvalidInput, msg));
+                } else {
+                    class_name.push(c)
+                }
+            }
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Expected object type to start with `L`",
+            ))
+        }
+    }
+}
+
+impl<C: RenderDescriptor> RenderDescriptor for RefType<C> {
     fn render_to(&self, write_to: &mut String) {
         match self {
-            RefType::Object(class_name) => {
-                write_to.push('L');
-                write_to.push_str(class_name.as_str());
-                write_to.push(';');
+            RefType::Object(cls) => {
+                cls.render_to(write_to);
             }
-            RefType::Array(field_type) => {
-                write_to.push('[');
-                field_type.render_to(write_to);
+            RefType::PrimitiveArray(arr) => {
+                arr.render_to(write_to);
+            }
+            RefType::ObjectArray(arr) => {
+                arr.render_to(write_to);
             }
         }
     }
+}
 
-    fn parse_from(source: &mut Chars) -> Result<Self> {
-        match source.next() {
-            Some('L') => {
-                let mut class_name = String::new();
-                loop {
-                    let c: char = source.next().ok_or_else(|| {
-                        let msg = format!("Missing terminator for 'L{}'", class_name);
-                        Error::new(ErrorKind::UnexpectedEof, msg)
-                    })?;
-                    if c == ';' {
-                        return BinaryName::from_string(class_name)
-                            .map_err(|msg| Error::new(ErrorKind::InvalidInput, msg))
-                            .map(RefType::Object);
-                    } else {
-                        class_name.push(c)
-                    }
-                }
-            }
+impl<C: ParseDescriptor> ParseDescriptor for RefType<C> {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
+        Ok(match source.peek().copied() {
+            Some('L') => RefType::Object(C::parse_from(source)?),
             Some('[') => {
-                let elem_typ = FieldType::parse_from(source)?;
-                Ok(RefType::array(elem_typ))
+                source.next();
+                let mut additional_dimensions = 0;
+                while let Some('[') = source.peek().copied() {
+                    additional_dimensions += 1;
+                    source.next();
+                }
+                if let Some('L') = source.peek().copied() {
+                    RefType::ObjectArray(ArrayType {
+                        additional_dimensions,
+                        element_type: C::parse_from(source)?,
+                    })
+                } else {
+                    RefType::PrimitiveArray(ArrayType {
+                        additional_dimensions,
+                        element_type: BaseType::parse_from(source)?,
+                    })
+                }
             }
             Some(c) => {
                 let msg = format!("Invalid reference type character '{}'", c);
@@ -147,70 +231,51 @@ impl Descriptor for RefType {
             }
             None => {
                 let msg = "Missing field type";
-                Err(Error::new(ErrorKind::UnexpectedEof, msg))
+                return Err(Error::new(ErrorKind::UnexpectedEof, msg));
             }
-        }
+        })
     }
 }
 
-impl RefType {
-    pub fn array(field_type: FieldType) -> RefType {
-        RefType::Array(Box::new(field_type))
-    }
-
-    /// Render the type for a class info
-    ///
-    /// When making a `CONSTANT_Class_info`, reference types are almost always objects. However,
-    /// there are a handful of places where an array type needs to be fit in (eg. for a `checkcast`
-    /// to an array type). See section 4.4.1 for more.
-    pub fn render_class_info(&self) -> Cow<'static, str> {
+impl<C> RefType<C> {
+    pub fn map<C2>(&self, map_class: impl FnOnce(&C) -> C2) -> RefType<C2> {
         match self {
-            RefType::Object(obj) => match obj.as_cow() {
-                Cow::Borrowed(object_desc) => Cow::Borrowed(object_desc),
-                Cow::Owned(object_desc) => Cow::Owned(object_desc.clone()),
-            },
-            array => Cow::Owned(array.render()),
+            RefType::Object(cls) => RefType::Object(map_class(cls)),
+            RefType::PrimitiveArray(arr) => RefType::PrimitiveArray(*arr),
+            RefType::ObjectArray(arr) => RefType::ObjectArray(arr.map(map_class)),
         }
     }
 
-    /// Parse a class from a class info
-    pub fn parse_class_info(descriptor: &str) -> Result<RefType> {
-        if let Some('[') = descriptor.chars().next() {
-            RefType::parse(&descriptor)
-        } else {
-            BinaryName::from_string(descriptor.to_string())
-                .map_err(|msg| Error::new(ErrorKind::InvalidInput, msg))
-                .map(RefType::Object)
+    pub fn array(field_type: FieldType<C>) -> RefType<C> {
+        match field_type {
+            FieldType::Base(element_type) => RefType::PrimitiveArray(ArrayType {
+                additional_dimensions: 0,
+                element_type,
+            }),
+            FieldType::Ref(RefType::Object(element_type)) => RefType::ObjectArray(ArrayType {
+                additional_dimensions: 0,
+                element_type,
+            }),
+            FieldType::Ref(RefType::PrimitiveArray(arr)) => RefType::PrimitiveArray(ArrayType {
+                additional_dimensions: arr.additional_dimensions + 1,
+                element_type: arr.element_type,
+            }),
+            FieldType::Ref(RefType::ObjectArray(arr)) => RefType::ObjectArray(ArrayType {
+                additional_dimensions: arr.additional_dimensions + 1,
+                element_type: arr.element_type,
+            }),
         }
     }
-
-    pub const ARITHMETICEXCEPTION: RefType = Self::Object(BinaryName::ARITHMETICEXCEPTION);
-    pub const ASSERTIONERROR: RefType = Self::Object(BinaryName::ASSERTIONERROR);
-    pub const CLASS: RefType = Self::Object(BinaryName::CLASS);
-    pub const DOUBLE: RefType = Self::Object(BinaryName::DOUBLE);
-    pub const ERROR: RefType = Self::Object(BinaryName::ERROR);
-    pub const EXCEPTION: RefType = Self::Object(BinaryName::EXCEPTION);
-    pub const FLOAT: RefType = Self::Object(BinaryName::FLOAT);
-    pub const HASHMAP: RefType = Self::Object(BinaryName::HASHMAP);
-    pub const INTEGER: RefType = Self::Object(BinaryName::INTEGER);
-    pub const LONG: RefType = Self::Object(BinaryName::LONG);
-    pub const MAP: RefType = Self::Object(BinaryName::MAP);
-    pub const METHODHANDLE: RefType = Self::Object(BinaryName::METHODHANDLE);
-    pub const METHODTYPE: RefType = Self::Object(BinaryName::METHODTYPE);
-    pub const OBJECT: RefType = Self::Object(BinaryName::OBJECT);
-    pub const RUNTIMEEXCEPTION: RefType = Self::Object(BinaryName::RUNTIMEEXCEPTION);
-    pub const STRING: RefType = Self::Object(BinaryName::STRING);
-    pub const THROWABLE: RefType = Self::Object(BinaryName::THROWABLE);
 }
 
 /// Type of a class, instance, or local variable
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum FieldType {
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum FieldType<Class> {
     Base(BaseType),
-    Ref(RefType),
+    Ref(RefType<Class>),
 }
 
-impl Width for FieldType {
+impl<C> Width for FieldType<C> {
     fn width(&self) -> usize {
         match self {
             FieldType::Base(base_type) => base_type.width(),
@@ -219,36 +284,60 @@ impl Width for FieldType {
     }
 }
 
-impl FieldType {
-    pub const INT: FieldType = FieldType::Base(BaseType::Int);
-    pub const LONG: FieldType = FieldType::Base(BaseType::Long);
-    pub const FLOAT: FieldType = FieldType::Base(BaseType::Float);
-    pub const DOUBLE: FieldType = FieldType::Base(BaseType::Double);
-    pub const CHAR: FieldType = FieldType::Base(BaseType::Char);
-    pub const SHORT: FieldType = FieldType::Base(BaseType::Short);
-    pub const BYTE: FieldType = FieldType::Base(BaseType::Byte);
-    pub const BOOLEAN: FieldType = FieldType::Base(BaseType::Boolean);
-    pub const OBJECT: FieldType = FieldType::Ref(RefType::OBJECT);
-
-    pub fn array(field_type: FieldType) -> FieldType {
+impl<C> FieldType<C> {
+    pub fn array(field_type: FieldType<C>) -> FieldType<C> {
         FieldType::Ref(RefType::array(field_type))
     }
 
-    pub const fn object(class_name: BinaryName) -> FieldType {
+    pub const fn object(class_name: C) -> FieldType<C> {
         FieldType::Ref(RefType::Object(class_name))
+    }
+
+    pub const fn int() -> FieldType<C> {
+        FieldType::Base(BaseType::Int)
+    }
+
+    pub const fn long() -> FieldType<C> {
+        FieldType::Base(BaseType::Long)
+    }
+
+    pub const fn float() -> FieldType<C> {
+        FieldType::Base(BaseType::Float)
+    }
+
+    pub const fn double() -> FieldType<C> {
+        FieldType::Base(BaseType::Double)
+    }
+
+    pub const fn char() -> FieldType<C> {
+        FieldType::Base(BaseType::Char)
+    }
+
+    pub const fn short() -> FieldType<C> {
+        FieldType::Base(BaseType::Short)
+    }
+
+    pub const fn byte() -> FieldType<C> {
+        FieldType::Base(BaseType::Byte)
+    }
+
+    pub const fn boolean() -> FieldType<C> {
+        FieldType::Base(BaseType::Boolean)
     }
 }
 
-impl Descriptor for FieldType {
+impl<C: RenderDescriptor> RenderDescriptor for FieldType<C> {
     fn render_to(&self, write_to: &mut String) {
         match self {
             FieldType::Base(base_type) => base_type.render_to(write_to),
             FieldType::Ref(reference_type) => reference_type.render_to(write_to),
         }
     }
+}
 
-    fn parse_from(source: &mut Chars) -> Result<Self> {
-        match source.clone().next() {
+impl<C: ParseDescriptor> ParseDescriptor for FieldType<C> {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
+        match source.peek().copied() {
             None => Err(Error::new(ErrorKind::UnexpectedEof, "Missing field type")),
             Some('B') | Some('C') | Some('D') | Some('F') | Some('I') | Some('J') | Some('S')
             | Some('Z') => BaseType::parse_from(source).map(FieldType::Base),
@@ -263,12 +352,12 @@ impl Descriptor for FieldType {
 
 /// Signature of a method
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct MethodDescriptor {
-    pub parameters: Vec<FieldType>,
-    pub return_type: Option<FieldType>, // `None` is for `void` (ie. no return)
+pub struct MethodDescriptor<Class> {
+    pub parameters: Vec<FieldType<Class>>,
+    pub return_type: Option<FieldType<Class>>, // `None` is for `void` (ie. no return)
 }
 
-impl MethodDescriptor {
+impl<C> MethodDescriptor<C> {
     /// Total length of parameters (not the same as the length of the vector),
     /// which must be 255 or less for it to be valid
     pub fn parameter_length(&self, has_this_param: bool) -> usize {
@@ -283,7 +372,7 @@ impl MethodDescriptor {
     }
 }
 
-impl Descriptor for MethodDescriptor {
+impl<C: RenderDescriptor> RenderDescriptor for MethodDescriptor<C> {
     fn render_to(&self, write_to: &mut String) {
         write_to.push('(');
         for parameter in &self.parameters {
@@ -295,8 +384,10 @@ impl Descriptor for MethodDescriptor {
             Some(typ) => typ.render_to(write_to),
         };
     }
+}
 
-    fn parse_from(source: &mut Chars) -> Result<Self> {
+impl<C: ParseDescriptor> ParseDescriptor for MethodDescriptor<C> {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
         // Assert open paren
         if let Some('(') = source.next() {
         } else {
@@ -306,8 +397,8 @@ impl Descriptor for MethodDescriptor {
 
         // Parse parameters
         let mut parameters = vec![];
-        while source.clone().next() != Some(')') {
-            parameters.push(FieldType::parse_from(source)?);
+        while source.peek().copied() != Some(')') {
+            parameters.push(FieldType::<C>::parse_from(source)?);
         }
 
         // Assert close paren
@@ -318,11 +409,11 @@ impl Descriptor for MethodDescriptor {
         }
 
         // Parse return
-        let return_type = if let Some('V') = source.clone().next() {
+        let return_type = if let Some('V') = source.peek().copied() {
             let _ = source.next();
             None
         } else {
-            Some(FieldType::parse_from(source)?)
+            Some(FieldType::<C>::parse_from(source)?)
         };
 
         Ok(MethodDescriptor {
@@ -331,7 +422,7 @@ impl Descriptor for MethodDescriptor {
         })
     }
 }
-
+/*
 /// Any JVM signature
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum JavaTypeSignature {
@@ -339,16 +430,18 @@ pub enum JavaTypeSignature {
     Reference(ReferenceTypeSignature),
 }
 
-impl Descriptor for JavaTypeSignature {
+impl RenderDescriptor for JavaTypeSignature {
     fn render_to(&self, write_to: &mut String) {
         match self {
             JavaTypeSignature::Base(typ) => typ.render_to(write_to),
             JavaTypeSignature::Reference(typ) => typ.render_to(write_to),
         }
     }
+}
 
-    fn parse_from(source: &mut Chars) -> Result<Self> {
-        match source.clone().next() {
+impl ParseDescriptor for JavaTypeSignature {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
+        match source.peek().copied() {
             Some('L') | Some('T') | Some('[') => {
                 let sig = ReferenceTypeSignature::parse_from(source)?;
                 Ok(JavaTypeSignature::Reference(sig))
@@ -369,7 +462,7 @@ pub enum ReferenceTypeSignature {
     Array(Box<JavaTypeSignature>),
 }
 
-impl Descriptor for ReferenceTypeSignature {
+impl RenderDescriptor for ReferenceTypeSignature {
     fn render_to(&self, write_to: &mut String) {
         match self {
             ReferenceTypeSignature::Class(class) => class.render_to(write_to),
@@ -384,9 +477,11 @@ impl Descriptor for ReferenceTypeSignature {
             }
         }
     }
+}
 
-    fn parse_from(source: &mut Chars) -> Result<Self> {
-        let sig = match source.clone().next() {
+impl ParseDescriptor for ReferenceTypeSignature {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
+        let sig = match source.peek() {
             Some('L') => {
                 let class = ClassTypeSignature::parse_from(source)?;
                 ReferenceTypeSignature::Class(class)
@@ -431,7 +526,7 @@ pub struct ClassTypeSignature {
     pub projections: Vec<SimpleClassTypeSignature>,
 }
 
-impl Descriptor for ClassTypeSignature {
+impl RenderDescriptor for ClassTypeSignature {
     fn render_to(&self, write_to: &mut String) {
         write_to.push('L');
         for package in &self.packages {
@@ -445,8 +540,10 @@ impl Descriptor for ClassTypeSignature {
         }
         write_to.push(';')
     }
+}
 
-    fn parse_from(source: &mut Chars) -> Result<Self> {
+impl ParseDescriptor for ClassTypeSignature {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
         // Assert leading `L`
         if let Some('L') = source.next() {
         } else {
@@ -455,10 +552,10 @@ impl Descriptor for ClassTypeSignature {
         }
 
         // TODO: filter out empty idents?
-        fn parse_ident(source: &mut Chars) -> Result<(String, Option<char>)> {
+        fn parse_ident(source: &mut Peekable<Chars>) -> Result<(String, Option<char>)> {
             let mut name = String::new();
             loop {
-                let c_opt = source.clone().next();
+                let c_opt = source.peek().copied();
                 match c_opt {
                     Some('/') | Some('<') | Some('.') | Some(';') | None => {
                         return Ok((name, c_opt))
@@ -477,7 +574,7 @@ impl Descriptor for ClassTypeSignature {
             if next_char == None {
                 break;
             } else if next_char == Some('<') {
-                while source.clone().next() != Some('>') {
+                while source.peek().copied() != Some('>') {
                     arguments.push(TypeArgument::parse_from(source)?);
                 }
                 let _ = source.next();
@@ -491,7 +588,7 @@ impl Descriptor for ClassTypeSignature {
 
         // Projections
         let mut projections = vec![];
-        while let Some('.') = source.clone().next() {
+        while let Some('.') = source.peek().copied() {
             projections.push(SimpleClassTypeSignature::parse_from(source)?);
         }
 
@@ -510,7 +607,7 @@ pub struct SimpleClassTypeSignature {
     pub arguments: Vec<TypeArgument>,
 }
 
-impl Descriptor for SimpleClassTypeSignature {
+impl RenderDescriptor for SimpleClassTypeSignature {
     fn render_to(&self, write_to: &mut String) {
         write_to.push_str(&self.name);
         if !self.arguments.is_empty() {
@@ -521,14 +618,16 @@ impl Descriptor for SimpleClassTypeSignature {
             write_to.push('>');
         }
     }
+}
 
-    fn parse_from(source: &mut Chars) -> Result<Self> {
+impl ParseDescriptor for SimpleClassTypeSignature {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
         let mut name = String::new();
         let mut arguments = vec![];
         loop {
-            match source.clone().next() {
+            match source.peek().copied() {
                 Some('<') => {
-                    while source.clone().next() != Some('>') {
+                    while source.peek().copied() != Some('>') {
                         arguments.push(TypeArgument::parse_from(source)?);
                     }
                     let _ = source.next();
@@ -549,7 +648,7 @@ pub enum TypeArgument {
     Wildcard,
 }
 
-impl Descriptor for TypeArgument {
+impl RenderDescriptor for TypeArgument {
     fn render_to(&self, write_to: &mut String) {
         match self {
             TypeArgument::Wildcard => write_to.push('*'),
@@ -564,9 +663,11 @@ impl Descriptor for TypeArgument {
             }
         };
     }
+}
 
-    fn parse_from(source: &mut Chars) -> Result<Self> {
-        let ty_arg = match source.clone().next() {
+impl ParseDescriptor for TypeArgument {
+    fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
+        let ty_arg = match source.peek().copied() {
             Some('*') => {
                 let _ = source.next();
                 TypeArgument::Wildcard
@@ -596,16 +697,25 @@ pub enum WildcardIndicator {
     Plus,
     Minus,
 }
+*/
 
 #[cfg(test)]
 mod test {
     use super::*;
     use std::fmt::Debug;
 
-    fn round_trip<T: Descriptor + Debug + Eq>(rendered: &str, parsed: T) {
+    fn round_trip<T: RenderDescriptor + ParseDescriptor + Debug + Eq>(rendered: &str, parsed: T) {
         assert_eq!(rendered, parsed.render());
         assert_eq!(T::parse(rendered).unwrap(), parsed);
     }
+
+    type FT = FieldType<BinaryName>;
+
+    const INT: FT = FieldType::Base(BaseType::Int);
+    const DOUBLE: FT = FieldType::Base(BaseType::Double);
+    const OBJECT: FT = FieldType::object(BinaryName::OBJECT);
+    const STRING: FT = FieldType::object(BinaryName::STRING);
+    const INTEGER: FT = FieldType::object(BinaryName::INTEGER);
 
     #[test]
     fn base_types() {
@@ -622,16 +732,13 @@ mod test {
 
     #[test]
     fn field_types() {
-        round_trip("I", FieldType::Base(BaseType::Int));
-        round_trip("Ljava/lang/Object;", FieldType::OBJECT);
+        round_trip("I", INT);
+        round_trip("Ljava/lang/Object;", OBJECT);
         round_trip(
             "[[[D",
-            FieldType::array(FieldType::array(FieldType::array(FieldType::DOUBLE))),
+            FieldType::array(FieldType::array(FieldType::array(DOUBLE))),
         );
-        round_trip(
-            "[Ljava/lang/String;",
-            FieldType::array(FieldType::Ref(RefType::STRING)),
-        );
+        round_trip("[Ljava/lang/String;", FieldType::array(STRING));
     }
 
     #[test]
@@ -639,13 +746,16 @@ mod test {
         round_trip(
             "(IDLjava/lang/Integer;)Ljava/lang/Object;",
             MethodDescriptor {
-                parameters: vec![
-                    FieldType::INT,
-                    FieldType::DOUBLE,
-                    FieldType::Ref(RefType::INTEGER),
-                ],
-                return_type: Some(FieldType::OBJECT),
+                parameters: vec![INT, DOUBLE, INTEGER],
+                return_type: Some(OBJECT),
             },
-        )
+        );
+        round_trip(
+            "()V",
+            MethodDescriptor {
+                parameters: Vec::<FT>::new(),
+                return_type: None,
+            },
+        );
     }
 }

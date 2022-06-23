@@ -1,6 +1,8 @@
 use super::*;
 use byteorder::WriteBytesExt;
 
+// TODO: rename various "interpret" functions "verify"
+
 /// A frame represents the state of the stack and local variables at any location in the bytecode
 ///
 /// In order to load bytecode into the JVM, the JVM requires that methods be annotated with
@@ -14,30 +16,35 @@ pub struct Frame<Cls, U> {
     pub stack: OffsetVec<VerificationType<Cls, U>>,
 }
 
-impl Frame<RefType, (RefType, Offset)> {
+pub type VerifierInstruction<'g> = Instruction<
+    RefType<&'g ClassData<'g>>,
+    RefType<&'g ClassData<'g>>,
+    ConstantData<'g>,
+    &'g FieldData<'g>,
+    &'g MethodData<'g>,
+    InvokeDynamicData<'g>,
+>;
+
+pub type VerifierFrame<'g> =
+    Frame<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)>;
+
+type VType<'g> = VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)>;
+
+impl<'g> VerifierFrame<'g> {
     /// Update the frame to reflect the effects of the given (non-branching) instruction
     ///
     ///   * `insn_offset_in_basic_block` - used in uninitialized verification types
     ///   * `class_graph` - used to check whether types are assignable
-    ///   * `constants_reader` - used to query constants information from constant indices
     ///   * `this_class` - used to determine the type of `UninitializedThis` after `<init>`
     ///
     pub fn interpret_instruction(
         &mut self,
-        insn: &Instruction,
+        insn: &VerifierInstruction<'g>,
         insn_offset_in_block: Offset,
-        class_graph: &ClassGraph,
-        constants_reader: &ConstantsPool,
-        this_class: &RefType,
+        java: &JavaClasses<'g>,
+        this_class: &RefType<&'g ClassData<'g>>,
     ) -> Result<(), VerifierErrorKind> {
-        interpret_instruction(
-            self,
-            constants_reader,
-            class_graph,
-            this_class,
-            insn,
-            insn_offset_in_block,
-        )
+        interpret_instruction(self, java, this_class, insn, insn_offset_in_block)
     }
 
     /// Update the frame to reflect the effects of the given branching instruction
@@ -48,10 +55,9 @@ impl Frame<RefType, (RefType, Offset)> {
     pub fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
         &mut self,
         insn: &BranchInstruction<Lbl, LblWide, LblNext>,
-        class_graph: &ClassGraph,
-        this_method_return_type: &Option<FieldType>,
+        this_method_return_type: &Option<FieldType<&'g ClassData<'g>>>,
     ) -> Result<(), VerifierErrorKind> {
-        interpret_branch_instruction(self, class_graph, this_method_return_type, insn)
+        interpret_branch_instruction(self, this_method_return_type, insn)
     }
 
     /// Update the maximum locals and stack
@@ -65,7 +71,7 @@ impl Frame<RefType, (RefType, Offset)> {
         &self,
         constants_pool: &ConstantsPool,
         block_offset: Offset,
-    ) -> Result<Frame<ClassConstantIndex, u16>, Error> {
+    ) -> Result<Frame<ClassConstantIndex, u16>, ConstantPoolOverflow> {
         Ok(Frame {
             stack: self
                 .stack
@@ -78,6 +84,24 @@ impl Frame<RefType, (RefType, Offset)> {
                 .map(|(_, _, t)| t.into_serializable(constants_pool, block_offset))
                 .collect::<Result<_, _>>()?,
         })
+    }
+
+    /// TODO: find a better name
+    pub fn into_printable(&self) -> Frame<RefType<BinaryName>, (RefType<BinaryName>, Offset)> {
+        let update_vtype = |vty: &VType<'g>| {
+            vty.map(
+                |ref_type| ref_type.map(|cls| cls.name.clone()),
+                |(ref_type, off)| (ref_type.map(|cls| cls.name.clone()), *off),
+            )
+        };
+        Frame {
+            stack: self.stack.iter().map(|(_, _, t)| update_vtype(t)).collect(),
+            locals: self
+                .locals
+                .iter()
+                .map(|(_, _, t)| update_vtype(t))
+                .collect(),
+        }
     }
 }
 
@@ -200,8 +224,8 @@ impl<Cls, U> VerificationType<Cls, U> {
     }
 }
 
-impl<U> From<FieldType> for VerificationType<RefType, U> {
-    fn from(field_type: FieldType) -> Self {
+impl<C, U> From<FieldType<C>> for VerificationType<RefType<C>, U> {
+    fn from(field_type: FieldType<C>) -> Self {
         match field_type {
             FieldType::Base(BaseType::Int)
             | FieldType::Base(BaseType::Char)
@@ -247,12 +271,15 @@ impl<Cls, A> Width for VerificationType<Cls, A> {
     }
 }
 
-impl<U> VerificationType<RefType, U> {
+impl<'g, U> VerificationType<RefType<&'g ClassData<'g>>, U> {
     /// Check if one verification type is assignable to another
     ///
     /// TODO: there is no handling of uninitialized yet. This just means that we might get false
     /// verification failures.
-    pub fn is_assignable(class_graph: &ClassGraph, sub_type: &Self, super_type: &Self) -> bool {
+    pub fn is_assignable<'a>(sub_type: &'a Self, super_type: &'a Self) -> bool
+    where
+        'g: 'a,
+    {
         match (sub_type, super_type) {
             (Self::Integer, Self::Integer) => true,
             (Self::Float, Self::Float) => true,
@@ -260,19 +287,19 @@ impl<U> VerificationType<RefType, U> {
             (Self::Double, Self::Double) => true,
             (Self::Null, Self::Null) => true,
             (Self::Null, Self::Object(_)) => true,
-            (Self::Object(t1), Self::Object(t2)) => class_graph.is_java_assignable(t1, t2),
+            (Self::Object(t1), Self::Object(t2)) => ClassGraph::is_java_assignable(t1, t2),
             _ => false,
         }
     }
 }
 
-impl VerificationType<RefType, (RefType, Offset)> {
+impl<'g> VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)> {
     /// Resolve the type into its serializable form
     fn into_serializable(
         &self,
         constants_pool: &ConstantsPool,
         block_offset: Offset,
-    ) -> Result<VerificationType<ClassConstantIndex, u16>, Error> {
+    ) -> Result<VerificationType<ClassConstantIndex, u16>, ConstantPoolOverflow> {
         match self {
             VerificationType::Integer => Ok(VerificationType::Integer),
             VerificationType::Float => Ok(VerificationType::Float),
@@ -281,8 +308,7 @@ impl VerificationType<RefType, (RefType, Offset)> {
             VerificationType::Null => Ok(VerificationType::Null),
             VerificationType::UninitializedThis => Ok(VerificationType::UninitializedThis),
             VerificationType::Object(ref_type) => {
-                let utf8_index = constants_pool.get_utf8(ref_type.render_class_info())?;
-                let class_index = constants_pool.get_class(utf8_index)?;
+                let class_index = ref_type.constant_index(constants_pool)?;
                 Ok(VerificationType::Object(class_index))
             }
             VerificationType::Uninitialized((_, Offset(offset_in_block))) => Ok(
@@ -292,51 +318,37 @@ impl VerificationType<RefType, (RefType, Offset)> {
     }
 }
 
-pub trait ConstantsReader {
-    /// Lookup the type of a value loaded from the constant pool (eg. from `ldc`)
-    fn lookup_constant_type(&self, index: ConstantIndex) -> Result<FieldType, VerifierErrorKind>;
-
-    /// Resolve the class
-    fn lookup_class_reftype(&self, index: ClassConstantIndex)
-        -> Result<RefType, VerifierErrorKind>;
-
-    /// Resolve the class and the field type
-    fn lookup_field(
+impl<C, U> VerificationType<C, U> {
+    pub fn map<C2, U2>(
         &self,
-        index: FieldRefConstantIndex,
-    ) -> Result<(RefType, FieldType), VerifierErrorKind>;
-
-    /// Resolve a method into:
-    ///
-    ///   * it's receiver
-    ///   * whether it is an interface
-    ///   * whether it is an `<init>` method
-    ///   * and its descriptor
-    ///
-    fn lookup_method(
-        &self,
-        index: MethodRefConstantIndex,
-    ) -> Result<(ClassConstantIndex, bool, bool, MethodDescriptor), VerifierErrorKind>;
-
-    /// Resolve the type of an invoke dynamic constant
-    fn lookup_invoke_dynamic(
-        &self,
-        index: InvokeDynamicConstantIndex,
-    ) -> Result<MethodDescriptor, VerifierErrorKind>;
+        map_class: impl Fn(&C) -> C2,
+        map_uninitialized: impl Fn(&U) -> U2,
+    ) -> VerificationType<C2, U2> {
+        match self {
+            VerificationType::Integer => VerificationType::Integer,
+            VerificationType::Float => VerificationType::Float,
+            VerificationType::Long => VerificationType::Long,
+            VerificationType::Double => VerificationType::Double,
+            VerificationType::Null => VerificationType::Null,
+            VerificationType::UninitializedThis => VerificationType::UninitializedThis,
+            VerificationType::Object(cls) => VerificationType::Object(map_class(cls)),
+            VerificationType::Uninitialized(uninit) => {
+                VerificationType::Uninitialized(map_uninitialized(uninit))
+            }
+        }
+    }
 }
 
-fn interpret_instruction(
-    frame: &mut Frame<RefType, (RefType, Offset)>,
-    constants_reader: &impl ConstantsReader,
-    class_graph: &ClassGraph,
-    this_class: &RefType,
-    insn: &Instruction,
+fn interpret_instruction<'g>(
+    frame: &mut VerifierFrame<'g>,
+    java: &JavaClasses<'g>,
+    this_class: &RefType<&'g ClassData<'g>>,
+    insn: &VerifierInstruction<'g>,
     insn_offset_in_basic_block: Offset,
 ) -> Result<(), VerifierErrorKind> {
     use Instruction::*;
     use VerificationType::*;
 
-    type VType = VerificationType<RefType, (RefType, Offset)>;
     let Frame {
         ref mut stack,
         ref mut locals,
@@ -362,19 +374,34 @@ fn interpret_instruction(
         BiPush(_) | SiPush(_) => {
             stack.push(Integer);
         }
-        Ldc(idx) => {
-            let typ: VType = constants_reader.lookup_constant_type(*idx)?.into();
-            match typ.width() {
-                1 => stack.push(typ),
-                other => return Err(VerifierErrorKind::InvalidWidth(other)),
-            };
+        Ldc(constant) => {
+            stack.push(match constant {
+                ConstantData::String(_) => VType::Object(RefType::Object(java.lang.string)),
+                ConstantData::Class(_) => VType::Object(RefType::Object(java.lang.class)),
+                ConstantData::Integer(_) => VType::Integer,
+                ConstantData::Float(_) => VType::Float,
+                ConstantData::FieldGetterHandle(_)
+                | ConstantData::FieldSetterHandle(_)
+                | ConstantData::MethodHandle(_) => {
+                    VType::Object(RefType::Object(java.lang.invoke.method_handle))
+                }
+                ConstantData::Long(_) | ConstantData::Double(_) => {
+                    return Err(VerifierErrorKind::InvalidWidth(2))
+                }
+            });
         }
-        Ldc2(idx) => {
-            let typ: VType = constants_reader.lookup_constant_type(*idx)?.into();
-            match typ.width() {
-                2 => stack.push(typ),
-                other => return Err(VerifierErrorKind::InvalidWidth(other)),
-            };
+        Ldc2(constant) => {
+            stack.push(match constant {
+                ConstantData::String(_)
+                | ConstantData::Class(_)
+                | ConstantData::Integer(_)
+                | ConstantData::Float(_)
+                | ConstantData::FieldGetterHandle(_)
+                | ConstantData::FieldSetterHandle(_)
+                | ConstantData::MethodHandle(_) => return Err(VerifierErrorKind::InvalidWidth(1)),
+                ConstantData::Long(_) => VType::Long,
+                ConstantData::Double(_) => VType::Double,
+            });
         }
 
         ILoad(offset) => {
@@ -400,48 +427,51 @@ fn interpret_instruction(
 
         IALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::INT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::int())))?;
             stack.push(Integer);
         }
         LALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::LONG)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::long())))?;
             stack.push(Long);
         }
         FALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::FLOAT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::float())))?;
             stack.push(Float);
         }
         DALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::DOUBLE)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::double())))?;
             stack.push(Double);
         }
         AALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             let array_type = pop_offset_vec(stack)?;
             match array_type {
-                Object(RefType::Array(elem_ty)) => match *elem_ty {
-                    FieldType::Ref(ref_type) => stack.push(Object(ref_type)),
-                    _ => return Err(VerifierErrorKind::InvalidType),
+                Object(RefType::ObjectArray(arr)) => match arr.additional_dimensions {
+                    0 => stack.push(Object(RefType::Object(arr.element_type))),
+                    n => stack.push(Object(RefType::ObjectArray(ArrayType {
+                        additional_dimensions: n - 1,
+                        ..arr
+                    }))),
                 },
                 _ => return Err(VerifierErrorKind::InvalidType),
             };
         }
         BALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::BYTE)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::byte())))?;
             stack.push(Integer);
         }
         CALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::CHAR)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::char())))?;
             stack.push(Integer);
         }
         SALoad => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::SHORT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::short())))?;
             stack.push(Integer);
         }
 
@@ -504,8 +534,7 @@ fn interpret_instruction(
         AHint(general_type) => {
             let general_type = VType::Object(general_type.clone());
             let specific_type = pop_offset_vec(stack)?;
-            let is_valid_weakening =
-                VerificationType::is_assignable(class_graph, &specific_type, &general_type);
+            let is_valid_weakening = VerificationType::is_assignable(&specific_type, &general_type);
             if is_valid_weakening {
                 stack.push(general_type);
             } else {
@@ -516,54 +545,60 @@ fn interpret_instruction(
         IAStore => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::INT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::int())))?;
         }
         LAStore => {
             pop_offset_vec_expecting_type(stack, Long)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::LONG)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::long())))?;
         }
         FAStore => {
             pop_offset_vec_expecting_type(stack, Float)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::FLOAT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::float())))?;
         }
         DAStore => {
             pop_offset_vec_expecting_type(stack, Double)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::DOUBLE)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::double())))?;
         }
         AAStore => {
             let elem_type = pop_offset_vec(stack)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
             let array_type = pop_offset_vec(stack)?;
             match array_type {
-                Object(RefType::Array(expected_elem_type))
-                    if VerificationType::is_assignable(
-                        class_graph,
+                Object(RefType::ObjectArray(arr)) => {
+                    let expected_elem_type = match arr.additional_dimensions {
+                        0 => Object(RefType::Object(arr.element_type)),
+                        n => Object(RefType::ObjectArray(ArrayType {
+                            additional_dimensions: n - 1,
+                            ..arr
+                        })),
+                    };
+                    if !VerificationType::is_assignable(
                         &elem_type,
-                        &VType::from(*expected_elem_type.clone()),
-                    ) =>
-                {
-                    ()
+                        &VType::from(expected_elem_type),
+                    ) {
+                        return Err(VerifierErrorKind::InvalidType);
+                    }
                 }
                 _ => return Err(VerifierErrorKind::InvalidType),
-            };
+            }
         }
         BAStore => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::BYTE)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::byte())))?;
         }
         CAStore => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::CHAR)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::char())))?;
         }
         SAStore => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             pop_offset_vec_expecting_type(stack, Integer)?;
-            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::SHORT)))?;
+            pop_offset_vec_expecting_type(stack, Object(RefType::array(FieldType::short())))?;
         }
 
         Pop => {
@@ -857,23 +892,23 @@ fn interpret_instruction(
             stack.push(Integer);
         }
 
-        GetStatic(field_ref) => {
-            let (_, field_type) = constants_reader.lookup_field(*field_ref)?;
+        GetStatic(field) => {
+            let field_type = field.descriptor.clone();
             stack.push(field_type.into());
         }
-        PutStatic(field_ref) => {
-            let (_, field_type) = constants_reader.lookup_field(*field_ref)?;
+        PutStatic(field) => {
+            let field_type = field.descriptor.clone();
             let arg_type = pop_offset_vec(stack)?;
-            if !VerificationType::is_assignable(&class_graph, &arg_type, &VType::from(field_type)) {
+            if !VerificationType::is_assignable(&arg_type, &VType::from(field_type)) {
                 return Err(VerifierErrorKind::InvalidType);
             }
         }
 
-        GetField(field_ref) => {
-            let (object_type, field_type) = constants_reader.lookup_field(*field_ref)?;
+        GetField(field) => {
+            let field_type = field.descriptor.clone();
+            let object_type = RefType::Object(field.class);
             let object_type_found = pop_offset_vec(stack)?;
             if !VerificationType::is_assignable(
-                &class_graph,
                 &object_type_found,
                 &VType::from(FieldType::Ref(object_type)),
             ) {
@@ -881,13 +916,13 @@ fn interpret_instruction(
             }
             stack.push(field_type.into());
         }
-        PutField(field_ref) => {
-            let (object_type, field_type) = constants_reader.lookup_field(*field_ref)?;
+        PutField(field) => {
+            let field_type = field.descriptor.clone();
+            let object_type = RefType::Object(field.class);
             let arg_type = pop_offset_vec(stack)?;
             let object_type_found = pop_offset_vec(stack)?;
-            if !VerificationType::is_assignable(&class_graph, &arg_type, &VType::from(field_type))
+            if !VerificationType::is_assignable(&arg_type, &VType::from(field_type))
                 || !VerificationType::is_assignable(
-                    &class_graph,
                     &object_type_found,
                     &VType::from(FieldType::Ref(object_type)),
                 )
@@ -896,15 +931,15 @@ fn interpret_instruction(
             }
         }
 
-        Invoke(invoke_type, method_ref) => {
-            let (class, is_interface, is_init, desc) =
-                constants_reader.lookup_method(*method_ref)?;
+        Invoke(invoke_type, method) => {
+            let is_interface = method.class.is_interface;
+            let is_init = method.name == UnqualifiedName::INIT;
+            let desc = &method.descriptor;
 
             // Check that all the arguments match
             for expected_arg_type in desc.parameters.iter().rev() {
                 let found_arg_type = pop_offset_vec(stack)?;
                 let compatible = VerificationType::is_assignable(
-                    &class_graph,
                     &found_arg_type,
                     &VType::from(expected_arg_type.clone()),
                 );
@@ -955,33 +990,32 @@ fn interpret_instruction(
 
                 // Pop off the receiver type
                 if needs_receiver {
-                    let expected_reciever = constants_reader.lookup_class_reftype(class)?;
                     let found_reciever = pop_offset_vec(stack)?;
-                    let compatible = VerificationType::is_assignable(
-                        &class_graph,
-                        &found_reciever,
-                        &Object(expected_reciever),
-                    );
+                    let expected = Object(RefType::Object(method.class));
+                    let compatible = VerificationType::is_assignable(&found_reciever, &expected);
                     if !compatible {
+                        log::error!(
+                            "Incompatible receiver: found {:?} but expected {:?} (for {})",
+                            found_reciever,
+                            expected,
+                            desc.render(),
+                        );
                         return Err(VerifierErrorKind::InvalidType);
                     }
                 }
 
                 // Push the return type
-                if let Some(return_type) = desc.return_type {
-                    stack.push(VType::from(return_type));
+                if let Some(ref return_type) = desc.return_type {
+                    stack.push(VType::from(return_type.clone()));
                 }
             }
         }
 
-        InvokeDynamic(invoke_dynamic_ref) => {
-            let desc = constants_reader.lookup_invoke_dynamic(*invoke_dynamic_ref)?;
-
+        InvokeDynamic(invoke_dynamic) => {
             // Check that all the arguments match
-            for expected_arg_type in desc.parameters.iter().rev() {
+            for expected_arg_type in invoke_dynamic.descriptor.parameters.iter().rev() {
                 let found_arg_type = pop_offset_vec(stack)?;
                 let compatible = VerificationType::is_assignable(
-                    &class_graph,
                     &found_arg_type,
                     &VType::from(expected_arg_type.clone()),
                 );
@@ -991,40 +1025,41 @@ fn interpret_instruction(
             }
 
             // Push the return type
-            if let Some(return_type) = desc.return_type {
+            if let Some(return_type) = invoke_dynamic.descriptor.return_type {
                 stack.push(VType::from(return_type));
             }
         }
 
-        New(cls_idx) => {
-            let ref_type = constants_reader.lookup_class_reftype(*cls_idx)?;
-            stack.push(Uninitialized((ref_type, insn_offset_in_basic_block)));
+        New(ref_type) => {
+            if let RefType::Object(_) = ref_type {
+                stack.push(Uninitialized((*ref_type, insn_offset_in_basic_block)));
+            } else {
+                todo!("error - arrays cannot be constructed with `new`")
+            }
         }
         NewArray(base_type) => {
             pop_offset_vec_expecting_type(stack, Integer)?;
             stack.push(Object(RefType::array(FieldType::Base(*base_type))));
         }
-        ANewArray(cls_idx) => {
+        ANewArray(ref_type) => {
             pop_offset_vec_expecting_type(stack, Integer)?;
-            let ref_type = constants_reader.lookup_class_reftype(*cls_idx)?;
-            stack.push(Object(RefType::array(FieldType::Ref(ref_type))));
+            stack.push(Object(RefType::array(FieldType::Ref(*ref_type))));
         }
         ArrayLength => {
             let array_type = pop_offset_vec(stack)?;
             match array_type {
-                Object(RefType::Array(_)) => (),
+                Object(RefType::PrimitiveArray(_) | RefType::ObjectArray(_)) => (),
                 _ => return Err(VerifierErrorKind::InvalidType),
             }
             stack.push(Integer);
         }
 
-        CheckCast(target_cls_idx) => {
+        CheckCast(ref_type) => {
             match pop_offset_vec(stack)? {
                 Object(_) => (),
                 _ => return Err(VerifierErrorKind::InvalidType),
             }
-            let ref_type = constants_reader.lookup_class_reftype(*target_cls_idx)?;
-            stack.push(Object(ref_type));
+            stack.push(Object(*ref_type));
         }
         InstanceOf(_) => {
             match pop_offset_vec(stack)? {
@@ -1038,16 +1073,14 @@ fn interpret_instruction(
     Ok(())
 }
 
-fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
-    frame: &mut Frame<RefType, (RefType, Offset)>,
-    class_graph: &ClassGraph,
-    this_method_return_type: &Option<FieldType>,
+fn interpret_branch_instruction<'g, Lbl, LblWide, LblNext>(
+    frame: &mut VerifierFrame<'g>,
+    this_method_return_type: &Option<FieldType<&'g ClassData<'g>>>,
     insn: &BranchInstruction<Lbl, LblWide, LblNext>,
 ) -> Result<(), VerifierErrorKind> {
     use BranchInstruction::*;
     use VerificationType::*;
 
-    type VType = VerificationType<RefType, (RefType, Offset)>;
     let Frame {
         ref mut stack,
         locals: _,
@@ -1082,26 +1115,26 @@ fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
         }
         LReturn => {
             pop_offset_vec_expecting_type(stack, Long)?;
-            if *this_method_return_type != Some(FieldType::LONG) {
+            if *this_method_return_type != Some(FieldType::long()) {
                 return Err(VerifierErrorKind::InvalidType);
             }
         }
         FReturn => {
             pop_offset_vec_expecting_type(stack, Float)?;
-            if *this_method_return_type != Some(FieldType::FLOAT) {
+            if *this_method_return_type != Some(FieldType::float()) {
                 return Err(VerifierErrorKind::InvalidType);
             }
         }
         DReturn => {
             pop_offset_vec_expecting_type(stack, Double)?;
-            if *this_method_return_type != Some(FieldType::DOUBLE) {
+            if *this_method_return_type != Some(FieldType::double()) {
                 return Err(VerifierErrorKind::InvalidType);
             }
         }
         AReturn => {
             let atype = pop_offset_vec(stack)?;
             let is_compatible_return = if let Some(ret_type) = this_method_return_type {
-                VerificationType::is_assignable(class_graph, &atype, &VType::from(ret_type.clone()))
+                VerificationType::is_assignable(&atype, &VType::from(ret_type.clone()))
             } else {
                 false
             };
@@ -1116,10 +1149,14 @@ fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
         }
         AThrow => {
             let atype = pop_offset_vec(stack)?;
-            let is_exception =
-                VerificationType::is_assignable(class_graph, &atype, &Object(RefType::THROWABLE));
-            if !is_exception {
-                return Err(VerifierErrorKind::InvalidType);
+            match atype {
+                VType::Null => (),
+                VType::Object(RefType::Object(exception_type))
+                    if ClassGraph::is_throwable(exception_type) =>
+                {
+                    ()
+                }
+                _ => return Err(VerifierErrorKind::InvalidType),
             }
             stack.clear();
             stack.push(atype);
@@ -1149,33 +1186,33 @@ fn replace_all<C: Eq, U: Eq>(
     std::mem::swap(offset_vec, &mut replaced);
 }
 
-fn get_local<C, U>(
-    locals: &OffsetVec<VerificationType<C, U>>,
+fn get_local<'g>(
+    locals: &OffsetVec<VType<'g>>,
     offset: u16,
-) -> Result<&VerificationType<C, U>, VerifierErrorKind> {
+) -> Result<VType<'g>, VerifierErrorKind> {
     locals
         .get_offset(Offset(offset as usize))
         .ok()
         .ok_or(VerifierErrorKind::InvalidIndex)
+        .copied()
 }
 
-fn get_local_expecting_type<C: Eq, U: Eq>(
-    locals: &OffsetVec<VerificationType<C, U>>,
+fn get_local_expecting_type<'g>(
+    locals: &OffsetVec<VType<'g>>,
     offset: u16,
-    expected_type: VerificationType<C, U>,
+    expected_type: VType<'g>,
 ) -> Result<(), VerifierErrorKind> {
-    let typ = get_local(locals, offset)?;
-    if *typ == expected_type {
+    if get_local(locals, offset)? == expected_type {
         Ok(())
     } else {
         Err(VerifierErrorKind::InvalidType)
     }
 }
 
-fn update_local_type<C, U>(
-    locals: &mut OffsetVec<VerificationType<C, U>>,
+fn update_local_type<'g>(
+    locals: &mut OffsetVec<VType<'g>>,
     offset: u16,
-    new_type: VerificationType<C, U>,
+    new_type: VType<'g>,
 ) -> Result<(), VerifierErrorKind> {
     locals
         .set_offset(Offset(offset as usize), new_type)
@@ -1184,19 +1221,17 @@ fn update_local_type<C, U>(
         .map(|_| ())
 }
 
-fn pop_offset_vec<C, U>(
-    stack: &mut OffsetVec<VerificationType<C, U>>,
-) -> Result<VerificationType<C, U>, VerifierErrorKind> {
+fn pop_offset_vec<'g>(stack: &mut OffsetVec<VType<'g>>) -> Result<VType<'g>, VerifierErrorKind> {
     stack
         .pop()
         .map(|(_, _, typ)| typ)
         .ok_or(VerifierErrorKind::EmptyStack)
 }
 
-fn pop_offset_vec_expecting_width<C, U>(
-    stack: &mut OffsetVec<VerificationType<C, U>>,
+fn pop_offset_vec_expecting_width<'g>(
+    stack: &mut OffsetVec<VType<'g>>,
     expected_width: usize,
-) -> Result<VerificationType<C, U>, VerifierErrorKind> {
+) -> Result<VType<'g>, VerifierErrorKind> {
     let typ = stack
         .pop()
         .map(|(_, _, typ)| typ)
@@ -1209,9 +1244,9 @@ fn pop_offset_vec_expecting_width<C, U>(
     }
 }
 
-fn pop_offset_vec_expecting_type<C: Eq, U: Eq>(
-    stack: &mut OffsetVec<VerificationType<C, U>>,
-    expected_type: VerificationType<C, U>,
+fn pop_offset_vec_expecting_type<'g>(
+    stack: &mut OffsetVec<VType<'g>>,
+    expected_type: VType<'g>,
 ) -> Result<(), VerifierErrorKind> {
     let typ = stack
         .pop()

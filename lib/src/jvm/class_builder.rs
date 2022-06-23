@@ -12,9 +12,6 @@ pub struct ClassBuilder<'g> {
     /// Class access flags
     access_flags: ClassAccessFlags,
 
-    /// Class name
-    this_class: BinaryName,
-
     /// Class name constant
     this_class_index: ClassConstantIndex,
 
@@ -34,10 +31,16 @@ pub struct ClassBuilder<'g> {
     attributes: FrozenVec<Box<Attribute>>,
 
     /// Class graph
-    class_graph: &'g ClassGraph,
+    pub class_graph: &'g ClassGraph<'g>,
+
+    /// Java
+    pub java: &'g JavaLibrary<'g>,
 
     /// Reference to class data in the class graph
-    class_data: &'g ClassData,
+    pub class: &'g ClassData<'g>,
+
+    /// Bootstrap methods
+    pub bootstrap_methods: FrozenVec<Box<BootstrapMethodData<'g>>>,
 }
 
 impl<'g> ClassBuilder<'g> {
@@ -45,27 +48,28 @@ impl<'g> ClassBuilder<'g> {
     pub fn new(
         access_flags: ClassAccessFlags,
         this_class: BinaryName,
-        super_class: BinaryName,
+        super_class: &'g ClassData<'g>,
         is_interface: bool,
-        interfaces: Vec<BinaryName>,
-        class_graph: &'g ClassGraph,
+        interfaces: Vec<&'g ClassData<'g>>,
+        class_graph: &'g ClassGraph<'g>,
+        java: &'g JavaLibrary<'g>,
     ) -> Result<ClassBuilder<'g>, Error> {
-        let mut class_data = ClassData::new(super_class.clone(), is_interface);
-        class_data.add_interfaces(interfaces.iter().cloned());
-
         // Make sure this class is in the class graph
-        let class_data = class_graph.add_class(this_class.clone(), class_data);
+        let class = class_graph.add_class(ClassData::new(this_class, super_class, is_interface));
+        for interface in &interfaces {
+            class.interfaces.push(interface);
+        }
 
         // Construct a fresh constant pool
         let constants_pool = ConstantsPool::new();
-        let this_class_utf8 = constants_pool.get_utf8(this_class.as_str())?;
-        let super_class_utf8 = constants_pool.get_utf8(super_class.as_str())?;
+        let this_class_utf8 = constants_pool.get_utf8(class.name.as_str())?;
+        let super_class_utf8 = constants_pool.get_utf8(super_class.name.as_str())?;
         let this_class_index = constants_pool.get_class(this_class_utf8)?;
         let super_class_index = constants_pool.get_class(super_class_utf8)?;
         let interfaces = interfaces
             .iter()
             .map(|interface| {
-                let interface_utf8 = constants_pool.get_utf8(interface.as_str())?;
+                let interface_utf8 = constants_pool.get_utf8(interface.name.as_str())?;
                 constants_pool.get_class(interface_utf8)
             })
             .collect::<Result<_, _>>()?;
@@ -74,7 +78,6 @@ impl<'g> ClassBuilder<'g> {
             version: Version::JAVA11,
             constants_pool,
             access_flags,
-            this_class,
             this_class_index,
             super_class_index,
             interfaces,
@@ -82,15 +85,41 @@ impl<'g> ClassBuilder<'g> {
             methods: FrozenVec::new(),
             attributes: FrozenVec::new(),
             class_graph,
-            class_data,
+            java,
+            class,
+            bootstrap_methods: FrozenVec::new(),
         })
     }
 
     /// Consume the builder and return the file class file
     ///
     /// Only call this if all associated builders have been released
-    pub fn result(self) -> ClassFile {
-        ClassFile {
+    pub fn result(self) -> Result<ClassFile, Error> {
+        let constants_pool = &self.constants_pool;
+        let bootstrap_methods: Vec<BootstrapMethod> = self
+            .bootstrap_methods
+            .iter()
+            .map(|bootstrap_method_data: &BootstrapMethodData<'g>| -> Result<BootstrapMethod, ConstantPoolOverflow> {
+                let bootstrap_method: ConstantIndex = bootstrap_method_data.method
+                    .constant_index(constants_pool)?
+                    .into();
+                let bootstrap_method: ConstantIndex = constants_pool.get_method_handle(
+                    HandleKind::InvokeStatic,
+                    bootstrap_method,
+                )?;
+
+                let bootstrap_arguments: Vec<ConstantIndex> = bootstrap_method_data
+                    .arguments
+                    .iter()
+                    .map(|constant| constant.constant_index(constants_pool))
+                    .collect::<Result<Vec<_>, ConstantPoolOverflow>>()?;
+
+                Ok(BootstrapMethod { bootstrap_method, bootstrap_arguments })
+            })
+            .collect::<Result<Vec<_>, ConstantPoolOverflow>>()?;
+        self.add_attribute(BootstrapMethods(bootstrap_methods))?;
+
+        Ok(ClassFile {
             version: self.version,
             constants: self.constants_pool.into_offset_vec(),
             access_flags: self.access_flags,
@@ -100,7 +129,7 @@ impl<'g> ClassBuilder<'g> {
             fields: self.fields.into_vec().into_iter().map(|x| *x).collect(),
             methods: self.methods.into_vec().into_iter().map(|x| *x).collect(),
             attributes: self.attributes.into_vec().into_iter().map(|x| *x).collect(),
-        }
+        })
     }
 
     /// Add an attribute to the class
@@ -115,8 +144,8 @@ impl<'g> ClassBuilder<'g> {
         &self,
         access_flags: FieldAccessFlags,
         name: UnqualifiedName,
-        descriptor: String,
-    ) -> Result<(), Error> {
+        descriptor: FieldType<&'g ClassData<'g>>,
+    ) -> Result<&'g FieldData<'g>, Error> {
         self.add_field_with_signature(access_flags, name, descriptor, None)
     }
 
@@ -125,12 +154,11 @@ impl<'g> ClassBuilder<'g> {
         &self,
         access_flags: FieldAccessFlags,
         name: UnqualifiedName,
-        descriptor: String,
+        descriptor: FieldType<&'g ClassData<'g>>,
         signature: Option<String>,
-    ) -> Result<(), Error> {
+    ) -> Result<&'g FieldData<'g>, Error> {
         let name_index = self.constants_pool.get_utf8(name.as_str())?;
-        let descriptor_index = self.constants_pool.get_utf8(&descriptor)?;
-        let descriptor = FieldType::parse(&descriptor).map_err(Error::IoError)?;
+        let descriptor_index = self.constants_pool.get_utf8(&descriptor.render())?;
         let mut attributes: Vec<Attribute> = vec![];
 
         // Add the optional generic `Signature` attribute
@@ -147,13 +175,14 @@ impl<'g> ClassBuilder<'g> {
             attributes,
         }));
 
-        self.class_data.add_field(
-            access_flags.contains(FieldAccessFlags::STATIC),
+        let field = self.class_graph.add_field(FieldData {
+            class: self.class,
             name,
             descriptor,
-        );
+            is_static: access_flags.contains(FieldAccessFlags::STATIC),
+        });
 
-        Ok(())
+        Ok(field)
     }
 
     /// Add a method to the class
@@ -161,12 +190,11 @@ impl<'g> ClassBuilder<'g> {
         &self,
         access_flags: MethodAccessFlags,
         name: UnqualifiedName,
-        descriptor: String,
+        descriptor: MethodDescriptor<&'g ClassData<'g>>,
         code: Option<Code>,
     ) -> Result<(), Error> {
         let name_index = self.constants_pool.get_utf8(name.as_str())?;
-        let descriptor_index = self.constants_pool.get_utf8(&descriptor)?;
-        let descriptor = MethodDescriptor::parse(&descriptor).map_err(Error::IoError)?;
+        let descriptor_index = self.constants_pool.get_utf8(&descriptor.render())?;
         let mut attributes = vec![];
 
         if let Some(code) = code {
@@ -180,58 +208,59 @@ impl<'g> ClassBuilder<'g> {
             attributes,
         }));
 
-        self.class_data.add_method(
-            access_flags.contains(MethodAccessFlags::STATIC),
+        self.class_graph.add_method(MethodData {
+            class: self.class,
             name,
             descriptor,
-        );
+            is_static: access_flags.contains(MethodAccessFlags::STATIC),
+        });
 
         Ok(())
     }
 
-    pub fn start_method(
-        &self,
+    pub fn start_method<'a>(
+        &'a self,
         access_flags: MethodAccessFlags,
         name: UnqualifiedName,
-        descriptor: MethodDescriptor,
-    ) -> Result<MethodBuilder, Error> {
+        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+    ) -> Result<MethodBuilder<'a, 'g>, Error> {
         let is_static = access_flags.contains(MethodAccessFlags::STATIC);
-        let rendered_descriptor = descriptor.render();
-        self.class_data.add_method(is_static, name.clone(), descriptor.clone());
-
-        let code = BytecodeBuilder::new(
+        let method = self.class_graph.add_method(MethodData {
+            class: self.class,
+            name,
             descriptor,
-            !is_static,
-            &name == &UnqualifiedName::INIT,
+            is_static,
+        });
+        self.implement_method(access_flags, method)
+    }
+
+    /// Start implementing a new method (that is already recorded in the class graph)
+    pub fn implement_method<'a>(
+        &'a self,
+        access_flags: MethodAccessFlags,
+        method: &'g MethodData<'g>,
+    ) -> Result<MethodBuilder<'a, 'g>, Error> {
+        let code = BytecodeBuilder::new(
             self.class_graph,
+            self.java,
             &self.constants_pool,
-            RefType::Object(self.this_class.clone()),
+            &self.bootstrap_methods,
+            method,
         );
 
         Ok(MethodBuilder {
-            name,
             access_flags,
-            descriptor: rendered_descriptor,
             code,
             methods: &self.methods,
             constants_pool: &self.constants_pool,
+            method,
         })
-    }
-
-    pub fn class_name(&self) -> &BinaryName {
-        &self.this_class
     }
 }
 
 pub struct MethodBuilder<'a, 'g> {
-    /// This method name
-    name: UnqualifiedName,
-
     /// Access flags
     access_flags: MethodAccessFlags,
-
-    /// This method descriptor
-    descriptor: String,
 
     /// Code builder
     pub code: BytecodeBuilder<'a, 'g>,
@@ -241,12 +270,17 @@ pub struct MethodBuilder<'a, 'g> {
 
     /// Constants pool
     constants_pool: &'a ConstantsPool,
+
+    /// The current method
+    pub method: &'g MethodData<'g>,
 }
 
 impl<'a, 'g> MethodBuilder<'a, 'g> {
     pub fn finish(self) -> Result<(), Error> {
-        let name_index = self.constants_pool.get_utf8(self.name.as_str())?;
-        let descriptor_index = self.constants_pool.get_utf8(&self.descriptor)?;
+        let name_index = self.constants_pool.get_utf8(self.method.name.as_str())?;
+        let descriptor_index = self
+            .constants_pool
+            .get_utf8(&self.method.descriptor.render())?;
 
         let code = self.code.result()?;
         let code = self.constants_pool.get_attribute(code)?;
@@ -268,66 +302,45 @@ fn sample_class() -> Result<(), Error> {
     use BranchInstruction::*;
     use Instruction::*;
 
-    let class_graph = ClassGraph::new();
-    class_graph.insert_lang_types();
+    let class_graph_arenas = ClassGraphArenas::new();
+    let class_graph = ClassGraph::new(&class_graph_arenas);
+    let java = class_graph.insert_java_library_types();
 
     let class_builder = ClassBuilder::new(
         ClassAccessFlags::PUBLIC,
         BinaryName::from_string(String::from("me/alec/Point")).unwrap(),
-        BinaryName::from_string(String::from("java/lang/Object")).unwrap(),
+        java.classes.lang.object,
         false,
         vec![],
         &class_graph,
+        &java,
     )?;
 
-    class_builder.add_field(
+    let field_x = class_builder.add_field(
         FieldAccessFlags::PUBLIC,
         UnqualifiedName::from_string(String::from("x")).unwrap(),
-        String::from("I"),
+        FieldType::int(),
     )?;
-    class_builder.add_field(
+    let field_y = class_builder.add_field(
         FieldAccessFlags::PUBLIC,
         UnqualifiedName::from_string(String::from("y")).unwrap(),
-        String::from("I"),
+        FieldType::int(),
     )?;
 
     let mut method_builder = class_builder.start_method(
         MethodAccessFlags::PUBLIC,
         UnqualifiedName::INIT,
         MethodDescriptor {
-            parameters: vec![FieldType::INT, FieldType::INT],
+            parameters: vec![FieldType::int(), FieldType::int()],
             return_type: None,
         },
     )?;
     let code = &mut method_builder.code;
 
-    let object_name = code.constants().get_utf8("java/lang/Object")?;
-    let object_cls = code.constants().get_class(object_name)?;
-    let init_name = code.constants().get_utf8("<init>")?;
-    let type_name = code.constants().get_utf8("()V")?;
-    let name_and_type = code.constants().get_name_and_type(init_name, type_name)?;
-    let init_ref = code
-        .constants()
-        .get_method_ref(object_cls, name_and_type, false)?;
-
-    let this_name = code.constants().get_utf8("me/alec/Point")?;
-    let this_cls = code.constants().get_class(this_name)?;
-    let field_name_x = code.constants().get_utf8("x")?;
-    let field_name_y = code.constants().get_utf8("y")?;
-    let field_typ = code.constants().get_utf8("I")?;
-    let x_name_and_type = code
-        .constants()
-        .get_name_and_type(field_name_x, field_typ)?;
-    let y_name_and_type = code
-        .constants()
-        .get_name_and_type(field_name_y, field_typ)?;
-    let field_x = code.constants().get_field_ref(this_cls, x_name_and_type)?;
-    let field_y = code.constants().get_field_ref(this_cls, y_name_and_type)?;
-
     let end = code.fresh_label();
 
     code.push_instruction(ALoad(0))?;
-    code.push_instruction(Invoke(InvokeType::Special, init_ref))?;
+    code.push_instruction(Invoke(InvokeType::Special, java.members.lang.object.init))?;
     code.push_instruction(ALoad(0))?;
     code.push_instruction(ILoad(1))?;
     code.push_instruction(PutField(field_x))?;
@@ -343,7 +356,7 @@ fn sample_class() -> Result<(), Error> {
 
     method_builder.finish()?;
 
-    let class_file = class_builder.result();
+    let class_file = class_builder.result()?;
 
     let mut f: Vec<u8> = vec![];
     class_file.serialize(&mut f).map_err(Error::IoError)?;

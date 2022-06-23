@@ -1,6 +1,6 @@
 use super::{
-    Attribute, AttributeLike, ConstantsReader, Descriptor, Error, FieldType, MethodDescriptor,
-    Offset, OffsetResult, OffsetVec, RefType, Serialize, VerifierErrorKind, Width,
+    Attribute, AttributeLike, ConstantPoolOverflow, Error, Offset, OffsetResult, OffsetVec,
+    Serialize, Width,
 };
 use byteorder::WriteBytesExt;
 use elsa::map::FrozenMap;
@@ -61,7 +61,7 @@ impl ConstantsPool {
     ///
     /// Note: the largest valid index is 65536, indexing starts at 1, and some constants take two
     /// spaces.
-    fn push_constant(&self, constant: Constant) -> Result<ConstantIndex, Error> {
+    fn push_constant(&self, constant: Constant) -> Result<ConstantIndex, ConstantPoolOverflow> {
         // Compute the offset at which this constant will be inserted
         let offset: u16 = match self.constants.last() {
             None => 1, // constant pool starts at 1, not 0
@@ -70,7 +70,7 @@ impl ConstantsPool {
 
         // Detect if the next constant would overflow the pool
         if offset.checked_add(constant.width() as u16).is_none() {
-            return Err(Error::ConstantPoolOverflow { constant, offset });
+            return Err(ConstantPoolOverflow { constant, offset });
         }
 
         self.constants.push(Box::new((offset, constant)));
@@ -97,7 +97,10 @@ impl ConstantsPool {
     }
 
     /// Get or insert a class constant from the constant pool
-    pub fn get_class(&self, name: Utf8ConstantIndex) -> Result<ClassConstantIndex, Error> {
+    pub fn get_class(
+        &self,
+        name: Utf8ConstantIndex,
+    ) -> Result<ClassConstantIndex, ConstantPoolOverflow> {
         if let Some(idx) = self.classes.get(&name) {
             Ok(*idx)
         } else {
@@ -109,7 +112,7 @@ impl ConstantsPool {
     }
 
     /// Get or insert an integer constant from the constant pool
-    pub fn get_integer(&self, integer: i32) -> Result<ConstantIndex, Error> {
+    pub fn get_integer(&self, integer: i32) -> Result<ConstantIndex, ConstantPoolOverflow> {
         if let Some(idx) = self.integers.get(&integer) {
             Ok(*idx)
         } else {
@@ -120,7 +123,7 @@ impl ConstantsPool {
     }
 
     /// Get or insert a long constant from the constant pool
-    pub fn get_long(&self, long: i64) -> Result<ConstantIndex, Error> {
+    pub fn get_long(&self, long: i64) -> Result<ConstantIndex, ConstantPoolOverflow> {
         if let Some(idx) = self.longs.get(&long) {
             Ok(*idx)
         } else {
@@ -131,7 +134,7 @@ impl ConstantsPool {
     }
 
     /// Get or insert a float constant from the constant pool
-    pub fn get_float(&self, float: f32) -> Result<ConstantIndex, Error> {
+    pub fn get_float(&self, float: f32) -> Result<ConstantIndex, ConstantPoolOverflow> {
         let float_bytes = float.to_ne_bytes();
         if let Some(idx) = self.floats.get(&float_bytes) {
             Ok(*idx)
@@ -143,7 +146,7 @@ impl ConstantsPool {
     }
 
     /// Get or insert a double constant from the constant pool
-    pub fn get_double(&self, double: f64) -> Result<ConstantIndex, Error> {
+    pub fn get_double(&self, double: f64) -> Result<ConstantIndex, ConstantPoolOverflow> {
         let double_bytes = double.to_ne_bytes();
         if let Some(idx) = self.doubles.get(&double_bytes) {
             Ok(*idx)
@@ -155,7 +158,10 @@ impl ConstantsPool {
     }
 
     /// Get or insert a utf8 constant from the constant pool
-    pub fn get_utf8<'a, S: Into<Cow<'a, str>>>(&self, utf8: S) -> Result<Utf8ConstantIndex, Error> {
+    pub fn get_utf8<'a, S: Into<Cow<'a, str>>>(
+        &self,
+        utf8: S,
+    ) -> Result<Utf8ConstantIndex, ConstantPoolOverflow> {
         let cow = utf8.into();
 
         if let Some(idx) = self.utf8s.get::<str>(cow.borrow()) {
@@ -170,7 +176,10 @@ impl ConstantsPool {
     }
 
     /// Get or insert a string constant from the constant pool
-    pub fn get_string(&self, utf8: Utf8ConstantIndex) -> Result<StringConstantIndex, Error> {
+    pub fn get_string(
+        &self,
+        utf8: Utf8ConstantIndex,
+    ) -> Result<StringConstantIndex, ConstantPoolOverflow> {
         if let Some(idx) = self.strings.get(&utf8) {
             Ok(*idx)
         } else {
@@ -186,7 +195,7 @@ impl ConstantsPool {
         &self,
         name: Utf8ConstantIndex,
         descriptor: Utf8ConstantIndex,
-    ) -> Result<NameAndTypeConstantIndex, Error> {
+    ) -> Result<NameAndTypeConstantIndex, ConstantPoolOverflow> {
         let name_and_type_key = (name, descriptor);
         if let Some(idx) = self.name_and_types.get(&name_and_type_key) {
             Ok(*idx)
@@ -203,7 +212,7 @@ impl ConstantsPool {
         &self,
         class_: ClassConstantIndex,
         name_and_type: NameAndTypeConstantIndex,
-    ) -> Result<FieldRefConstantIndex, Error> {
+    ) -> Result<FieldRefConstantIndex, ConstantPoolOverflow> {
         let field_key = (class_, name_and_type);
         if let Some(idx) = self.fieldrefs.get(&field_key) {
             Ok(*idx)
@@ -221,7 +230,7 @@ impl ConstantsPool {
         class: ClassConstantIndex,
         name_and_type: NameAndTypeConstantIndex,
         is_interface: bool,
-    ) -> Result<MethodRefConstantIndex, Error> {
+    ) -> Result<MethodRefConstantIndex, ConstantPoolOverflow> {
         let method_key = (class, name_and_type, is_interface);
         if let Some(idx) = self.methodrefs.get(&method_key) {
             Ok(*idx)
@@ -242,7 +251,7 @@ impl ConstantsPool {
         &self,
         handle_kind: HandleKind,
         member: ConstantIndex,
-    ) -> Result<ConstantIndex, Error> {
+    ) -> Result<ConstantIndex, ConstantPoolOverflow> {
         let handle_key = (handle_kind, member);
         if let Some(idx) = self.method_handles.get(&handle_key) {
             Ok(*idx)
@@ -258,7 +267,10 @@ impl ConstantsPool {
     }
 
     /// Get or insert a method type constant from the constant pool
-    pub fn get_method_type(&self, descriptor: Utf8ConstantIndex) -> Result<ConstantIndex, Error> {
+    pub fn get_method_type(
+        &self,
+        descriptor: Utf8ConstantIndex,
+    ) -> Result<ConstantIndex, ConstantPoolOverflow> {
         if let Some(idx) = self.method_types.get(&descriptor) {
             Ok(*idx)
         } else {
@@ -274,7 +286,7 @@ impl ConstantsPool {
         &self,
         bootstrap_method: u16,
         method_descriptor: NameAndTypeConstantIndex,
-    ) -> Result<InvokeDynamicConstantIndex, Error> {
+    ) -> Result<InvokeDynamicConstantIndex, ConstantPoolOverflow> {
         let indy_key = (bootstrap_method, method_descriptor);
         if let Some(idx) = self.invoke_dynamics.get(&indy_key) {
             Ok(*idx)
@@ -290,138 +302,13 @@ impl ConstantsPool {
     }
 
     /// Add an attribute to the constant pool
-    pub fn get_attribute<A: AttributeLike>(&self, attribute: A) -> Result<Attribute, Error> {
+    pub fn get_attribute<'g, A: AttributeLike>(&self, attribute: A) -> Result<Attribute, Error> {
         let name_index = self.get_utf8(A::NAME)?;
         let mut info = vec![];
 
         attribute.serialize(&mut info).map_err(Error::IoError)?;
 
         Ok(Attribute { name_index, info })
-    }
-
-    fn lookup_utf8(&self, utf8_index: Utf8ConstantIndex) -> Result<&str, VerifierErrorKind> {
-        match self.get(utf8_index.into()).ok() {
-            Some(Constant::Utf8(desc)) => Ok(&desc),
-            Some(other) => Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => Err(VerifierErrorKind::MissingConstant(utf8_index.into())),
-        }
-    }
-}
-
-impl ConstantsReader for ConstantsPool {
-    fn lookup_constant_type(&self, index: ConstantIndex) -> Result<FieldType, VerifierErrorKind> {
-        match self.get(index).ok() {
-            Some(Constant::Class(_)) => Ok(FieldType::Ref(RefType::CLASS)),
-            Some(Constant::String(_)) => Ok(FieldType::Ref(RefType::STRING)),
-            Some(Constant::Integer(_)) => Ok(FieldType::INT),
-            Some(Constant::Float(_)) => Ok(FieldType::FLOAT),
-            Some(Constant::Long(_)) => Ok(FieldType::LONG),
-            Some(Constant::Double(_)) => Ok(FieldType::DOUBLE),
-            Some(Constant::MethodHandle { .. }) => Ok(FieldType::Ref(RefType::METHODHANDLE)),
-            Some(Constant::MethodType { .. }) => Ok(FieldType::Ref(RefType::METHODTYPE)),
-            Some(other) => Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => Err(VerifierErrorKind::MissingConstant(index)),
-        }
-    }
-
-    fn lookup_class_reftype(
-        &self,
-        cls_index: ClassConstantIndex,
-    ) -> Result<RefType, VerifierErrorKind> {
-        let utf8_index = match self.get(cls_index.into()).ok() {
-            Some(Constant::Class(utf8_index)) => *utf8_index,
-            Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => return Err(VerifierErrorKind::MissingConstant(cls_index.into())),
-        };
-
-        let desc = self.lookup_utf8(utf8_index)?;
-        let ref_type = RefType::parse_class_info(desc)
-            .map_err(|_| VerifierErrorKind::BadDescriptor(desc.to_string()))?;
-        Ok(ref_type)
-    }
-
-    fn lookup_field(
-        &self,
-        field_index: FieldRefConstantIndex,
-    ) -> Result<(RefType, FieldType), VerifierErrorKind> {
-        let (class_index, name_and_type_index) = match self.get(field_index.into()).ok() {
-            Some(Constant::FieldRef(class_, name_and_type)) => (*class_, *name_and_type),
-            Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => return Err(VerifierErrorKind::MissingConstant(field_index.into())),
-        };
-
-        let utf8_index = match self.get(name_and_type_index.into()).ok() {
-            Some(Constant::NameAndType { descriptor, .. }) => *descriptor,
-            Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => {
-                return Err(VerifierErrorKind::MissingConstant(
-                    name_and_type_index.into(),
-                ))
-            }
-        };
-
-        let desc = self.lookup_utf8(utf8_index)?;
-
-        let class_reftype = self.lookup_class_reftype(class_index)?;
-        let field_type = FieldType::parse(&desc)
-            .map_err(|_| VerifierErrorKind::BadDescriptor(desc.to_string()))?;
-
-        Ok((class_reftype, field_type))
-    }
-
-    fn lookup_method(
-        &self,
-        method_index: MethodRefConstantIndex,
-    ) -> Result<(ClassConstantIndex, bool, bool, MethodDescriptor), VerifierErrorKind> {
-        let (class, name_and_type, is_interface) = match self.get(method_index.into()).ok() {
-            Some(Constant::MethodRef {
-                class,
-                name_and_type,
-                is_interface,
-            }) => (*class, *name_and_type, *is_interface),
-            Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => return Err(VerifierErrorKind::MissingConstant(method_index.into())),
-        };
-
-        let (name_utf8, descriptor_utf8) = match self.get(name_and_type.into()).ok() {
-            Some(Constant::NameAndType { name, descriptor }) => (*name, *descriptor),
-            Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => return Err(VerifierErrorKind::MissingConstant(name_and_type.into())),
-        };
-
-        let desc = self.lookup_utf8(descriptor_utf8)?;
-        let is_init = self.lookup_utf8(name_utf8)? == "<init>";
-
-        let method_descriptor = MethodDescriptor::parse(&desc)
-            .map_err(|_| VerifierErrorKind::BadDescriptor(desc.to_string()))?;
-
-        Ok((class, is_interface, is_init, method_descriptor))
-    }
-
-    fn lookup_invoke_dynamic(
-        &self,
-        invoke_dynamic: InvokeDynamicConstantIndex,
-    ) -> Result<MethodDescriptor, VerifierErrorKind> {
-        let name_and_type = match self.get(invoke_dynamic.into()).ok() {
-            Some(Constant::InvokeDynamic {
-                method_descriptor, ..
-            }) => *method_descriptor,
-            Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => return Err(VerifierErrorKind::MissingConstant(invoke_dynamic.into())),
-        };
-
-        let descriptor_utf8 = match self.get(name_and_type.into()).ok() {
-            Some(Constant::NameAndType { descriptor, .. }) => *descriptor,
-            Some(other) => return Err(VerifierErrorKind::NotLoadableConstant(other.clone())),
-            None => return Err(VerifierErrorKind::MissingConstant(name_and_type.into())),
-        };
-
-        let desc = self.lookup_utf8(descriptor_utf8)?;
-
-        let method_descriptor = MethodDescriptor::parse(&desc)
-            .map_err(|_| VerifierErrorKind::BadDescriptor(desc.to_string()))?;
-
-        Ok(method_descriptor)
     }
 }
 

@@ -1,12 +1,13 @@
 use super::{
-    AccessMode, BootstrapUtilities, CodeBuilderExts, Element, Error, FunctionTranslator, Global,
-    MemberOrigin, Memory, Settings, Table, UtilitiesStrategy, UtilityClass,
+    AccessMode, BootstrapUtilities, CodeBuilderExts, Element, Error, Function, FunctionTranslator,
+    Global, MemberOrigin, Memory, Settings, Table, UtilitiesStrategy, UtilityClass,
 };
+use crate::jvm;
 use crate::jvm::{
-    BinaryName, BootstrapMethods, BranchInstruction, ClassAccessFlags, ClassBuilder, ClassFile,
-    ClassGraph, CodeBuilder, ConstantIndex, Descriptor, FieldAccessFlags, FieldType, HandleKind,
-    InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType, MethodAccessFlags,
-    MethodDescriptor, Name, NestHost, NestMembers, RefType, UnqualifiedName, Width,
+    BinaryName, BranchInstruction, BytecodeBuilder, ClassAccessFlags, ClassBuilder, ClassFile,
+    ClassGraph, ConstantData, FieldAccessFlags, FieldType, InnerClass, InnerClassAccessFlags,
+    InnerClasses, Instruction, JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name,
+    NestHost, NestMembers, RefType, UnqualifiedName, Width,
 };
 use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourcesExt};
 use std::iter;
@@ -18,14 +19,14 @@ use wasmparser::{
     TableSectionReader, TypeRef, Validator,
 };
 
+/// Main entry point for translating a WASM module
 pub struct ModuleTranslator<'a, 'g> {
     settings: Settings,
     validator: Validator,
-    #[allow(dead_code)]
-    class_graph: &'g ClassGraph,
     class: ClassBuilder<'g>,
     previous_parts: Vec<ClassBuilder<'g>>,
     fields_generated: bool,
+    class_graph: &'g ClassGraph<'g>,
 
     current_part: CurrentPart<'g>,
 
@@ -35,14 +36,17 @@ pub struct ModuleTranslator<'a, 'g> {
     /// Populated when we visit exports
     exports: Vec<Export<'a>>,
 
+    /// Populated when we visit functions
+    functions: Vec<Function<'g>>,
+
     /// Populated when we visit tables
-    tables: Vec<Table>,
+    tables: Vec<Table<'g>>,
 
     /// Populated when we visit memories
-    memories: Vec<Memory>,
+    memories: Vec<Memory<'g>>,
 
     /// Populated when we visit globals
-    globals: Vec<Global<'a>>,
+    globals: Vec<Global<'a, 'g>>,
 
     /// Populated when we visit elements
     elements: Vec<Element<'a>>,
@@ -56,41 +60,45 @@ pub struct ModuleTranslator<'a, 'g> {
 
 struct CurrentPart<'g> {
     class: ClassBuilder<'g>,
-    bootstrap: BootstrapUtilities,
+    bootstrap: BootstrapUtilities<'g>,
 }
 impl<'g> CurrentPart<'g> {
     fn result(self) -> Result<ClassBuilder<'g>, Error> {
-        self.class
-            .add_attribute(BootstrapMethods::from(self.bootstrap))?;
         Ok(self.class)
     }
 }
 
 impl<'a, 'g> ModuleTranslator<'a, 'g> {
-    pub fn new(settings: Settings, class_graph: &'g ClassGraph) -> Result<Self, Error> {
+    pub fn new(
+        settings: Settings,
+        class_graph: &'g ClassGraph<'g>,
+        java: &'g JavaLibrary<'g>,
+    ) -> Result<Self, Error> {
         let validator = Validator::new_with_features(settings.wasm_features);
 
         let class = ClassBuilder::new(
             ClassAccessFlags::PUBLIC | ClassAccessFlags::SUPER,
             settings.output_full_class_name.clone(),
-            BinaryName::OBJECT,
+            java.classes.lang.object,
             false,
             vec![],
-            class_graph.clone(),
+            class_graph,
+            java,
         )?;
-        let current_part = Self::new_part(&settings, class_graph, 0)?;
-        let utilities = UtilityClass::new(&settings, class_graph)?;
+        let current_part = Self::new_part(&settings, class_graph, java, 0)?;
+        let utilities = UtilityClass::new(&settings, class_graph, java)?;
 
         Ok(ModuleTranslator {
             settings,
             validator,
-            class_graph,
             class,
             previous_parts: vec![],
             fields_generated: false,
+            class_graph,
             current_part,
             utilities,
             exports: vec![],
+            functions: vec![],
             tables: vec![],
             memories: vec![],
             globals: vec![],
@@ -116,7 +124,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     /// Construct a new inner class part
     fn new_part(
         settings: &Settings,
-        class_graph: &'g ClassGraph,
+        class_graph: &'g ClassGraph<'g>,
+        java: &'g JavaLibrary<'g>,
         part_idx: usize,
     ) -> Result<CurrentPart<'g>, Error> {
         let name = settings
@@ -128,10 +137,11 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 .output_full_class_name
                 .concat(&UnqualifiedName::DOLLAR)
                 .concat(&name),
-            BinaryName::OBJECT,
+            java.classes.lang.object,
             false,
             vec![],
-            class_graph.clone(),
+            class_graph,
+            java,
         )?;
 
         // Add the `NestHost` and `InnerClasses` attributes
@@ -139,7 +149,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             let constants = &class.constants_pool;
             let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
-            let inner_class_name = constants.get_utf8(class.class_name().as_str())?;
+            let inner_class_name = constants.get_utf8(class.class.name.as_str())?;
             let inner_class = constants.get_class(inner_class_name)?;
             let inner_name = constants.get_utf8(name.as_str())?;
             let inner_class_attr = InnerClass {
@@ -155,7 +165,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
         Ok(CurrentPart {
             class,
-            bootstrap: BootstrapUtilities::default(),
+            bootstrap: BootstrapUtilities::new(),
         })
     }
 
@@ -235,10 +245,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             .function_idx_type(self.current_func_idx)?;
 
         // Build up a method descriptor, which includes a trailing "WASM module" argument
-        let mut method_descriptor = typ.method_descriptor();
-        method_descriptor.parameters.push(FieldType::object(
-            self.settings.output_full_class_name.clone(),
-        ));
+        let mut method_descriptor = typ.method_descriptor(&self.class.java.classes);
+        method_descriptor
+            .parameters
+            .push(FieldType::object(self.class.class));
 
         let mut method_builder = self.current_part.class.start_method(
             MethodAccessFlags::STATIC,
@@ -247,6 +257,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 .concat(&UnqualifiedName::number(self.current_func_idx as usize)),
             method_descriptor,
         )?;
+        self.functions.push(Function {
+            func_type: typ.clone(),
+            method: method_builder.method,
+        });
 
         let mut function_translator = FunctionTranslator::new(
             typ,
@@ -254,6 +268,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             &mut self.utilities,
             &mut self.current_part.bootstrap,
             &mut method_builder.code,
+            self.class.class,
             &self.tables,
             &self.memories,
             &self.globals,
@@ -283,6 +298,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             let global = Global {
                 origin,
                 field_name,
+                field: None,
                 global_type: StackType::from_general(ty.content_type)?,
                 mutable: ty.mutable,
                 initial: Some(init_expr),
@@ -294,7 +310,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
     /// Generate the fields associated with globals
     fn generate_global_fields(&mut self) -> Result<(), Error> {
-        for global in &self.globals {
+        for global in &mut self.globals {
             if !global.origin.is_internal() {
                 todo!("exported/imported global")
             }
@@ -308,11 +324,12 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             // TODO: this only works for Java 11+. For other Java versions, private fields from
             // outer classes are not visible - getters/setters must be generated (private functions
             // _are_ visible)
-            self.class.add_field(
+            let field = self.class.add_field(
                 FieldAccessFlags::PRIVATE | mutable_flag,
                 global.field_name.clone(),
-                global.global_type.field_type().render(),
+                global.global_type.field_type(&self.class.java.classes),
             )?;
+            global.field = Some(field);
         }
 
         Ok(())
@@ -339,6 +356,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             TypeRef::Table(table_type) => self.tables.push(Table {
                 origin,
                 field_name: name,
+                field: None,
                 table_type: TableType::from_general(table_type.element_type)?,
                 initial: table_type.initial,
                 maximum: table_type.maximum,
@@ -348,6 +366,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 self.globals.push(Global {
                     origin,
                     field_name: name,
+                    field: None,
                     global_type: StackType::from_general(global_type.content_type)?,
                     mutable: global_type.mutable,
                     initial: None,
@@ -378,6 +397,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             self.tables.push(Table {
                 origin,
                 field_name,
+                field: None,
                 table_type: TableType::from_general(table.element_type)?,
                 initial: table.initial,
                 maximum: table.maximum,
@@ -388,17 +408,18 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
     /// Generate the fields associated with tables
     fn generate_table_fields(&mut self) -> Result<(), Error> {
-        for table in &self.tables {
+        for table in &mut self.tables {
             if !table.origin.is_internal() {
                 todo!("exported/imported table")
             }
 
             // TODO: if the limits on the table constrain it to never grow, make the field final
-            self.class.add_field(
+            let field = self.class.add_field(
                 FieldAccessFlags::PRIVATE,
                 table.field_name.clone(),
-                RefType::array(table.table_type.field_type()).render(),
+                FieldType::array(table.table_type.field_type(&self.class.java.classes)),
             )?;
+            table.field = Some(field);
         }
 
         Ok(())
@@ -417,9 +438,11 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 .settings
                 .wasm_memory_name_prefix
                 .concat(&UnqualifiedName::number(self.memories.len()));
+
             self.memories.push(Memory {
                 origin,
                 field_name,
+                field: None,
                 memory_type: memory,
             });
         }
@@ -429,7 +452,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
     /// Generate the fields associated with memories
     fn generate_memory_fields(&mut self) -> Result<(), Error> {
-        for memory in &self.memories {
+        for memory in &mut self.memories {
             if !memory.origin.is_internal() {
                 todo!("exported/imported memories")
             } else if memory.memory_type.shared {
@@ -438,11 +461,12 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 todo!("64-bit memory")
             } else {
                 // TODO: if the limits on the memory constrain it to never grow, make the field final
-                self.class.add_field(
+                let field = self.class.add_field(
                     FieldAccessFlags::PRIVATE,
                     memory.field_name.clone(),
-                    RefType::Object(BinaryName::BYTEBUFFER).render(),
+                    FieldType::object(self.class.java.classes.nio.byte_buffer),
                 )?;
+                memory.field = Some(field);
             }
         }
 
@@ -504,14 +528,15 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             match export.kind {
                 ExternalKind::Func => {
                     // Exported function
-                    let export_descriptor =
-                        types.function_idx_type(export.index)?.method_descriptor();
+                    let export_descriptor = types
+                        .function_idx_type(export.index)?
+                        .method_descriptor(&self.class.java.classes);
 
                     // Implementation function
                     let mut underlying_descriptor = export_descriptor.clone();
-                    underlying_descriptor.parameters.push(FieldType::object(
-                        self.settings.output_full_class_name.clone(),
-                    ));
+                    underlying_descriptor
+                        .parameters
+                        .push(FieldType::object(self.class.class));
 
                     let name: String = self.settings.renamer.rename_function(export.name);
                     let mut method_builder = self.class.start_method(
@@ -526,21 +551,22 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                         method_builder.code.get_local(offset, parameter)?;
                         offset += parameter.width() as u16;
                     }
-                    method_builder.code.get_local(
-                        0,
-                        &FieldType::object(self.settings.output_full_class_name.clone()),
-                    )?;
+                    method_builder
+                        .code
+                        .get_local(0, &FieldType::object(self.class.class))?;
 
                     // Call the implementation
-                    method_builder.code.invoke_explicit(
-                        InvokeType::Static,
-                        self.current_part.class.class_name(),
-                        &self
-                            .settings
-                            .wasm_function_name_prefix
-                            .concat(&UnqualifiedName::number(export.index as usize)),
-                        &underlying_descriptor,
-                    )?;
+                    let method_name = self
+                        .settings
+                        .wasm_function_name_prefix
+                        .concat(&UnqualifiedName::number(export.index as usize));
+                    let method = self.class_graph.add_method(MethodData {
+                        class: self.current_part.class.class,
+                        name: method_name,
+                        descriptor: underlying_descriptor,
+                        is_static: true,
+                    });
+                    method_builder.code.invoke(method)?;
                     method_builder.code.return_(export_descriptor.return_type)?;
 
                     method_builder.finish()?;
@@ -581,7 +607,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     }
 
     /// Generate a constructor
-    pub fn generate_constructor(&mut self, types: &Types) -> Result<(), Error> {
+    pub fn generate_constructor(&mut self) -> Result<(), Error> {
         let mut method_builder = self.class.start_method(
             MethodAccessFlags::PUBLIC,
             UnqualifiedName::INIT,
@@ -593,7 +619,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         let jvm_code = &mut method_builder.code;
 
         jvm_code.push_instruction(Instruction::ALoad(0))?;
-        jvm_code.invoke(&BinaryName::OBJECT, &UnqualifiedName::INIT)?;
+        jvm_code.invoke(jvm_code.java.members.lang.object.init)?;
 
         // Initial table arrays
         for table in &self.tables {
@@ -601,12 +627,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 if !table.origin.exported {
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
                     jvm_code.const_int(table.initial as i32)?; // TODO: error if `u32` is too big
-                    jvm_code.new_ref_array(&table.table_type.ref_type())?;
-                    jvm_code.access_field(
-                        &self.settings.output_full_class_name,
-                        &table.field_name,
-                        AccessMode::Write,
-                    )?;
+                    jvm_code.new_ref_array(table.table_type.ref_type(&jvm_code.java.classes))?;
+                    jvm_code.access_field(table.field.unwrap(), AccessMode::Write)?;
                 } else {
                     todo!()
                 }
@@ -622,18 +644,13 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     let initial: u64 = memory.memory_type.initial * 65536;
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
                     jvm_code.const_int(initial as i32)?; // TODO: error if too big
-                    jvm_code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::ALLOCATE)?; // TODO: add option for allocate direct
+                    jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.allocate)?; // TODO: add option for allocate direct
                     jvm_code.access_field(
-                        &BinaryName::BYTEORDER,
-                        &UnqualifiedName::LITTLEENDIAN,
+                        jvm_code.java.members.nio.byte_order.little_endian,
                         AccessMode::Read,
                     )?;
-                    jvm_code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::ORDER)?;
-                    jvm_code.access_field(
-                        &self.settings.output_full_class_name,
-                        &memory.field_name,
-                        AccessMode::Write,
-                    )?;
+                    jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.order)?;
+                    jvm_code.access_field(memory.field.unwrap(), AccessMode::Write)?;
                 }
             }
         }
@@ -644,12 +661,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 if !global.origin.exported {
                     if let Some(init_expr) = &global.initial {
                         jvm_code.push_instruction(Instruction::ALoad(0))?;
-                        self.translate_init_expr(types, jvm_code, init_expr)?;
-                        jvm_code.access_field(
-                            &self.settings.output_full_class_name,
-                            &global.field_name,
-                            AccessMode::Write,
-                        )?;
+                        self.translate_init_expr(jvm_code, init_expr)?;
+                        jvm_code.access_field(global.field.unwrap(), AccessMode::Write)?;
                     }
                 } else {
                     todo!()
@@ -668,28 +681,23 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 if !table.origin.exported {
                     // Load onto the stack the table array
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.access_field(
-                        &self.settings.output_full_class_name,
-                        &table.field_name,
-                        AccessMode::Read,
-                    )?;
+                    jvm_code.access_field(table.field.unwrap(), AccessMode::Read)?;
 
                     // Store the starting offset in a local variable
-                    self.translate_init_expr(types, jvm_code, &init_expr)?;
+                    self.translate_init_expr(jvm_code, &init_expr)?;
                     jvm_code.push_instruction(Instruction::IStore(1))?;
 
                     for item in &element.items {
                         jvm_code.push_instruction(Instruction::Dup)?;
                         jvm_code.push_instruction(Instruction::ILoad(1))?;
                         match item {
-                            ElementItem::Func(func_idx) => Self::translate_ref_func(
-                                &self.settings,
-                                types,
-                                *func_idx,
-                                jvm_code,
-                            )?,
+                            ElementItem::Func(func_idx) => {
+                                let method = self.functions[*func_idx as usize].method;
+                                let method_handle = ConstantData::MethodHandle(method);
+                                jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
+                            }
                             ElementItem::Expr(elem_expr) => {
-                                self.translate_init_expr(types, jvm_code, &elem_expr)?
+                                self.translate_init_expr(jvm_code, &elem_expr)?
                             }
                         }
                         jvm_code.push_instruction(Instruction::AAStore)?;
@@ -716,32 +724,20 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 if memory.origin.is_internal() {
                     // Load onto the stack the memory bytebuffer
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.access_field(
-                        &self.settings.output_full_class_name,
-                        &memory.field_name,
-                        AccessMode::Read,
-                    )?;
+                    jvm_code.access_field(memory.field.unwrap(), AccessMode::Read)?;
 
                     // Set the starting offset for the buffer
                     jvm_code.push_instruction(Instruction::Dup)?;
-                    self.translate_init_expr(types, jvm_code, &init_expr)?;
-                    jvm_code.invoke(&BinaryName::BUFFER, &UnqualifiedName::POSITION)?;
+                    self.translate_init_expr(jvm_code, &init_expr)?;
+                    jvm_code.invoke(jvm_code.java.members.nio.buffer.position)?;
                     jvm_code.push_instruction(Instruction::Pop)?;
 
                     for chunk in data.data.chunks(u16::MAX as usize) {
                         jvm_code
                             .const_string(chunk.iter().map(|&c| c as char).collect::<String>())?;
                         jvm_code.const_string("ISO-8859-1")?;
-                        jvm_code.invoke(&BinaryName::STRING, &UnqualifiedName::GETBYTES)?;
-                        jvm_code.invoke_explicit(
-                            InvokeType::Virtual,
-                            &BinaryName::BYTEBUFFER,
-                            &UnqualifiedName::PUT,
-                            &MethodDescriptor {
-                                parameters: vec![FieldType::array(FieldType::BYTE)],
-                                return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
-                            },
-                        )?;
+                        jvm_code.invoke(jvm_code.java.members.lang.string.get_bytes)?;
+                        jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.put_bytearray)?;
                     }
 
                     // Kill the local variable, drop the bytebuffer
@@ -755,27 +751,18 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         // Exports object
         // TODO: make unmodifiable
         jvm_code.push_instruction(Instruction::ALoad(0))?;
-        self.class.add_field_with_signature(
+        let exports_field = self.class.add_field_with_signature(
             FieldAccessFlags::PUBLIC | FieldAccessFlags::FINAL,
             UnqualifiedName::EXPORTS,
-            FieldType::Ref(RefType::MAP).render(),
+            FieldType::object(jvm_code.java.classes.util.map),
             Some(String::from(
                 "Ljava/util/Map<Ljava/lang/String;Ljava/lang/Object;>;",
             )),
         )?;
-        let this_cls = jvm_code.get_class_idx(&RefType::Object(self.class.class_name().clone()))?;
-        let exports_field = {
-            let constants = &self.class.constants_pool;
-            let name_index = constants.get_utf8(UnqualifiedName::EXPORTS.as_str())?;
-            let descriptor_index = constants.get_utf8(&FieldType::Ref(RefType::MAP).render())?;
-            let name_and_type = constants.get_name_and_type(name_index, descriptor_index)?;
-            constants.get_field_ref(this_cls, name_and_type)?
-        };
 
-        let hashmap_cls = jvm_code.get_class_idx(&RefType::HASHMAP)?;
-        jvm_code.push_instruction(Instruction::New(hashmap_cls))?;
+        jvm_code.new(jvm_code.java.classes.util.hash_map)?;
         jvm_code.push_instruction(Instruction::Dup)?;
-        jvm_code.invoke(&BinaryName::HASHMAP, &UnqualifiedName::INIT)?;
+        jvm_code.invoke(jvm_code.java.members.util.hash_map.init)?;
 
         // Add exports to the exports map
         for export in &self.exports {
@@ -784,52 +771,31 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 ExternalKind::Func => {
                     jvm_code.const_string(export.name.to_string())?;
 
-                    // Exported function
-                    let export_descriptor =
-                        types.function_idx_type(export.index)?.method_descriptor();
-
                     // Implementation function
-                    let mut underlying_descriptor = export_descriptor.clone();
-                    underlying_descriptor.parameters.push(FieldType::object(
-                        self.settings.output_full_class_name.clone(),
-                    ));
-                    let underlying_method_name = &self
-                        .settings
-                        .wasm_function_name_prefix
-                        .concat(&UnqualifiedName::number(export.index as usize));
-
-                    // Push method handle on the stack
-                    let method_handle = {
-                        let constants = &self.class.constants_pool;
-                        let class_utf8 =
-                            constants.get_utf8(self.current_part.class.class_name().as_str())?;
-                        let class_index = constants.get_class(class_utf8)?;
-                        let name_index = constants.get_utf8(underlying_method_name.as_str())?;
-                        let descriptor_index =
-                            constants.get_utf8(underlying_descriptor.render())?;
-                        let name_and_type =
-                            constants.get_name_and_type(name_index, descriptor_index)?;
-                        let method_ref =
-                            constants.get_method_ref(class_index, name_and_type, false)?;
-                        constants.get_method_handle(HandleKind::InvokeStatic, method_ref.into())?
-                    };
+                    let method = self.functions[export.index as usize].method;
+                    let method_handle = ConstantData::MethodHandle(method);
 
                     // `MethodHandles.insertArguments(hdl, n - 1, new Object[1] { this })`
                     jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
-                    jvm_code.const_int((underlying_descriptor.parameters.len() - 1) as i32)?;
+                    jvm_code.const_int((method.descriptor.parameters.len() - 1) as i32)?;
                     jvm_code.const_int(1)?;
-                    jvm_code.new_ref_array(&RefType::OBJECT)?;
+                    jvm_code.new_ref_array(RefType::Object(jvm_code.java.classes.lang.object))?;
                     jvm_code.dup()?;
                     jvm_code.const_int(0)?;
                     jvm_code.push_instruction(Instruction::ALoad(0))?;
                     jvm_code.push_instruction(Instruction::AAStore)?;
                     jvm_code.invoke(
-                        &BinaryName::METHODHANDLES,
-                        &UnqualifiedName::INSERTARGUMENTS,
+                        jvm_code
+                            .java
+                            .members
+                            .lang
+                            .invoke
+                            .method_handles
+                            .insert_arguments,
                     )?;
 
                     // Put the value in the map
-                    jvm_code.invoke(&BinaryName::MAP, &UnqualifiedName::PUT)?;
+                    jvm_code.invoke(jvm_code.java.members.util.map.put)?;
                     jvm_code.pop()?;
                 }
 
@@ -846,10 +812,9 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     }
 
     /// Translate a constant expression
-    fn translate_init_expr<B: CodeBuilderExts>(
+    fn translate_init_expr(
         &self,
-        types: &Types,
-        jvm_code: &mut B,
+        jvm_code: &mut BytecodeBuilder<'a, 'g>,
         init_expr: &InitExpr,
     ) -> Result<(), Error> {
         for operator in init_expr.get_operators_reader().into_iter() {
@@ -863,11 +828,13 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     jvm_code.const_double(f64::from_bits(value.bits()))?
                 }
                 Operator::RefNull { ty } => {
-                    let ref_type = ref_type_from_general(ty)?;
+                    let ref_type = ref_type_from_general(ty, &jvm_code.java.classes)?;
                     jvm_code.const_null(ref_type)?;
                 }
                 Operator::RefFunc { function_index } => {
-                    Self::translate_ref_func(&self.settings, types, function_index, jvm_code)?
+                    let method = self.functions[function_index as usize].method;
+                    let method_handle = ConstantData::MethodHandle(method);
+                    jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
                 }
                 Operator::End => (),
                 other => todo!(
@@ -880,56 +847,13 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         Ok(())
     }
 
-    /// Load a method handle for the given function onto the top of the stack
-    ///
-    /// Note: the method handle will have an "adapted" signature, meaning there is always one final
-    /// argument that is the module itself.
-    fn translate_ref_func<B: CodeBuilderExts>(
-        settings: &Settings,
-        types: &Types,
-        function_index: u32,
-        jvm_code: &mut B,
-    ) -> Result<(), Error> {
-        let class_name = format!(
-            "{}${}0",
-            settings.output_full_class_name.as_str(),
-            settings.part_short_class_name.as_str(),
-        );
-        let method_name = format!(
-            "{}{}",
-            settings.wasm_function_name_prefix.as_str(),
-            function_index,
-        );
-        let mut method_type = types.function_idx_type(function_index)?.method_descriptor();
-        method_type
-            .parameters
-            .push(FieldType::object(settings.output_full_class_name.clone()));
-        let method_handle: ConstantIndex = {
-            let constants = jvm_code.constants();
-            let class_name_idx = constants.get_utf8(class_name)?;
-            let class_idx = constants.get_class(class_name_idx)?;
-            let name_idx = constants.get_utf8(method_name)?;
-            let type_idx = constants.get_utf8(method_type.render())?;
-            let name_and_type_idx = constants.get_name_and_type(name_idx, type_idx)?;
-            let method_ref = constants
-                .get_method_ref(class_idx, name_and_type_idx, false)?
-                .into();
-            constants
-                .get_method_handle(HandleKind::InvokeStatic, method_ref)?
-                .into()
-        };
-        jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
-
-        Ok(())
-    }
-
     /// Emit the final classes
     ///
     /// The first element in the output vector is the output class. The rest of the elements are
     /// the "part" inner classes.
     pub fn result(mut self, types: &Types) -> Result<Vec<(BinaryName, ClassFile)>, Error> {
         self.generate_exports(types)?;
-        self.generate_constructor(types)?;
+        self.generate_constructor()?;
 
         // Assemble all the parts
         let mut parts = self.previous_parts;
@@ -963,7 +887,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
             // Part inner classes
             for (part_idx, part) in parts.iter().enumerate() {
-                let inner_class_name = constants.get_utf8(part.class_name().as_str())?;
+                let inner_class_name = constants.get_utf8(part.class.name.as_str())?;
                 let inner_class = constants.get_class(inner_class_name)?;
                 let inner_name = constants.get_utf8(&format!(
                     "{}{}",
@@ -987,8 +911,11 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         let results: Vec<(BinaryName, ClassFile)> = iter::once(self.class)
             .chain(self.utilities.into_builder().into_iter())
             .chain(parts.into_iter())
-            .map(|builder| (builder.class_name().to_owned(), builder.result()))
-            .collect();
+            .map(|builder| {
+                let name = builder.class.name.clone();
+                builder.result().map(|cls| (name, cls))
+            })
+            .collect::<Result<Vec<_>, jvm::Error>>()?;
 
         Ok(results)
     }

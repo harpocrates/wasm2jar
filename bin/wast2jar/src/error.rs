@@ -15,19 +15,19 @@ pub enum TestError {
 }
 
 impl From<io::Error> for TestError {
-    fn from(err: io::Error) -> TestError {
+    fn from(err: io::Error) -> Self {
         TestError::Io(err)
     }
 }
 
 impl From<wast::Error> for TestError {
-    fn from(err: wast::Error) -> TestError {
+    fn from(err: wast::Error) -> Self {
         TestError::Wast(err)
     }
 }
 
 impl From<translate::Error> for TestError {
-    fn from(err: translate::Error) -> TestError {
+    fn from(err: translate::Error) -> Self {
         TestError::Translation(err)
     }
 }

@@ -1,4 +1,4 @@
-use crate::jvm::{FieldType, MethodDescriptor, RefType, Width};
+use crate::jvm::{ClassData, FieldType, JavaClasses, MethodDescriptor, RefType, Width};
 use wasmparser::{Type, WasmFuncType};
 
 /// Subset of WASM types that we know how to put on the WASM stack
@@ -14,14 +14,14 @@ pub enum StackType {
 
 impl StackType {
     /// Convert a stack type into the corresponding JVM type
-    pub const fn field_type(self) -> FieldType {
+    pub const fn field_type<'g>(self, java: &JavaClasses<'g>) -> FieldType<&'g ClassData<'g>> {
         match self {
-            StackType::I32 => FieldType::INT,
-            StackType::I64 => FieldType::LONG,
-            StackType::F32 => FieldType::FLOAT,
-            StackType::F64 => FieldType::DOUBLE,
-            StackType::FuncRef => FieldType::Ref(RefType::METHODHANDLE),
-            StackType::ExternRef => FieldType::Ref(RefType::OBJECT),
+            StackType::I32 => FieldType::int(),
+            StackType::I64 => FieldType::long(),
+            StackType::F32 => FieldType::float(),
+            StackType::F64 => FieldType::double(),
+            StackType::FuncRef => FieldType::object(java.lang.invoke.method_handle),
+            StackType::ExternRef => FieldType::object(java.lang.object),
         }
     }
 
@@ -40,10 +40,13 @@ impl StackType {
 }
 
 /// Mapping from general types into reference types
-pub const fn ref_type_from_general(wasm_type: Type) -> Result<RefType, BadType> {
+pub const fn ref_type_from_general<'g>(
+    wasm_type: Type,
+    java: &JavaClasses<'g>,
+) -> Result<RefType<&'g ClassData<'g>>, BadType> {
     Ok(match wasm_type {
-        Type::FuncRef => RefType::METHODHANDLE,
-        Type::ExternRef => RefType::OBJECT,
+        Type::FuncRef => RefType::Object(java.lang.invoke.method_handle),
+        Type::ExternRef => RefType::Object(java.lang.object),
         _ => return Err(BadType::UnsupportedReferenceType(wasm_type)),
     })
 }
@@ -58,7 +61,7 @@ impl Width for StackType {
 }
 
 /// WASM type of a function or block
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FunctionType {
     pub inputs: Vec<StackType>,
     pub outputs: Vec<StackType>,
@@ -81,13 +84,20 @@ impl FunctionType {
     }
 
     /// Into a method descriptor
-    pub fn method_descriptor(&self) -> MethodDescriptor {
+    pub fn method_descriptor<'g>(
+        &self,
+        java: &JavaClasses<'g>,
+    ) -> MethodDescriptor<&'g ClassData<'g>> {
         let return_type = match self.outputs.as_slice() {
             [] => None,
-            [output_ty] => Some(output_ty.field_type()),
-            _ => Some(FieldType::array(FieldType::OBJECT)),
+            [output_ty] => Some(output_ty.field_type(java)),
+            _ => Some(FieldType::array(FieldType::object(java.lang.object))),
         };
-        let parameters = self.inputs.iter().map(|input| input.field_type()).collect();
+        let parameters = self
+            .inputs
+            .iter()
+            .map(|input| input.field_type(java))
+            .collect();
         MethodDescriptor {
             parameters,
             return_type,
@@ -104,16 +114,16 @@ pub enum TableType {
 
 impl TableType {
     /// Convert a stack type into the corresponding JVM reference type
-    pub const fn ref_type(self) -> RefType {
+    pub const fn ref_type<'g>(self, java: &JavaClasses<'g>) -> RefType<&'g ClassData<'g>> {
         match self {
-            TableType::FuncRef => RefType::METHODHANDLE,
-            TableType::ExternRef => RefType::OBJECT,
+            TableType::FuncRef => RefType::Object(java.lang.invoke.method_handle),
+            TableType::ExternRef => RefType::Object(java.lang.object),
         }
     }
 
     /// Convert a stack type into the corresponding JVM type
-    pub const fn field_type(self) -> FieldType {
-        FieldType::Ref(self.ref_type())
+    pub const fn field_type<'g>(self, java: &JavaClasses<'g>) -> FieldType<&'g ClassData<'g>> {
+        FieldType::Ref(self.ref_type(java))
     }
 
     /// Mapping from general types into table types

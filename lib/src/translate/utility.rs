@@ -1,11 +1,12 @@
 use super::{AccessMode, CodeBuilderExts, Error, Memory, Settings, Table, UtilitiesStrategy};
 use crate::jvm::{
-    BaseType, BinaryName, BootstrapMethod, BootstrapMethods, BranchInstruction, ClassAccessFlags,
-    ClassBuilder, ClassGraph, CompareMode, ConstantIndex, ConstantsPool, Descriptor, FieldType,
-    HandleKind, InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, InvokeType,
-    MethodAccessFlags, MethodDescriptor, Name, OrdComparison, RefType, ShiftType, UnqualifiedName,
+    BaseType, BinaryName, BootstrapMethodData, BranchInstruction, BytecodeBuilder,
+    ClassAccessFlags, ClassBuilder, ClassData, ClassGraph, CompareMode, ConstantData, FieldType,
+    InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, JavaClasses, JavaLibrary,
+    MethodAccessFlags, MethodData, MethodDescriptor, Name, OrdComparison, RefType, ShiftType,
+    UnqualifiedName,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Potential utility methods.
 ///
@@ -173,179 +174,175 @@ impl UtilityMethod {
     }
 
     /// Get the method descriptor
-    pub fn descriptor(&self) -> MethodDescriptor {
+    pub fn descriptor<'g>(&self, java: &JavaClasses<'g>) -> MethodDescriptor<&'g ClassData<'g>> {
         match self {
             UtilityMethod::I32DivS => MethodDescriptor {
-                parameters: vec![FieldType::INT, FieldType::INT],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::int(), FieldType::int()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::I64DivS => MethodDescriptor {
-                parameters: vec![FieldType::LONG, FieldType::LONG],
-                return_type: Some(FieldType::LONG),
+                parameters: vec![FieldType::long(), FieldType::long()],
+                return_type: Some(FieldType::long()),
             },
             UtilityMethod::F32Abs => MethodDescriptor {
-                parameters: vec![FieldType::FLOAT],
-                return_type: Some(FieldType::FLOAT),
+                parameters: vec![FieldType::float()],
+                return_type: Some(FieldType::float()),
             },
             UtilityMethod::F64Abs => MethodDescriptor {
-                parameters: vec![FieldType::DOUBLE],
-                return_type: Some(FieldType::DOUBLE),
+                parameters: vec![FieldType::double()],
+                return_type: Some(FieldType::double()),
             },
             UtilityMethod::F32Trunc => MethodDescriptor {
-                parameters: vec![FieldType::FLOAT],
-                return_type: Some(FieldType::FLOAT),
+                parameters: vec![FieldType::float()],
+                return_type: Some(FieldType::float()),
             },
             UtilityMethod::F64Trunc => MethodDescriptor {
-                parameters: vec![FieldType::DOUBLE],
-                return_type: Some(FieldType::DOUBLE),
+                parameters: vec![FieldType::double()],
+                return_type: Some(FieldType::double()),
             },
             UtilityMethod::Unreachable => MethodDescriptor {
                 parameters: vec![],
-                return_type: Some(FieldType::Ref(RefType::ASSERTIONERROR)),
+                return_type: Some(FieldType::object(java.lang.assertion_error)),
             },
             UtilityMethod::I32TruncF32S => MethodDescriptor {
-                parameters: vec![FieldType::FLOAT],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::float()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::I32TruncF32U => MethodDescriptor {
-                parameters: vec![FieldType::FLOAT],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::float()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::I32TruncF64S => MethodDescriptor {
-                parameters: vec![FieldType::DOUBLE],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::double()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::I32TruncF64U => MethodDescriptor {
-                parameters: vec![FieldType::DOUBLE],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::double()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::I64ExtendI32U => MethodDescriptor {
-                parameters: vec![FieldType::INT],
-                return_type: Some(FieldType::LONG),
+                parameters: vec![FieldType::int()],
+                return_type: Some(FieldType::long()),
             },
             UtilityMethod::I64TruncF32S => MethodDescriptor {
-                parameters: vec![FieldType::FLOAT],
-                return_type: Some(FieldType::LONG),
+                parameters: vec![FieldType::float()],
+                return_type: Some(FieldType::long()),
             },
             UtilityMethod::I64TruncF32U => MethodDescriptor {
-                parameters: vec![FieldType::FLOAT],
-                return_type: Some(FieldType::LONG),
+                parameters: vec![FieldType::float()],
+                return_type: Some(FieldType::long()),
             },
             UtilityMethod::I64TruncF64S => MethodDescriptor {
-                parameters: vec![FieldType::DOUBLE],
-                return_type: Some(FieldType::LONG),
+                parameters: vec![FieldType::double()],
+                return_type: Some(FieldType::long()),
             },
             UtilityMethod::I64TruncF64U => MethodDescriptor {
-                parameters: vec![FieldType::DOUBLE],
-                return_type: Some(FieldType::LONG),
+                parameters: vec![FieldType::double()],
+                return_type: Some(FieldType::long()),
             },
             UtilityMethod::F32ConvertI32U => MethodDescriptor {
-                parameters: vec![FieldType::INT],
-                return_type: Some(FieldType::FLOAT),
+                parameters: vec![FieldType::int()],
+                return_type: Some(FieldType::float()),
             },
             UtilityMethod::F32ConvertI64U => MethodDescriptor {
-                parameters: vec![FieldType::LONG],
-                return_type: Some(FieldType::FLOAT),
+                parameters: vec![FieldType::long()],
+                return_type: Some(FieldType::float()),
             },
             UtilityMethod::F64ConvertI32U => MethodDescriptor {
-                parameters: vec![FieldType::INT],
-                return_type: Some(FieldType::DOUBLE),
+                parameters: vec![FieldType::int()],
+                return_type: Some(FieldType::double()),
             },
             UtilityMethod::F64ConvertI64U => MethodDescriptor {
-                parameters: vec![FieldType::LONG],
-                return_type: Some(FieldType::DOUBLE),
+                parameters: vec![FieldType::long()],
+                return_type: Some(FieldType::double()),
             },
             UtilityMethod::I32TruncSatF32U => MethodDescriptor {
-                parameters: vec![FieldType::FLOAT],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::float()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::I32TruncSatF64U => MethodDescriptor {
-                parameters: vec![FieldType::DOUBLE],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::double()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::I64TruncSatF32U => MethodDescriptor {
-                parameters: vec![FieldType::FLOAT],
-                return_type: Some(FieldType::LONG),
+                parameters: vec![FieldType::float()],
+                return_type: Some(FieldType::long()),
             },
             UtilityMethod::I64TruncSatF64U => MethodDescriptor {
-                parameters: vec![FieldType::DOUBLE],
-                return_type: Some(FieldType::LONG),
+                parameters: vec![FieldType::double()],
+                return_type: Some(FieldType::long()),
             },
             UtilityMethod::NextSize => MethodDescriptor {
-                parameters: vec![FieldType::INT, FieldType::INT, FieldType::LONG],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::int(), FieldType::int(), FieldType::long()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::CopyResizedArray => MethodDescriptor {
                 parameters: vec![
-                    FieldType::array(FieldType::OBJECT), // new bigger array
-                    FieldType::array(FieldType::OBJECT), // old array
-                    FieldType::OBJECT,                   // filler value for extra slots
+                    FieldType::array(FieldType::object(java.lang.object)), // new bigger array
+                    FieldType::array(FieldType::object(java.lang.object)), // old array
+                    FieldType::object(java.lang.object), // filler value for extra slots
                 ],
-                return_type: Some(FieldType::INT), // old size
+                return_type: Some(FieldType::int()), // old size
             },
             UtilityMethod::CopyResizedByteBuffer => MethodDescriptor {
                 parameters: vec![
-                    FieldType::object(BinaryName::BYTEBUFFER), // new bigger bytebuffer
-                    FieldType::object(BinaryName::BYTEBUFFER), // old bytebuffer
+                    FieldType::object(java.nio.byte_buffer), // new bigger bytebuffer
+                    FieldType::object(java.nio.byte_buffer), // old bytebuffer
                 ],
-                return_type: Some(FieldType::INT), // old size (in memory pages)
+                return_type: Some(FieldType::int()), // old size (in memory pages)
             },
             UtilityMethod::IntIsNegativeOne => MethodDescriptor {
-                parameters: vec![FieldType::INT],
-                return_type: Some(FieldType::BOOLEAN),
+                parameters: vec![FieldType::int()],
+                return_type: Some(FieldType::boolean()),
             },
             UtilityMethod::FillArrayRange => MethodDescriptor {
                 parameters: vec![
-                    FieldType::INT,    // start index (inclusive)
-                    FieldType::OBJECT, // filler value
-                    FieldType::INT,    // how many entries to fill
-                    FieldType::array(FieldType::OBJECT),
+                    FieldType::int(),                    // start index (inclusive)
+                    FieldType::object(java.lang.object), // filler value
+                    FieldType::int(),                    // how many entries to fill
+                    FieldType::array(FieldType::object(java.lang.object)),
                 ],
                 return_type: None,
             },
             UtilityMethod::FillByteBufferRange => MethodDescriptor {
                 parameters: vec![
-                    FieldType::INT, // start index (inclusive)
-                    FieldType::INT, // filler value (as byte)
-                    FieldType::INT, // how many entries to fill
-                    FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER)),
+                    FieldType::int(), // start index (inclusive)
+                    FieldType::int(), // filler value (as byte)
+                    FieldType::int(), // how many entries to fill
+                    FieldType::object(java.nio.byte_buffer),
                 ],
                 return_type: None,
             },
             UtilityMethod::BytesToMemoryPages => MethodDescriptor {
-                parameters: vec![FieldType::INT],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::int()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::MemoryPagesToBytes => MethodDescriptor {
-                parameters: vec![FieldType::INT],
-                return_type: Some(FieldType::INT),
+                parameters: vec![FieldType::int()],
+                return_type: Some(FieldType::int()),
             },
             UtilityMethod::BootstrapTable => MethodDescriptor {
                 parameters: vec![
-                    FieldType::Ref(RefType::Object(BinaryName::METHODHANDLES_LOOKUP)),
-                    FieldType::Ref(RefType::STRING),
-                    FieldType::Ref(RefType::METHODTYPE),
-                    FieldType::Ref(RefType::METHODHANDLE), // getter
-                    FieldType::Ref(RefType::METHODHANDLE), // setter
-                    FieldType::LONG,                       // maximum table size
+                    FieldType::object(java.lang.invoke.method_handles_lookup),
+                    FieldType::object(java.lang.string),
+                    FieldType::object(java.lang.invoke.method_type),
+                    FieldType::object(java.lang.invoke.method_handle), // getter
+                    FieldType::object(java.lang.invoke.method_handle), // setter
+                    FieldType::long(),                                 // maximum table size
                 ],
-                return_type: Some(FieldType::Ref(RefType::Object(
-                    BinaryName::CONSTANTCALLSITE,
-                ))),
+                return_type: Some(FieldType::object(java.lang.invoke.constant_call_site)),
             },
             UtilityMethod::BootstrapMemory => MethodDescriptor {
                 parameters: vec![
-                    FieldType::Ref(RefType::Object(BinaryName::METHODHANDLES_LOOKUP)),
-                    FieldType::Ref(RefType::STRING),
-                    FieldType::Ref(RefType::METHODTYPE),
-                    FieldType::Ref(RefType::METHODHANDLE), // getter
-                    FieldType::Ref(RefType::METHODHANDLE), // setter
-                    FieldType::LONG,                       // maximum memory size
-                                                           // FieldType::BOOLEAN,                    // is shared
+                    FieldType::object(java.lang.invoke.method_handles_lookup),
+                    FieldType::object(java.lang.string),
+                    FieldType::object(java.lang.invoke.method_type),
+                    FieldType::object(java.lang.invoke.method_handle), // getter
+                    FieldType::object(java.lang.invoke.method_handle), // setter
+                    FieldType::long(),                                 // maximum memory size
+                                                                       // FieldType::boolean(),                    // is shared
                 ],
-                return_type: Some(FieldType::Ref(RefType::Object(
-                    BinaryName::CONSTANTCALLSITE,
-                ))),
+                return_type: Some(FieldType::object(java.lang.invoke.constant_call_site)),
             },
         }
     }
@@ -364,7 +361,7 @@ enum UtilityClassInner<'g> {
         class: ClassBuilder<'g>,
 
         /// Set of the utility methods that have already been generated
-        methods: HashSet<UtilityMethod>,
+        methods: HashMap<UtilityMethod, &'g MethodData<'g>>,
     },
 }
 
@@ -373,7 +370,8 @@ pub struct UtilityClass<'g>(UtilityClassInner<'g>);
 impl<'g> UtilityClass<'g> {
     pub fn new(
         settings: &Settings,
-        class_graph: &'g ClassGraph,
+        class_graph: &'g ClassGraph<'g>,
+        java: &'g JavaLibrary<'g>,
     ) -> Result<UtilityClass<'g>, Error> {
         // TODO: generate_all
         let (inner_class_short_name, _generate_all) = match &settings.utilities_strategy {
@@ -395,10 +393,11 @@ impl<'g> UtilityClass<'g> {
         let class = ClassBuilder::new(
             ClassAccessFlags::SYNTHETIC,
             class_name,
-            BinaryName::OBJECT,
+            java.classes.lang.object,
             false,
             vec![],
             class_graph,
+            java,
         )?;
 
         // Add the `InnerClasses` attribute
@@ -406,7 +405,7 @@ impl<'g> UtilityClass<'g> {
             let constants = &class.constants_pool;
             let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
-            let inner_class_name = constants.get_utf8(class.class_name().as_str())?;
+            let inner_class_name = constants.get_utf8(class.class.name.as_str())?;
             let inner_class = constants.get_class(inner_class_name)?;
             let inner_name = constants.get_utf8(inner_class_short_name.as_str())?;
             let inner_class_attr = InnerClass {
@@ -421,7 +420,7 @@ impl<'g> UtilityClass<'g> {
 
         Ok(UtilityClass(UtilityClassInner::Internal {
             class,
-            methods: HashSet::new(),
+            methods: HashMap::new(),
         }))
     }
 
@@ -429,7 +428,7 @@ impl<'g> UtilityClass<'g> {
     pub fn class_name(&self) -> &BinaryName {
         match &self.0 {
             UtilityClassInner::External(name) => name,
-            UtilityClassInner::Internal { class, .. } => class.class_name(),
+            UtilityClassInner::Internal { class, .. } => &class.class.name,
         }
     }
 
@@ -442,31 +441,28 @@ impl<'g> UtilityClass<'g> {
     }
 
     /// Ensure the utility is defined, then call it on the specified code builder
-    pub fn invoke_utility<B: CodeBuilderExts>(
+    pub fn invoke_utility<'a>(
         &mut self,
         method: UtilityMethod,
-        code: &mut B,
+        code: &mut BytecodeBuilder<'a, 'g>,
     ) -> Result<(), Error> {
-        let _ = self.add_utility_method(method)?;
-        let class_name = self.class_name();
-        let method_name = method.name();
-        code.invoke_explicit(
-            InvokeType::Static,
-            class_name,
-            &method_name,
-            &method.descriptor(),
-        )?;
+        let method = self.get_utility_method(method, &code.java.classes)?;
+        code.invoke(method)?;
         Ok(())
     }
 
     /// Add a utility method and return if it was already there
-    pub fn add_utility_method(&mut self, method: UtilityMethod) -> Result<bool, Error> {
+    pub fn get_utility_method(
+        &mut self,
+        method: UtilityMethod,
+        java: &JavaClasses<'g>,
+    ) -> Result<&'g MethodData<'g>, Error> {
         // Nothing for external utility classes or if the method is already generated
         match &mut self.0 {
-            UtilityClassInner::External(_) => return Ok(false),
+            UtilityClassInner::External(_) => todo!(),
             UtilityClassInner::Internal { methods, .. } => {
-                if !methods.insert(method) {
-                    return Ok(false);
+                if let Some(method_data) = methods.get(&method) {
+                    return Ok(method_data);
                 }
             }
         }
@@ -474,25 +470,25 @@ impl<'g> UtilityClass<'g> {
         // Dependencies
         match method {
             UtilityMethod::BootstrapTable => {
-                self.add_utility_method(UtilityMethod::NextSize)?;
-                self.add_utility_method(UtilityMethod::CopyResizedArray)?;
-                self.add_utility_method(UtilityMethod::IntIsNegativeOne)?;
-                self.add_utility_method(UtilityMethod::FillArrayRange)?;
+                self.get_utility_method(UtilityMethod::NextSize, java)?;
+                self.get_utility_method(UtilityMethod::CopyResizedArray, java)?;
+                self.get_utility_method(UtilityMethod::IntIsNegativeOne, java)?;
+                self.get_utility_method(UtilityMethod::FillArrayRange, java)?;
             }
             UtilityMethod::BootstrapMemory => {
-                self.add_utility_method(UtilityMethod::NextSize)?;
-                self.add_utility_method(UtilityMethod::CopyResizedByteBuffer)?;
-                self.add_utility_method(UtilityMethod::IntIsNegativeOne)?;
-                self.add_utility_method(UtilityMethod::FillByteBufferRange)?;
-                self.add_utility_method(UtilityMethod::BytesToMemoryPages)?;
-                self.add_utility_method(UtilityMethod::MemoryPagesToBytes)?;
+                self.get_utility_method(UtilityMethod::NextSize, java)?;
+                self.get_utility_method(UtilityMethod::CopyResizedByteBuffer, java)?;
+                self.get_utility_method(UtilityMethod::IntIsNegativeOne, java)?;
+                self.get_utility_method(UtilityMethod::FillByteBufferRange, java)?;
+                self.get_utility_method(UtilityMethod::BytesToMemoryPages, java)?;
+                self.get_utility_method(UtilityMethod::MemoryPagesToBytes, java)?;
             }
             _ => (),
         }
 
-        let descriptor = method.descriptor();
-        let class: &mut ClassBuilder = match &mut self.0 {
-            UtilityClassInner::Internal { class, .. } => class,
+        let descriptor = method.descriptor(java);
+        let (methods, class): (_, &mut ClassBuilder) = match &mut self.0 {
+            UtilityClassInner::Internal { class, methods } => (methods, class),
             _ => unreachable!("external utility classes should be filtered earlier"),
         };
         let mut method_builder =
@@ -533,19 +529,37 @@ impl<'g> UtilityClass<'g> {
             UtilityMethod::BytesToMemoryPages => Self::generate_bytes_to_memory_pages(code)?,
             UtilityMethod::MemoryPagesToBytes => Self::generate_memory_pages_to_bytes(code)?,
 
-            UtilityMethod::BootstrapTable => {
-                Self::generate_bootstrap_table(code, &class.class_name())?
-            }
-            UtilityMethod::BootstrapMemory => {
-                Self::generate_bootstrap_memory(code, &class.class_name())?
-            }
+            UtilityMethod::BootstrapTable => Self::generate_bootstrap_table(
+                code,
+                methods[&UtilityMethod::NextSize],
+                methods[&UtilityMethod::CopyResizedArray],
+                methods[&UtilityMethod::IntIsNegativeOne],
+                methods[&UtilityMethod::FillArrayRange],
+            )?,
+            UtilityMethod::BootstrapMemory => Self::generate_bootstrap_memory(
+                code,
+                methods[&UtilityMethod::CopyResizedByteBuffer],
+                methods[&UtilityMethod::MemoryPagesToBytes],
+                methods[&UtilityMethod::BytesToMemoryPages],
+                methods[&UtilityMethod::IntIsNegativeOne],
+                methods[&UtilityMethod::NextSize],
+                methods[&UtilityMethod::FillByteBufferRange],
+            )?,
         }
 
+        let method_data = method_builder.method;
         method_builder.finish()?;
-        Ok(true)
+
+        match &mut self.0 {
+            UtilityClassInner::External(_) => todo!(),
+            UtilityClassInner::Internal { methods, .. } => {
+                methods.insert(method, method_data);
+            }
+        }
+        Ok(method_data)
     }
 
-    fn generate_i32_div_s<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i32_div_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let regular_div = code.fresh_label();
 
         // Check if second argument is -1...
@@ -559,22 +573,17 @@ impl<'g> UtilityClass<'g> {
 
         // Check if first argument is `Integer.MIN_VALUE`
         code.push_instruction(Instruction::ILoad(0))?;
-        code.access_field(
-            &BinaryName::INTEGER,
-            &UnqualifiedName::MINVALUE,
-            AccessMode::Read,
-        )?;
+        code.access_field(code.java.members.lang.integer.min_value, AccessMode::Read)?;
         code.push_branch_instruction(BranchInstruction::IfICmp(
             OrdComparison::NE,
             regular_div,
             (),
         ))?;
 
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("integer overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         // This is the usual path: where we aren't dividing `Integer.MIN_VALUE` by `-1`
@@ -587,7 +596,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_div_s<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i64_div_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let regular_div = code.fresh_label();
 
         // Check if second argument is -1...
@@ -599,19 +608,14 @@ impl<'g> UtilityClass<'g> {
 
         // Check if first argument is `Long.MIN_VALUE`
         code.push_instruction(Instruction::LLoad(0))?;
-        code.access_field(
-            &BinaryName::LONG,
-            &UnqualifiedName::MINVALUE,
-            AccessMode::Read,
-        )?;
+        code.access_field(code.java.members.lang.long.min_value, AccessMode::Read)?;
         code.push_instruction(Instruction::LCmp)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::NE, regular_div, ()))?;
 
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("integer overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         // This is the usual path: where we aren't dividing `Long.MIN_VALUE` by `-1`
@@ -624,29 +628,29 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f32_abs<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_f32_abs<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::FLoad(0))?;
-        code.invoke(&BinaryName::FLOAT, &UnqualifiedName::FLOATTORAWINTBITS)?;
+        code.invoke(code.java.members.lang.float.float_to_raw_int_bits)?;
         code.const_int(0x7FFF_FFFF)?;
         code.push_instruction(Instruction::IAnd)?;
-        code.invoke(&BinaryName::FLOAT, &UnqualifiedName::INTBITSTOFLOAT)?;
+        code.invoke(code.java.members.lang.float.int_bits_to_float)?;
         code.push_branch_instruction(BranchInstruction::FReturn)?;
 
         Ok(())
     }
 
-    fn generate_f64_abs<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_f64_abs<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::DLoad(0))?;
-        code.invoke(&BinaryName::DOUBLE, &UnqualifiedName::DOUBLETORAWLONGBITS)?;
+        code.invoke(code.java.members.lang.double.double_to_raw_long_bits)?;
         code.const_long(0x7FFF_FFFF_FFFF_FFFF)?;
         code.push_instruction(Instruction::LAnd)?;
-        code.invoke(&BinaryName::DOUBLE, &UnqualifiedName::LONGBITSTODOUBLE)?;
+        code.invoke(code.java.members.lang.double.long_bits_to_double)?;
         code.push_branch_instruction(BranchInstruction::DReturn)?;
 
         Ok(())
     }
 
-    fn generate_f32_trunc<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_f32_trunc<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let negative = code.fresh_label();
 
         code.push_instruction(Instruction::FLoad(0))?;
@@ -657,20 +661,20 @@ impl<'g> UtilityClass<'g> {
 
         // positive argument
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::LT, negative, ()))?;
-        code.invoke(&BinaryName::MATH, &UnqualifiedName::FLOOR)?;
+        code.invoke(code.java.members.lang.math.floor)?;
         code.push_instruction(Instruction::D2F)?;
         code.push_branch_instruction(BranchInstruction::FReturn)?;
 
         // negative argument
         code.place_label(negative)?;
-        code.invoke(&BinaryName::MATH, &UnqualifiedName::CEIL)?;
+        code.invoke(code.java.members.lang.math.ceil)?;
         code.push_instruction(Instruction::D2F)?;
         code.push_branch_instruction(BranchInstruction::FReturn)?;
 
         Ok(())
     }
 
-    fn generate_f64_trunc<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_f64_trunc<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let negative = code.fresh_label();
 
         code.push_instruction(Instruction::DLoad(0))?;
@@ -680,30 +684,29 @@ impl<'g> UtilityClass<'g> {
         // positive argument
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::LT, negative, ()))?;
         code.push_instruction(Instruction::DLoad(0))?;
-        code.invoke(&BinaryName::MATH, &UnqualifiedName::FLOOR)?;
+        code.invoke(code.java.members.lang.math.floor)?;
         code.push_branch_instruction(BranchInstruction::DReturn)?;
 
         // negative argument
         code.place_label(negative)?;
         code.push_instruction(Instruction::DLoad(0))?;
-        code.invoke(&BinaryName::MATH, &UnqualifiedName::CEIL)?;
+        code.invoke(code.java.members.lang.math.ceil)?;
         code.push_branch_instruction(BranchInstruction::DReturn)?;
 
         Ok(())
     }
 
-    fn generate_unreachable<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
-        let cls_idx = code.get_class_idx(&RefType::ASSERTIONERROR)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+    fn generate_unreachable<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+        code.new(code.java.classes.lang.assertion_error)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("unreachable")?;
-        code.invoke(&BinaryName::ASSERTIONERROR, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.assertion_error.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
-    fn generate_i32_trunc_f32_s<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i32_trunc_f32_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // Check if the argument is too small...
@@ -726,18 +729,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("float to int overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_i32_trunc_f32_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i32_trunc_f32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // temp variable
@@ -766,18 +768,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("float to unsigned int overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_i32_trunc_f64_s<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i32_trunc_f64_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // Check if the argument is too small...
@@ -800,18 +801,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("double to int overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_i32_trunc_f64_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i32_trunc_f64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // temp variable
@@ -840,18 +840,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::IReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("double to unsigned int overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_i64_trunc_f32_s<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i64_trunc_f32_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // Check if the argument is too small...
@@ -874,18 +873,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("float to long overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_i64_trunc_f32_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i64_trunc_f32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
         let is_first_bit_one = code.fresh_label();
 
@@ -930,18 +928,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("float to unsigned long overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_i64_trunc_f64_s<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i64_trunc_f64_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // Check if the argument is too small...
@@ -964,18 +961,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("double to long overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_i64_trunc_f64_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i64_trunc_f64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
         let is_first_bit_one = code.fresh_label();
 
@@ -1020,18 +1016,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::LReturn)?;
 
         // Error case
-        let cls_idx = code.get_class_idx(&RefType::ARITHMETICEXCEPTION)?;
         code.place_label(error_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.arithmetic_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("double to unsigned long overflow")?;
-        code.invoke(&BinaryName::ARITHMETICEXCEPTION, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.arithmetic_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_i64_extend_i32_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i64_extend_i32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::I2L)?;
         code.const_long(0x0000_0000_ffff_ffff)?;
@@ -1041,7 +1036,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f32_convert_i32_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_f32_convert_i32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::I2L)?;
         code.const_long(0x0000_0000_ffff_ffff)?;
@@ -1052,7 +1047,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f32_convert_i64_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_f32_convert_i64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let first_bit_one = code.fresh_label();
 
         code.push_instruction(Instruction::LLoad(0))?;
@@ -1082,7 +1077,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f64_convert_i32_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_f64_convert_i32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::I2L)?;
         code.const_long(0x0000_0000_ffff_ffff)?;
@@ -1093,7 +1088,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f64_convert_i64_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_f64_convert_i64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let first_bit_one = code.fresh_label();
 
         code.push_instruction(Instruction::LLoad(0))?;
@@ -1124,7 +1119,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i32_trunc_sat_f32_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i32_trunc_sat_f32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let is_positive = code.fresh_label();
         let is_too_big = code.fresh_label();
 
@@ -1162,7 +1157,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i32_trunc_sat_f64_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i32_trunc_sat_f64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let is_positive = code.fresh_label();
         let is_too_big = code.fresh_label();
 
@@ -1194,7 +1189,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_trunc_sat_f32_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i64_trunc_sat_f32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let is_positive = code.fresh_label();
         let is_first_bit_one = code.fresh_label();
 
@@ -1236,7 +1231,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_trunc_sat_f64_u<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_i64_trunc_sat_f64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let is_positive = code.fresh_label();
         let is_first_bit_one = code.fresh_label();
 
@@ -1290,7 +1285,7 @@ impl<'g> UtilityClass<'g> {
     ///   return (int) proposed;
     /// }
     /// ```
-    fn generate_next_size<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_next_size<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let curr_size_argument = 0;
         let grow_by_argument = 1;
         let max_size_argument = 2;
@@ -1339,7 +1334,7 @@ impl<'g> UtilityClass<'g> {
     ///   return oldTable.length;
     /// }
     /// ```
-    fn generate_copy_resized_array<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_copy_resized_array<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let new_table_argument = 0;
         let old_table_argument = 1;
         let filler_argument = 2;
@@ -1351,7 +1346,7 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(old_table_argument))?;
         code.push_instruction(Instruction::ArrayLength)?;
-        code.invoke(&BinaryName::SYSTEM, &UnqualifiedName::ARRAYCOPY)?;
+        code.invoke(code.java.members.lang.system.arraycopy)?;
 
         // Arrays.fill(newTable, oldTable.length, newTable.length, filler);
         code.push_instruction(Instruction::ALoad(new_table_argument))?;
@@ -1360,7 +1355,7 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::ALoad(new_table_argument))?;
         code.push_instruction(Instruction::ArrayLength)?;
         code.push_instruction(Instruction::ALoad(filler_argument))?;
-        code.invoke(&BinaryName::ARRAYS, &UnqualifiedName::FILL)?;
+        code.invoke(code.java.members.util.arrays.fill)?;
 
         // return oldTable.length;
         code.push_instruction(Instruction::ALoad(old_table_argument))?;
@@ -1381,32 +1376,26 @@ impl<'g> UtilityClass<'g> {
     ///   return oldMemory.capacity() / 65536;
     /// }
     /// ```
-    fn generate_copy_resized_bytebuffer<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_copy_resized_bytebuffer<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+    ) -> Result<(), Error> {
         let new_memory_argument = 0;
         let old_memory_argument = 1;
 
         // oldMemory.position(0);
         code.push_instruction(Instruction::ALoad(old_memory_argument))?;
         code.push_instruction(Instruction::IConst0)?;
-        code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::POSITION)?;
+        code.invoke(code.java.members.nio.byte_buffer.position)?;
         code.push_instruction(Instruction::Pop)?;
 
         // newMemory.put(oldMemory);
         code.push_instruction(Instruction::ALoad(new_memory_argument))?;
         code.push_instruction(Instruction::ALoad(old_memory_argument))?;
-        code.invoke_explicit(
-            InvokeType::Virtual,
-            &BinaryName::BYTEBUFFER,
-            &UnqualifiedName::PUT,
-            &MethodDescriptor {
-                parameters: vec![FieldType::object(BinaryName::BYTEBUFFER)],
-                return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
-            },
-        )?;
+        code.invoke(code.java.members.nio.byte_buffer.put_bytebuffer)?;
 
         // return oldMemory.capacity() / 65536;
         code.push_instruction(Instruction::ALoad(old_memory_argument))?;
-        code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::CAPACITY)?;
+        code.invoke(code.java.members.nio.byte_buffer.capacity)?;
         code.const_int(16)?;
         code.push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
         code.push_branch_instruction(BranchInstruction::IReturn)?;
@@ -1423,7 +1412,7 @@ impl<'g> UtilityClass<'g> {
     ///   return (i == -1) ? true : false;
     /// }
     /// ```
-    fn generate_int_is_negative_one<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_int_is_negative_one<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let not_equal = code.fresh_label();
 
         code.push_instruction(Instruction::ILoad(0))?;
@@ -1448,14 +1437,14 @@ impl<'g> UtilityClass<'g> {
     ///   java.util.Arrays.fill(arr, from, Math.addExact(from, numToFill), filler);
     /// }
     /// ```
-    fn generate_fill_array_range<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_fill_array_range<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ALoad(3))?;
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::ILoad(2))?;
-        code.invoke(&BinaryName::MATH, &UnqualifiedName::ADDEXACT)?;
+        code.invoke(code.java.members.lang.math.add_exact)?;
         code.push_instruction(Instruction::ALoad(1))?;
-        code.invoke(&BinaryName::ARRAYS, &UnqualifiedName::FILL)?;
+        code.invoke(code.java.members.util.arrays.fill)?;
         code.push_branch_instruction(BranchInstruction::Return)?;
 
         Ok(())
@@ -1478,7 +1467,7 @@ impl<'g> UtilityClass<'g> {
     ///   }
     /// }
     /// ```
-    fn generate_fill_bytebuffer_range<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_fill_bytebuffer_range<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let ok_case = code.fresh_label();
 
         // if (numToFill < 0) {
@@ -1486,21 +1475,17 @@ impl<'g> UtilityClass<'g> {
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::GE, ok_case, ()))?;
 
         // throw new IllegalArgumentException("memory.fill: negative number of bytes");
-        let cls_idx = code.get_class_idx(&RefType::Object(BinaryName::ILLEGALARGUMENTEXCEPTION))?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.illegal_argument_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("memory.fill: negative number of bytes")?;
-        code.invoke(
-            &BinaryName::ILLEGALARGUMENTEXCEPTION,
-            &UnqualifiedName::INIT,
-        )?;
+        code.invoke(code.java.members.lang.illegal_argument_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
         code.place_label(ok_case)?;
 
         // buf.position(from);
         code.push_instruction(Instruction::ALoad(3))?;
         code.push_instruction(Instruction::ILoad(0))?;
-        code.invoke(&BinaryName::BYTEBUFFER, &UnqualifiedName::POSITION)?;
+        code.invoke(code.java.members.nio.byte_buffer.position)?;
         code.push_instruction(Instruction::Pop)?;
 
         // byte fillerByte = (byte) filler;
@@ -1519,15 +1504,7 @@ impl<'g> UtilityClass<'g> {
         // buf.put(fillerByte);
         code.push_instruction(Instruction::ALoad(3))?;
         code.push_instruction(Instruction::ILoad(1))?;
-        code.invoke_explicit(
-            InvokeType::Virtual,
-            &BinaryName::BYTEBUFFER,
-            &UnqualifiedName::PUT,
-            &MethodDescriptor {
-                parameters: vec![FieldType::BYTE],
-                return_type: Some(FieldType::object(BinaryName::BYTEBUFFER)),
-            },
-        )?;
+        code.invoke(code.java.members.nio.byte_buffer.put_byte_relative)?;
         code.push_instruction(Instruction::Pop)?;
 
         // numToFill--;
@@ -1550,7 +1527,7 @@ impl<'g> UtilityClass<'g> {
     ///   return byteCount / 65536;
     /// }
     /// ```
-    fn generate_bytes_to_memory_pages<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_bytes_to_memory_pages<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.const_int(16)?;
         code.push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
@@ -1569,7 +1546,7 @@ impl<'g> UtilityClass<'g> {
     ///   return memoryPages * 65536;
     /// }
     /// ```
-    fn generate_memory_pages_to_bytes<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_memory_pages_to_bytes<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.const_int(16)?;
         code.push_instruction(Instruction::ISh(ShiftType::Left))?;
@@ -1580,9 +1557,12 @@ impl<'g> UtilityClass<'g> {
 
     /// Generate the bootstrap method used for table operators, including indirect calls. Here lie
     /// some dragons. The output is sensible, but the "how" is not obvious.
-    fn generate_bootstrap_table<B: CodeBuilderExts>(
-        code: &mut B,
-        utility_class_name: &BinaryName,
+    fn generate_bootstrap_table<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+        next_size: &'g MethodData<'g>,
+        copy_resized_array: &'g MethodData<'g>,
+        int_is_negative_one: &'g MethodData<'g>,
+        fill_array_range: &'g MethodData<'g>,
     ) -> Result<(), Error> {
         let call_indirect_case = code.fresh_label();
         let table_get_case = code.fresh_label();
@@ -1595,7 +1575,7 @@ impl<'g> UtilityClass<'g> {
         let bad_name_case = code.fresh_label();
 
         code.push_instruction(Instruction::ALoad(1))?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::HASHCODE)?;
+        code.invoke(code.java.members.lang.object.hash_code)?;
         code.push_branch_instruction(BranchInstruction::LookupSwitch {
             padding: 0,
             default: bad_name_case,
@@ -1619,7 +1599,7 @@ impl<'g> UtilityClass<'g> {
         code.place_label(call_indirect_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("call_indirect")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
         Self::generate_call_indirect_table_case(code)?;
 
@@ -1627,7 +1607,7 @@ impl<'g> UtilityClass<'g> {
         code.place_label(table_get_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("table_get")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
         Self::generate_get_table_case(code)?;
 
@@ -1635,7 +1615,7 @@ impl<'g> UtilityClass<'g> {
         code.place_label(table_set_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("table_set")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
         Self::generate_set_table_case(code)?;
 
@@ -1643,7 +1623,7 @@ impl<'g> UtilityClass<'g> {
         code.place_label(table_size_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("table_size")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
         Self::generate_size_table_case(code)?;
 
@@ -1651,23 +1631,23 @@ impl<'g> UtilityClass<'g> {
         code.place_label(table_grow_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("table_grow")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
-        Self::generate_grow_table_case(code, utility_class_name)?;
+        Self::generate_grow_table_case(code, copy_resized_array, int_is_negative_one, next_size)?;
 
         // table.fill
         code.place_label(table_fill_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("table_fill")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
-        Self::generate_fill_table_case(code, utility_class_name)?;
+        Self::generate_fill_table_case(code, fill_array_range)?;
 
         // table.copy
         code.place_label(table_copy_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("table_copy")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
         Self::generate_copy_table_case(code)?;
 
@@ -1675,20 +1655,16 @@ impl<'g> UtilityClass<'g> {
         code.place_label(table_init_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("table_init")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
         Self::generate_init_table_case(code)?;
 
         // Catch all case
-        let cls_idx = code.get_class_idx(&RefType::Object(BinaryName::ILLEGALARGUMENTEXCEPTION))?;
         code.place_label(bad_name_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.illegal_argument_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::ALoad(1))?;
-        code.invoke(
-            &BinaryName::ILLEGALARGUMENTEXCEPTION,
-            &UnqualifiedName::INIT,
-        )?;
+        code.invoke(code.java.members.lang.illegal_argument_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
@@ -1746,7 +1722,9 @@ impl<'g> UtilityClass<'g> {
     ///   return new ConstantCallSite(handle);
     /// }
     /// ```
-    fn generate_call_indirect_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_call_indirect_table_case<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+    ) -> Result<(), Error> {
         let type_argument = 2;
         let getter_argument = 3;
         let param_count_local = 7;
@@ -1755,7 +1733,7 @@ impl<'g> UtilityClass<'g> {
         // int paramCount = type.parameterCount();
         // int[] permutation = new int[paramCount + 1];
         code.push_instruction(Instruction::ALoad(type_argument))?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERCOUNT)?;
+        code.invoke(code.java.members.lang.invoke.method_type.parameter_count)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IStore(param_count_local))?;
         code.push_instruction(Instruction::IConst1)?;
@@ -1817,8 +1795,12 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::IConst1)?;
         code.push_instruction(Instruction::ISub)?;
         code.invoke(
-            &BinaryName::METHODTYPE,
-            &UnqualifiedName::DROPPARAMETERTYPES,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_type
+                .drop_parameter_types,
         )?;
 
         /* MethodHandle handle = MethodHandles.permuteArguments(
@@ -1836,50 +1818,66 @@ impl<'g> UtilityClass<'g> {
          * )
          * Stack after: [ .., methodhandle ]
          */
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::EXACTINVOKER)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.exact_invoker)?;
         code.push_instruction(Instruction::IConst0)?;
-        code.const_class(&FieldType::array(FieldType::Ref(RefType::METHODHANDLE)))?;
+        code.const_class(FieldType::array(FieldType::object(
+            code.java.classes.lang.invoke.method_handle,
+        )))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::ARRAYELEMENTGETTER,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .array_element_getter,
         )?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::ALoad(type_argument))?;
         code.push_instruction(Instruction::ALoad(permutation_local))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
 
         // return new ConstantCallSite(methodhandle);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
-    fn generate_get_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_get_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let type_argument = 2;
         let getter_argument = 3;
 
         // Class<?> tableType = getter.type().returnType();
         code.push_instruction(Instruction::ALoad(getter_argument))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
+        code.invoke(code.java.members.lang.invoke.method_type.return_type)?;
 
         /* MethodHandles.permuteArguments(                  // (ILMyWasmModule;)LTableElem;
          *   MethodHandles.collectArguments(                // (LMyWasmModule;I)LTableElem;
@@ -1892,14 +1890,22 @@ impl<'g> UtilityClass<'g> {
          * )
          */
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::ARRAYELEMENTGETTER,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .array_element_getter,
         )?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::ALoad(type_argument))?;
         code.push_instruction(Instruction::IConst2)?;
@@ -1909,30 +1915,32 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::IConst1)?;
         code.push_instruction(Instruction::IAStore)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
 
         // return new ConstantCallSite(methodhandle);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
-    fn generate_set_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_set_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let type_argument = 2;
         let getter_argument = 3;
 
         // Class<?> tableType = getter.type().returnType();
         code.push_instruction(Instruction::ALoad(getter_argument))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
+        code.invoke(code.java.members.lang.invoke.method_type.return_type)?;
 
         /* MethodHandles.permuteArguments(                  // (ILTableElem;LMyWasmModule;)V
          *   MethodHandles.collectArguments(                // (LMyWasmModule;ILTableElem;)V
@@ -1945,14 +1953,22 @@ impl<'g> UtilityClass<'g> {
          * )
          */
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::ARRAYELEMENTSETTER,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .array_element_setter,
         )?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::ALoad(type_argument))?;
         code.push_instruction(Instruction::IConst3)?;
@@ -1970,59 +1986,65 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::IConst1)?;
         code.push_instruction(Instruction::IAStore)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
 
         // return new ConstantCallSite(methodhandle);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
-    fn generate_size_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_size_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         let getter_argument = 3;
 
         // Class<?> tableType = getter.type().returnType();
         code.push_instruction(Instruction::ALoad(getter_argument))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
+        code.invoke(code.java.members.lang.invoke.method_type.return_type)?;
 
         /* MethodHandles.filterReturnValue(                 // (LMyWasmModule)I
          *   getter,                                        // (LMyWasmModule)[LTableElem;
          *   MethodHandles.arrayLength(tableType)           // ([LTableElem;)I
          * )
          */
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::ARRAYLENGTH)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.array_length)?;
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.push_instruction(Instruction::Swap)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::FILTERRETURNVALUE,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .filter_return_value,
         )?;
 
         // return new ConstantCallSite(methodhandle);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
     // TODO: avoid allocating a new table for `table.grow 0`
-    fn generate_grow_table_case<B: CodeBuilderExts>(
-        code: &mut B,
-        utility_class_name: &BinaryName,
+    fn generate_grow_table_case<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+        copy_resized_array: &'g MethodData<'g>,
+        int_is_negative_one: &'g MethodData<'g>,
+        next_size: &'g MethodData<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
@@ -2032,25 +2054,24 @@ impl<'g> UtilityClass<'g> {
         let table_elem_typ = 8; // Class<TableElem>
         let module_typ = 9; // Class<WasmModule>
         let create_and_update_new_table = 10; // MethodHandle
-        let cls_cls_idx = code.get_class_idx(&RefType::CLASS)?;
 
         // Class<?> tableType = getter.type().returnType();
         code.push_instruction(Instruction::ALoad(getter_argument))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
+        code.invoke(code.java.members.lang.invoke.method_type.return_type)?;
         code.push_instruction(Instruction::AStore(table_typ))?;
 
         // Class<?> tableElemType = methodType.parameterType(0);
         code.push_instruction(Instruction::ALoad(requested_type_argument))?;
         code.push_instruction(Instruction::IConst0)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.parameter_type)?;
         code.push_instruction(Instruction::AStore(table_elem_typ))?;
 
         // Class<?> moduleType = getter.type().parameterType(0);
         code.push_instruction(Instruction::ALoad(getter_argument))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
         code.push_instruction(Instruction::IConst0)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.parameter_type)?;
         code.push_instruction(Instruction::AStore(module_typ))?;
 
         /* MethodHandle updateEffects = MethodHandles.collectArguments(
@@ -2068,10 +2089,12 @@ impl<'g> UtilityClass<'g> {
          *   setter
          * );
          */
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::COPYRESIZEDARRAY)?;
-        code.const_class(&FieldType::INT)?;
+        code.const_methodhandle(copy_resized_array)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::IConst3)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::ANewArray(RefType::Object(
+            code.java.classes.lang.class,
+        )))?;
         for (arr_idx, variable_to_load) in vec![table_typ, table_typ, table_elem_typ]
             .into_iter()
             .enumerate()
@@ -2081,13 +2104,17 @@ impl<'g> UtilityClass<'g> {
             code.push_instruction(Instruction::ALoad(variable_to_load))?;
             code.push_instruction(Instruction::AAStore)?;
         }
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::ASTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.method_type)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.as_type)?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(setter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
 
         /* MethodHandle permutedEffects = MethodHandles.permuteArguments(
@@ -2104,9 +2131,11 @@ impl<'g> UtilityClass<'g> {
          *   new int[] { 1, 0, 0, 2, 3 }
          * );
          */
-        code.const_class(&FieldType::INT)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::IConst4)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::ANewArray(RefType::Object(
+            code.java.classes.lang.class,
+        )))?;
         for (arr_idx, variable_to_load) in vec![table_typ, module_typ, table_typ, table_elem_typ]
             .into_iter()
             .enumerate()
@@ -2116,7 +2145,7 @@ impl<'g> UtilityClass<'g> {
             code.push_instruction(Instruction::ALoad(variable_to_load))?;
             code.push_instruction(Instruction::AAStore)?;
         }
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.method_type)?;
         code.push_instruction(Instruction::IConst5)?;
         code.push_instruction(Instruction::NewArray(BaseType::Int))?;
         for (arr_idx, array_elem) in vec![1, 0, 0, 2, 3].into_iter().enumerate() {
@@ -2126,8 +2155,12 @@ impl<'g> UtilityClass<'g> {
             code.push_instruction(Instruction::IAStore)?;
         }
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
 
         /* MethodHandle createAndUpdateNewTable = MethodHandles.collectArguments(
@@ -2139,12 +2172,20 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(table_typ))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::ARRAYCONSTRUCTOR,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .array_constructor,
         )?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::AStore(create_and_update_new_table))?;
 
@@ -2158,18 +2199,18 @@ impl<'g> UtilityClass<'g> {
          *   createAndUpdateNewTable
          * );
          */
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::INTISNEGATIVEONE)?;
-        code.const_class(&FieldType::INT)?;
+        code.const_methodhandle(int_is_negative_one)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::IConstM1)?;
-        code.invoke(&BinaryName::INTEGER, &UnqualifiedName::VALUEOF)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::CONSTANT)?;
+        code.invoke(code.java.members.lang.integer.value_of)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.constant)?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(create_and_update_new_table))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERARRAY)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::DROPARGUMENTS)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
+        code.invoke(code.java.members.lang.invoke.method_type.parameter_array)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.drop_arguments)?;
         code.push_instruction(Instruction::ALoad(create_and_update_new_table))?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::GUARDWITHTEST)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.guard_with_test)?;
 
         /* MethodHandle checkSizeAndCreate = MethodHandles.collectArguments(
          *   createAndUpdateNewTableIfValid,
@@ -2186,26 +2227,38 @@ impl<'g> UtilityClass<'g> {
          * );
          */
         code.push_instruction(Instruction::IConst0)?;
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::NEXTSIZE)?;
+        code.const_methodhandle(next_size)?;
         code.push_instruction(Instruction::IConst2)?;
-        code.const_class(&FieldType::LONG)?;
+        code.const_class(FieldType::long())?;
         code.push_instruction(Instruction::LLoad(max_size_argument))?;
-        code.invoke(&BinaryName::LONG, &UnqualifiedName::VALUEOF)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::CONSTANT)?;
+        code.invoke(code.java.members.lang.long.value_of)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.constant)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(table_typ))?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::ARRAYLENGTH)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.array_length)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
 
         /* MethodHandle toReturn = MethodHandles.permuteArguments(
@@ -2230,9 +2283,11 @@ impl<'g> UtilityClass<'g> {
          *   new int[] { 2, 2, 0, 1 }
          * );
          */
-        code.const_class(&FieldType::INT)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::IConst4)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::ANewArray(RefType::Object(
+            code.java.classes.lang.class,
+        )))?;
         for (arr_idx, variable_to_load) in vec![table_typ, module_typ, table_elem_typ]
             .into_iter()
             .enumerate()
@@ -2244,9 +2299,9 @@ impl<'g> UtilityClass<'g> {
         }
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst3)?;
-        code.const_class(&FieldType::INT)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::AAStore)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.method_type)?;
         code.push_instruction(Instruction::IConst5)?;
         code.push_instruction(Instruction::NewArray(BaseType::Int))?;
         for (arr_idx, array_elem) in vec![0, 3, 1, 0, 2].into_iter().enumerate() {
@@ -2256,14 +2311,22 @@ impl<'g> UtilityClass<'g> {
             code.push_instruction(Instruction::IAStore)?;
         }
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::ALoad(requested_type_argument))?;
         code.push_instruction(Instruction::IConst4)?;
@@ -2275,43 +2338,44 @@ impl<'g> UtilityClass<'g> {
             code.push_instruction(Instruction::IAStore)?;
         }
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
 
         // return new ConstantCallSite(toReturn);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
     // (I LTableElem; I)V
-    fn generate_fill_table_case<B: CodeBuilderExts>(
-        code: &mut B,
-        utility_class_name: &BinaryName,
+    fn generate_fill_table_case<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+        fill_array_range: &'g MethodData<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
         let table_typ = 7; // Class<TableElem[]>
         let table_elem_typ = 8; // Class<TableElem>
-        let cls_cls_idx = code.get_class_idx(&RefType::CLASS)?;
 
         // Class<?> tableType = getter.type().returnType();
         code.push_instruction(Instruction::ALoad(getter_argument))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::RETURNTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
+        code.invoke(code.java.members.lang.invoke.method_type.return_type)?;
         code.push_instruction(Instruction::AStore(table_typ))?;
 
         // Class<?> tableElemType = methodType.parameterType(1);
         code.push_instruction(Instruction::ALoad(requested_type_argument))?;
         code.push_instruction(Instruction::IConst1)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.parameter_type)?;
         code.push_instruction(Instruction::AStore(table_elem_typ))?;
 
         /* MethodHandle fillEffects = MethodHandles.collectArguments(
@@ -2330,17 +2394,15 @@ impl<'g> UtilityClass<'g> {
          *   getter
          * );
          */
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::FILLARRAYRANGE)?;
-        code.access_field(
-            &BinaryName::VOID,
-            &UnqualifiedName::UPPERCASE_TYPE,
-            AccessMode::Read,
-        )?;
+        code.const_methodhandle(fill_array_range)?;
+        code.access_field(code.java.members.lang.void.r#type, AccessMode::Read)?;
         code.push_instruction(Instruction::IConst4)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::ANewArray(RefType::Object(
+            code.java.classes.lang.class,
+        )))?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst0)?;
-        code.const_class(&FieldType::INT)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::AAStore)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst1)?;
@@ -2348,49 +2410,56 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::AAStore)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst2)?;
-        code.const_class(&FieldType::INT)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::AAStore)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst3)?;
         code.push_instruction(Instruction::ALoad(table_typ))?;
         code.push_instruction(Instruction::AAStore)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::ASTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.method_type)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.as_type)?;
         code.push_instruction(Instruction::IConst3)?;
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
 
         // return new ConstantCallSite(toReturn);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
-    fn generate_copy_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_copy_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::AConstNull)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
         Ok(())
     }
 
-    fn generate_init_table_case<B: CodeBuilderExts>(code: &mut B) -> Result<(), Error> {
+    fn generate_init_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::AConstNull)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
         Ok(())
     }
 
     /// Generate the bootstrap method used for memory operators
-    fn generate_bootstrap_memory<B: CodeBuilderExts>(
-        code: &mut B,
-        utility_class_name: &BinaryName,
+    fn generate_bootstrap_memory<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+        copy_resized_byte_buffer: &'g MethodData<'g>,
+        pages_to_bytes: &'g MethodData<'g>,
+        bytes_to_pages: &'g MethodData<'g>,
+        int_is_negative_one: &'g MethodData<'g>,
+        next_size: &'g MethodData<'g>,
+        fill_byte_buffer_range: &'g MethodData<'g>,
     ) -> Result<(), Error> {
         let memory_size_case = code.fresh_label();
         let memory_grow_case = code.fresh_label();
@@ -2398,7 +2467,7 @@ impl<'g> UtilityClass<'g> {
         let bad_name_case = code.fresh_label();
 
         code.push_instruction(Instruction::ALoad(1))?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::HASHCODE)?;
+        code.invoke(code.java.members.lang.object.hash_code)?;
         code.push_branch_instruction(BranchInstruction::LookupSwitch {
             padding: 0,
             default: bad_name_case,
@@ -2417,44 +2486,47 @@ impl<'g> UtilityClass<'g> {
         code.place_label(memory_size_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("memory_size")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
-        Self::generate_size_memory_case(code, utility_class_name)?;
+        Self::generate_size_memory_case(code, bytes_to_pages)?;
 
         // memory.grow
         code.place_label(memory_grow_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("memory_grow")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
-        Self::generate_grow_memory_case(code, utility_class_name)?;
+        Self::generate_grow_memory_case(
+            code,
+            copy_resized_byte_buffer,
+            pages_to_bytes,
+            bytes_to_pages,
+            int_is_negative_one,
+            next_size,
+        )?;
 
         // memory.fill
         code.place_label(memory_fill_case)?;
         code.push_instruction(Instruction::ALoad(1))?;
         code.const_string("memory_fill")?;
-        code.invoke(&BinaryName::OBJECT, &UnqualifiedName::EQUALS)?;
+        code.invoke(code.java.members.lang.object.equals)?;
         code.push_branch_instruction(BranchInstruction::If(OrdComparison::EQ, bad_name_case, ()))?;
-        Self::generate_fill_memory_case(code, utility_class_name)?;
+        Self::generate_fill_memory_case(code, fill_byte_buffer_range)?;
 
         // Catch all case
-        let cls_idx = code.get_class_idx(&RefType::Object(BinaryName::ILLEGALARGUMENTEXCEPTION))?;
         code.place_label(bad_name_case)?;
-        code.push_instruction(Instruction::New(cls_idx))?;
+        code.new(code.java.classes.lang.illegal_argument_exception)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::ALoad(1))?;
-        code.invoke(
-            &BinaryName::ILLEGALARGUMENTEXCEPTION,
-            &UnqualifiedName::INIT,
-        )?;
+        code.invoke(code.java.members.lang.illegal_argument_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
 
         Ok(())
     }
 
-    fn generate_size_memory_case<B: CodeBuilderExts>(
-        code: &mut B,
-        utility_class_name: &BinaryName,
+    fn generate_size_memory_case<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+        bytes_to_pages: &'g MethodData<'g>,
     ) -> Result<(), Error> {
         let getter_argument = 3;
 
@@ -2466,33 +2538,43 @@ impl<'g> UtilityClass<'g> {
          *   bytesToMemoryPagesHandle                         // (I)I
          */
         code.push_instruction(Instruction::ALoad(getter_argument))?;
-        code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::CAPACITY)?;
+        code.const_methodhandle(code.java.members.nio.byte_buffer.capacity)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::FILTERRETURNVALUE,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .filter_return_value,
         )?;
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::BYTESTOPAGES)?;
+        code.const_methodhandle(bytes_to_pages)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::FILTERRETURNVALUE,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .filter_return_value,
         )?;
 
         // return new ConstantCallSite(methodhandle);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
     // TODO: avoid allocating a new memory for `memory.grow 0`
-    fn generate_grow_memory_case<B: CodeBuilderExts>(
-        code: &mut B,
-        utility_class_name: &BinaryName,
+    fn generate_grow_memory_case<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+        copy_resized_byte_buffer: &'g MethodData<'g>,
+        pages_to_bytes: &'g MethodData<'g>,
+        bytes_to_pages: &'g MethodData<'g>,
+        int_is_negative_one: &'g MethodData<'g>,
+        next_size: &'g MethodData<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
@@ -2500,14 +2582,12 @@ impl<'g> UtilityClass<'g> {
         let max_size_argument = 5; // long
         let module_typ = 7; // Class<?>
         let create_and_update_new_memory = 8; // MethodHandle
-        let cls_cls_idx = code.get_class_idx(&RefType::CLASS)?;
-        let object_cls_idx = code.get_class_idx(&RefType::OBJECT)?;
 
         // Class<?> moduleType = getter.type().parameterType(0);
         code.push_instruction(Instruction::ALoad(getter_argument))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
         code.push_instruction(Instruction::IConst0)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.parameter_type)?;
         code.push_instruction(Instruction::AStore(module_typ))?;
 
         /* MethodHandle updateEffects = MethodHandles.collectArguments(
@@ -2516,12 +2596,16 @@ impl<'g> UtilityClass<'g> {
          *   setter
          * );
          */
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::COPYRESIZEDBYTEBUFFER)?;
+        code.const_methodhandle(copy_resized_byte_buffer)?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(setter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
 
         /* MethodHandle permutedEffects = MethodHandles.permuteArguments(
@@ -2537,12 +2621,14 @@ impl<'g> UtilityClass<'g> {
          *   new int[] { 1, 0, 0, 2 }
          * );
          */
-        code.const_class(&FieldType::INT)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::IConst3)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::ANewArray(RefType::Object(
+            code.java.classes.lang.class,
+        )))?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst0)?;
-        code.const_class(&FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER)))?;
+        code.const_class(FieldType::object(code.java.classes.nio.byte_buffer))?;
         code.push_instruction(Instruction::AAStore)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst1)?;
@@ -2550,9 +2636,9 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::AAStore)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst2)?;
-        code.const_class(&FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER)))?;
+        code.const_class(FieldType::object(code.java.classes.nio.byte_buffer))?;
         code.push_instruction(Instruction::AAStore)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.method_type)?;
         code.push_instruction(Instruction::IConst4)?;
         code.push_instruction(Instruction::NewArray(BaseType::Int))?;
         for (idx, value) in vec![1, 0, 0, 2].into_iter().enumerate() {
@@ -2562,8 +2648,12 @@ impl<'g> UtilityClass<'g> {
             code.push_instruction(Instruction::IAStore)?;
         }
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
 
         /* MethodHandle createAndUpdateNewMemory = MethodHandles.collectArguments(
@@ -2576,35 +2666,52 @@ impl<'g> UtilityClass<'g> {
          * );
          */
         code.push_instruction(Instruction::IConst0)?;
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::PAGESTOBYTES)?;
-        code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::ALLOCATE)?;
+        code.const_methodhandle(pages_to_bytes)?;
+        code.const_methodhandle(code.java.members.nio.byte_buffer.allocate)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::FILTERRETURNVALUE,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .filter_return_value,
         )?;
-        code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::ORDER)?;
+        code.const_methodhandle(code.java.members.nio.byte_buffer.order)?;
         code.push_instruction(Instruction::IConst1)?;
         code.push_instruction(Instruction::IConst1)?;
-        code.push_instruction(Instruction::ANewArray(object_cls_idx))?;
+        code.push_instruction(Instruction::ANewArray(RefType::Object(
+            code.java.classes.lang.object,
+        )))?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst0)?;
         code.access_field(
-            &BinaryName::BYTEORDER,
-            &UnqualifiedName::LITTLEENDIAN,
+            code.java.members.nio.byte_order.little_endian,
             AccessMode::Read,
         )?;
         code.push_instruction(Instruction::AAStore)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::INSERTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .insert_arguments,
         )?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::FILTERRETURNVALUE,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .filter_return_value,
         )?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::AStore(create_and_update_new_memory))?;
 
@@ -2618,18 +2725,18 @@ impl<'g> UtilityClass<'g> {
          *   createAndUpdateNewMemory
          * );
          */
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::INTISNEGATIVEONE)?;
-        code.const_class(&FieldType::INT)?;
+        code.const_methodhandle(int_is_negative_one)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::IConstM1)?;
-        code.invoke(&BinaryName::INTEGER, &UnqualifiedName::VALUEOF)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::CONSTANT)?;
+        code.invoke(code.java.members.lang.integer.value_of)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.constant)?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(create_and_update_new_memory))?;
-        code.invoke(&BinaryName::METHODHANDLE, &UnqualifiedName::TYPE)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::PARAMETERARRAY)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::DROPARGUMENTS)?;
+        code.invoke(code.java.members.lang.invoke.method_handle.r#type)?;
+        code.invoke(code.java.members.lang.invoke.method_type.parameter_array)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.drop_arguments)?;
         code.push_instruction(Instruction::ALoad(create_and_update_new_memory))?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::GUARDWITHTEST)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.guard_with_test)?;
 
         /* MethodHandle checkSizeAndCreate = MethodHandles.collectArguments(
          *   createAndUpdateNewMemoryIfValid,
@@ -2646,30 +2753,46 @@ impl<'g> UtilityClass<'g> {
          * );
          */
         code.push_instruction(Instruction::IConst0)?;
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::NEXTSIZE)?;
+        code.const_methodhandle(next_size)?;
         code.push_instruction(Instruction::IConst2)?;
-        code.const_class(&FieldType::LONG)?;
+        code.const_class(FieldType::long())?;
         code.push_instruction(Instruction::LLoad(max_size_argument))?;
-        code.invoke(&BinaryName::LONG, &UnqualifiedName::VALUEOF)?;
-        code.invoke(&BinaryName::METHODHANDLES, &UnqualifiedName::CONSTANT)?;
+        code.invoke(code.java.members.lang.long.value_of)?;
+        code.invoke(code.java.members.lang.invoke.method_handles.constant)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::IConst0)?;
-        code.const_methodhandle(&BinaryName::BYTEBUFFER, &UnqualifiedName::CAPACITY)?;
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::BYTESTOPAGES)?;
+        code.const_methodhandle(code.java.members.nio.byte_buffer.capacity)?;
+        code.const_methodhandle(bytes_to_pages)?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::FILTERRETURNVALUE,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .filter_return_value,
         )?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
 
         /* MethodHandle toReturn = MethodHandles.permuteArguments(
@@ -2693,12 +2816,14 @@ impl<'g> UtilityClass<'g> {
          *   new int[] { 1, 1, 0 }
          * );
          */
-        code.const_class(&FieldType::INT)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::IConst3)?;
-        code.push_instruction(Instruction::ANewArray(cls_cls_idx))?;
+        code.push_instruction(Instruction::ANewArray(RefType::Object(
+            code.java.classes.lang.class,
+        )))?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst0)?;
-        code.const_class(&FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER)))?;
+        code.const_class(FieldType::object(code.java.classes.nio.byte_buffer))?;
         code.push_instruction(Instruction::AAStore)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst1)?;
@@ -2706,9 +2831,9 @@ impl<'g> UtilityClass<'g> {
         code.push_instruction(Instruction::AAStore)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IConst2)?;
-        code.const_class(&FieldType::INT)?;
+        code.const_class(FieldType::int())?;
         code.push_instruction(Instruction::AAStore)?;
-        code.invoke(&BinaryName::METHODTYPE, &UnqualifiedName::METHODTYPE)?;
+        code.invoke(code.java.members.lang.invoke.method_type.method_type)?;
         code.push_instruction(Instruction::IConst4)?;
         code.push_instruction(Instruction::NewArray(BaseType::Int))?;
         for (arr_idx, array_elem) in vec![0, 2, 1, 0].into_iter().enumerate() {
@@ -2718,14 +2843,22 @@ impl<'g> UtilityClass<'g> {
             code.push_instruction(Instruction::IAStore)?;
         }
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
         code.push_instruction(Instruction::IConst0)?;
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
         code.push_instruction(Instruction::ALoad(requested_type_argument))?;
         code.push_instruction(Instruction::IConst3)?;
@@ -2737,25 +2870,27 @@ impl<'g> UtilityClass<'g> {
             code.push_instruction(Instruction::IAStore)?;
         }
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::PERMUTEARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .permute_arguments,
         )?;
 
         // return new ConstantCallSite(toReturn);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
     }
 
-    fn generate_fill_memory_case<B: CodeBuilderExts>(
-        code: &mut B,
-        utility_class_name: &BinaryName,
+    fn generate_fill_memory_case<'a>(
+        code: &mut BytecodeBuilder<'a, 'g>,
+        fill_byte_buffer_range: &'g MethodData<'g>,
     ) -> Result<(), Error> {
         let getter_argument = 3; // MethodHandle
 
@@ -2765,21 +2900,23 @@ impl<'g> UtilityClass<'g> {
          *   getter
          * );
          */
-        code.const_methodhandle(utility_class_name, &UnqualifiedName::FILLBYTEBUFFERRANGE)?;
+        code.const_methodhandle(fill_byte_buffer_range)?;
         code.push_instruction(Instruction::IConst3)?;
         code.push_instruction(Instruction::ALoad(getter_argument))?;
         code.invoke(
-            &BinaryName::METHODHANDLES,
-            &UnqualifiedName::COLLECTARGUMENTS,
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
         )?;
 
         // return new ConstantCallSite(toReturn);
-        let constant_callsite_cls =
-            code.get_class_idx(&RefType::Object(BinaryName::CONSTANTCALLSITE))?;
-        code.push_instruction(Instruction::New(constant_callsite_cls))?;
+        code.new(code.java.classes.lang.invoke.constant_call_site)?;
         code.push_instruction(Instruction::DupX1)?;
         code.push_instruction(Instruction::Swap)?;
-        code.invoke(&BinaryName::CONSTANTCALLSITE, &UnqualifiedName::INIT)?;
+        code.invoke(code.java.members.lang.invoke.constant_call_site.init)?;
         code.push_branch_instruction(BranchInstruction::AReturn)?;
 
         Ok(())
@@ -2798,18 +2935,21 @@ impl<'g> UtilityClass<'g> {
 }
 
 /// Tracks utility bootstrap methods inside a given class
-#[derive(Default)]
-pub struct BootstrapUtilities {
+pub struct BootstrapUtilities<'g> {
     /// Mapping from the table index to a bootstrap method index
-    table_bootstrap_methods: HashMap<u32, u16>,
+    table_bootstrap_methods: HashMap<u32, &'g BootstrapMethodData<'g>>,
 
     /// Mapping from the memory index to a bootstrap method index
-    memory_bootstrap_methods: HashMap<u32, u16>,
-
-    /// Ordered list of bootstrap methods
-    bootstrap_methods: Vec<BootstrapMethod>,
+    memory_bootstrap_methods: HashMap<u32, &'g BootstrapMethodData<'g>>,
 }
-impl BootstrapUtilities {
+impl<'g> BootstrapUtilities<'g> {
+    pub fn new() -> Self {
+        BootstrapUtilities {
+            table_bootstrap_methods: HashMap::new(),
+            memory_bootstrap_methods: HashMap::new(),
+        }
+    }
+
     /// Get (and create if missing) a bootstrap method for a given table
     ///
     /// Note: the `constants` argument must correspond to the class in which the bootstrap method
@@ -2817,69 +2957,37 @@ impl BootstrapUtilities {
     pub fn get_table_bootstrap(
         &mut self,
         table_index: u32,
-        table: &Table,
-        table_field_class: &BinaryName,
-        utilities: &mut UtilityClass,
-        constants: &ConstantsPool,
-    ) -> Result<u16, Error> {
+        table: &Table<'g>,
+        class_graph: &ClassGraph<'g>,
+        utilities: &mut UtilityClass<'g>,
+        java: &JavaClasses<'g>,
+    ) -> Result<&'g BootstrapMethodData<'g>, Error> {
         if let Some(bootstrap) = self.table_bootstrap_methods.get(&table_index) {
             return Ok(*bootstrap);
         }
 
-        // Ensure the bootstrapping method is defined
-        let _ = utilities.add_utility_method(UtilityMethod::BootstrapTable)?;
-
-        // Compute a method handle for the bootstrap
-        let table_bootstrap_handle: ConstantIndex = {
-            let utilities_utf8 = constants.get_utf8(utilities.class_name().as_str())?;
-            let utilities_cls = constants.get_class(utilities_utf8)?;
-            let tablebootstrap_utf8 =
-                constants.get_utf8(UtilityMethod::BootstrapTable.name().as_str())?;
-            let tablebootstrap_typ =
-                constants.get_utf8(UtilityMethod::BootstrapTable.descriptor().render())?;
-            let tablebootstrap_nt =
-                constants.get_name_and_type(tablebootstrap_utf8, tablebootstrap_typ)?;
-            let tablebootstrap_method_ref =
-                constants.get_method_ref(utilities_cls, tablebootstrap_nt, false)?;
-            constants
-                .get_method_handle(HandleKind::InvokeStatic, tablebootstrap_method_ref.into())?
-        };
+        // Get bootstrapping method is defined
+        let table_bootstrap = utilities.get_utility_method(UtilityMethod::BootstrapTable, &java)?;
 
         // Compute the getter and setter constant arguments for the bootstrap method
-        let table_field_typ = FieldType::array(table.table_type.field_type());
-        let table_fieldref: ConstantIndex = {
-            let class_utf8 = constants.get_utf8(table_field_class.as_str())?;
-            let class_idx = constants.get_class(class_utf8)?;
-            let field_utf8 = constants.get_utf8(table.field_name.as_str())?;
-            let desc_utf8 = constants.get_utf8(table_field_typ.render())?;
-            let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
-            constants
-                .get_field_ref(class_idx, name_and_type_idx)?
-                .into()
-        };
-        let table_get_handle = constants.get_method_handle(HandleKind::GetField, table_fieldref)?;
-        let table_set_handle = constants.get_method_handle(HandleKind::PutField, table_fieldref)?;
+        let table_field = table.field.unwrap();
+        let table_get = ConstantData::FieldGetterHandle(table_field);
+        let table_set = ConstantData::FieldSetterHandle(table_field);
 
         /* Compute the maximum table size based on two constraints:
          *
          *   - the JVM's inherent limit of using signed 32-bit integers for array indices
          *   - a declared constraint in the WASM module
          */
-        let max_table_size = constants.get_long(i64::min(
+        let max_table_size = ConstantData::Long(i64::min(
             i32::MAX as i64,
             table.maximum.unwrap_or(u32::MAX) as i64,
-        ))?;
+        ));
 
-        // Generate the bootstrap attribute and return the index
-        let bootstrap_index = self.bootstrap_methods.len() as u16; // TODO: detect overflow
-        self.bootstrap_methods.push(BootstrapMethod {
-            bootstrap_method: table_bootstrap_handle,
-            bootstrap_arguments: vec![table_get_handle, table_set_handle, max_table_size],
-        });
-        self.table_bootstrap_methods
-            .insert(table_index, bootstrap_index);
-
-        Ok(bootstrap_index)
+        Ok(class_graph.add_bootstrap_method(BootstrapMethodData {
+            method: table_bootstrap,
+            arguments: vec![table_get, table_set, max_table_size],
+        }))
     }
 
     /// Get (and create if missing) a bootstrap method for a given memory
@@ -2889,49 +2997,22 @@ impl BootstrapUtilities {
     pub fn get_memory_bootstrap(
         &mut self,
         memory_index: u32,
-        memory: &Memory,
-        memory_field_class: &BinaryName,
-        utilities: &mut UtilityClass,
-        constants: &ConstantsPool,
-    ) -> Result<u16, Error> {
+        memory: &Memory<'g>,
+        class_graph: &ClassGraph<'g>,
+        utilities: &mut UtilityClass<'g>,
+        java: &JavaClasses<'g>,
+    ) -> Result<&'g BootstrapMethodData<'g>, Error> {
         if let Some(bootstrap) = self.memory_bootstrap_methods.get(&memory_index) {
             return Ok(*bootstrap);
         }
 
-        // Ensure the bootstrapping method is defined
-        let _ = utilities.add_utility_method(UtilityMethod::BootstrapMemory)?;
+        // Get the bootstrap method
+        let memory_bootstrap =
+            utilities.get_utility_method(UtilityMethod::BootstrapMemory, java)?;
 
-        // Compute a method handle for the bootstrap
-        let memory_bootstrap_handle: ConstantIndex = {
-            let utilities_utf8 = constants.get_utf8(utilities.class_name().as_str())?;
-            let utilities_cls = constants.get_class(utilities_utf8)?;
-            let membootstrap_utf8 =
-                constants.get_utf8(UtilityMethod::BootstrapMemory.name().as_str())?;
-            let membootstrap_typ =
-                constants.get_utf8(UtilityMethod::BootstrapMemory.descriptor().render())?;
-            let membootstrap_nt =
-                constants.get_name_and_type(membootstrap_utf8, membootstrap_typ)?;
-            let membootstrap_method_ref =
-                constants.get_method_ref(utilities_cls, membootstrap_nt, false)?;
-            constants.get_method_handle(HandleKind::InvokeStatic, membootstrap_method_ref.into())?
-        };
-
-        // Compute the getter and setter constant arguments for the bootstrap method
-        let memory_field_typ = FieldType::Ref(RefType::Object(BinaryName::BYTEBUFFER));
-        let memory_fieldref: ConstantIndex = {
-            let class_utf8 = constants.get_utf8(memory_field_class.as_str())?;
-            let class_idx = constants.get_class(class_utf8)?;
-            let field_utf8 = constants.get_utf8(memory.field_name.as_str())?;
-            let desc_utf8 = constants.get_utf8(memory_field_typ.render())?;
-            let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
-            constants
-                .get_field_ref(class_idx, name_and_type_idx)?
-                .into()
-        };
-        let memory_get_handle =
-            constants.get_method_handle(HandleKind::GetField, memory_fieldref)?;
-        let memory_set_handle =
-            constants.get_method_handle(HandleKind::PutField, memory_fieldref)?;
+        let field = memory.field.unwrap(); // Should be populated by the time this is called
+        let memory_get = ConstantData::FieldGetterHandle(field);
+        let memory_set = ConstantData::FieldSetterHandle(field);
 
         let memory_maximum = memory.memory_type.maximum;
 
@@ -2940,26 +3021,14 @@ impl BootstrapUtilities {
          *   - the JVM's inherent limit of using signed 32-bit integers for bytebuffer indices
          *   - a declared constraint in the WASM module
          */
-        let max_memory_size = constants.get_long(i64::min(
+        let max_memory_size = ConstantData::Long(i64::min(
             (i32::MAX as i64) / (u16::MAX as i64),
             memory_maximum.unwrap_or(u32::MAX as u64) as i64,
-        ))?;
+        ));
 
-        // Generate the bootstrap attribute and return the index
-        let bootstrap_index = self.bootstrap_methods.len() as u16; // TODO: detect overflow
-        self.bootstrap_methods.push(BootstrapMethod {
-            bootstrap_method: memory_bootstrap_handle,
-            bootstrap_arguments: vec![memory_get_handle, memory_set_handle, max_memory_size],
-        });
-        self.memory_bootstrap_methods
-            .insert(memory_index, bootstrap_index);
-
-        Ok(bootstrap_index)
-    }
-}
-
-impl From<BootstrapUtilities> for BootstrapMethods {
-    fn from(bootstrap_utils: BootstrapUtilities) -> BootstrapMethods {
-        BootstrapMethods(bootstrap_utils.bootstrap_methods)
+        Ok(class_graph.add_bootstrap_method(BootstrapMethodData {
+            method: memory_bootstrap,
+            arguments: vec![memory_get, memory_set, max_memory_size],
+        }))
     }
 }

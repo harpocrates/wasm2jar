@@ -20,7 +20,7 @@ use std::ops::Not;
 
 /// Non-branching JVM bytecode instruction
 #[derive(Clone, Debug)]
-pub enum Instruction {
+pub enum Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod> {
     Nop,
     AConstNull,
     IConstM1,
@@ -39,8 +39,8 @@ pub enum Instruction {
     DConst1,
     BiPush(i8),
     SiPush(i16),
-    Ldc(ConstantIndex), // covers both `ldc` and `ldc_w`
-    Ldc2(ConstantIndex),
+    Ldc(Constant), // covers both `ldc` and `ldc_w`
+    Ldc2(Constant),
     ILoad(u16), // covers `iload`, `iload{0,3}`, and `wide iload`
     LLoad(u16),
     FLoad(u16),
@@ -64,7 +64,7 @@ pub enum Instruction {
     FKill(u16),
     DKill(u16),
     AKill(u16),
-    AHint(RefType), // hint for the verifier to infer a more general type
+    AHint(ClassHint), // hint for the verifier to infer a more general type
     IAStore,
     LAStore,
     FAStore,
@@ -133,21 +133,177 @@ pub enum Instruction {
     LCmp,
     FCmp(CompareMode), // covers `fcmpl` and `fcmpg`
     DCmp(CompareMode), // covers `dcmpl` and `dcmpg`
-    GetStatic(FieldRefConstantIndex),
-    PutStatic(FieldRefConstantIndex),
-    GetField(FieldRefConstantIndex),
-    PutField(FieldRefConstantIndex),
-    Invoke(InvokeType, MethodRefConstantIndex),
-    InvokeDynamic(InvokeDynamicConstantIndex),
-    New(ClassConstantIndex),
+    GetStatic(Field),
+    PutStatic(Field),
+    GetField(Field),
+    PutField(Field),
+    Invoke(InvokeType, Method),
+    InvokeDynamic(IndyMethod),
+    New(Class),
     NewArray(BaseType),
-    ANewArray(ClassConstantIndex),
+    ANewArray(Class),
     ArrayLength,
-    CheckCast(ClassConstantIndex),
-    InstanceOf(ClassConstantIndex),
+    CheckCast(Class),
+    InstanceOf(Class),
 }
 
-impl Width for Instruction {
+pub type SerializableInstruction = Instruction<
+    (),
+    ClassConstantIndex,
+    ConstantIndex,
+    FieldRefConstantIndex,
+    MethodRefConstantIndex,
+    InvokeDynamicConstantIndex,
+>;
+
+impl<ClassHint, Class, Constant, Field, Method, IndyMethod>
+    Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod>
+{
+    pub fn map<ClassHint2, Class2, Constant2, Field2, Method2, IndyMethod2, E>(
+        &self,
+        map_class_hint: impl Fn(&ClassHint) -> std::result::Result<ClassHint2, E>,
+        map_class: impl Fn(&Class) -> std::result::Result<Class2, E>,
+        map_constant: impl Fn(&Constant) -> std::result::Result<Constant2, E>,
+        map_field: impl Fn(&Field) -> std::result::Result<Field2, E>,
+        map_method: impl Fn(&Method) -> std::result::Result<Method2, E>,
+        map_indy_method: impl Fn(&IndyMethod) -> std::result::Result<IndyMethod2, E>,
+    ) -> std::result::Result<
+        Instruction<ClassHint2, Class2, Constant2, Field2, Method2, IndyMethod2>,
+        E,
+    > {
+        use Instruction::*;
+        Ok(match self {
+            Nop => Nop,
+            AConstNull => AConstNull,
+            IConstM1 => IConstM1,
+            IConst0 => IConst0,
+            IConst1 => IConst1,
+            IConst2 => IConst2,
+            IConst3 => IConst3,
+            IConst4 => IConst4,
+            IConst5 => IConst5,
+            LConst0 => LConst0,
+            LConst1 => LConst1,
+            FConst0 => FConst0,
+            FConst1 => FConst1,
+            FConst2 => FConst2,
+            DConst0 => DConst0,
+            DConst1 => DConst1,
+            BiPush(b) => BiPush(*b),
+            SiPush(s) => SiPush(*s),
+            Ldc(constant) => Ldc(map_constant(constant)?),
+            Ldc2(constant) => Ldc2(map_constant(constant)?),
+            ILoad(idx) => ILoad(*idx),
+            LLoad(idx) => LLoad(*idx),
+            FLoad(idx) => FLoad(*idx),
+            DLoad(idx) => DLoad(*idx),
+            ALoad(idx) => ALoad(*idx),
+            IALoad => IALoad,
+            LALoad => LALoad,
+            FALoad => FALoad,
+            DALoad => DALoad,
+            AALoad => AALoad,
+            BALoad => BALoad,
+            CALoad => CALoad,
+            SALoad => SALoad,
+            IStore(idx) => IStore(*idx),
+            LStore(idx) => LStore(*idx),
+            FStore(idx) => FStore(*idx),
+            DStore(idx) => DStore(*idx),
+            AStore(idx) => AStore(*idx),
+            IKill(idx) => IKill(*idx),
+            LKill(idx) => LKill(*idx),
+            FKill(idx) => FKill(*idx),
+            DKill(idx) => FKill(*idx),
+            AKill(idx) => AKill(*idx),
+            AHint(hint) => AHint(map_class_hint(hint)?),
+            IAStore => IAStore,
+            LAStore => LAStore,
+            FAStore => FAStore,
+            DAStore => DAStore,
+            AAStore => AAStore,
+            BAStore => BAStore,
+            CAStore => CAStore,
+            SAStore => SAStore,
+            Pop => Pop,
+            Pop2 => Pop2,
+            Dup => Dup,
+            DupX1 => DupX1,
+            DupX2 => DupX2,
+            Dup2 => Dup2,
+            Dup2X1 => Dup2X1,
+            Dup2X2 => Dup2X2,
+            Swap => Swap,
+            IAdd => IAdd,
+            LAdd => LAdd,
+            FAdd => FAdd,
+            DAdd => DAdd,
+            ISub => ISub,
+            LSub => LSub,
+            FSub => FSub,
+            DSub => DSub,
+            IMul => IMul,
+            LMul => LMul,
+            FMul => FMul,
+            DMul => DMul,
+            IDiv => IDiv,
+            LDiv => LDiv,
+            FDiv => FDiv,
+            DDiv => DDiv,
+            IRem => IRem,
+            LRem => LRem,
+            FRem => FRem,
+            DRem => DRem,
+            INeg => INeg,
+            LNeg => LNeg,
+            FNeg => FNeg,
+            DNeg => DNeg,
+            ISh(s) => ISh(*s),
+            LSh(s) => LSh(*s),
+            IAnd => IAnd,
+            LAnd => LAnd,
+            IOr => IOr,
+            LOr => LOr,
+            IXor => IXor,
+            LXor => LXor,
+            IInc(idx, by) => IInc(*idx, *by),
+            I2L => I2L,
+            I2F => I2F,
+            I2D => I2D,
+            L2I => L2I,
+            L2F => L2F,
+            L2D => L2D,
+            F2I => F2I,
+            F2L => F2L,
+            F2D => F2D,
+            D2I => D2I,
+            D2L => D2L,
+            D2F => D2F,
+            I2B => I2B,
+            I2C => I2C,
+            I2S => I2S,
+            LCmp => LCmp,
+            FCmp(m) => FCmp(*m),
+            DCmp(m) => DCmp(*m),
+            GetStatic(field) => GetStatic(map_field(field)?),
+            PutStatic(field) => PutStatic(map_field(field)?),
+            GetField(field) => GetField(map_field(field)?),
+            PutField(field) => PutField(map_field(field)?),
+            Invoke(typ, method) => Invoke(*typ, map_method(method)?),
+            InvokeDynamic(indy_method) => InvokeDynamic(map_indy_method(indy_method)?),
+            New(class) => New(map_class(class)?),
+            NewArray(bt) => NewArray(*bt),
+            ANewArray(class) => ANewArray(map_class(class)?),
+            ArrayLength => ArrayLength,
+            CheckCast(class) => CheckCast(map_class(class)?),
+            InstanceOf(class) => InstanceOf(map_class(class)?),
+        })
+    }
+}
+
+impl<ClassHint, Class, Field, Method, IndyMethod> Width
+    for Instruction<ClassHint, Class, ConstantIndex, Field, Method, IndyMethod>
+{
     fn width(&self) -> usize {
         match self {
           Instruction::IKill(_)
@@ -316,7 +472,7 @@ impl Width for Instruction {
     }
 }
 
-impl Serialize for Instruction {
+impl Serialize for SerializableInstruction {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
         /* The load/store instructions follow the same pattern:
          *

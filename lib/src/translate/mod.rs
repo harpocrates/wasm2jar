@@ -14,9 +14,9 @@ pub use renamer::*;
 pub use settings::*;
 pub use utility::*;
 
-use crate::jvm::UnqualifiedName;
-use crate::wasm::{StackType, TableType};
-use wasmparser::{ElementItem, ElementKind, FuncType, InitExpr, MemoryType};
+use crate::jvm::{FieldData, MethodData, UnqualifiedName};
+use crate::wasm::{FunctionType, StackType, TableType};
+use wasmparser::{ElementItem, ElementKind, InitExpr, MemoryType};
 
 /// Visibility of different importable/exportable entities in the WASM module
 #[derive(Debug)]
@@ -46,13 +46,15 @@ impl MemberOrigin {
 /// External (imported or exported) tables require an extra layer of indirected. They are more
 /// complicated because they can be altered (even resized) from the outside or be aliased with
 /// different names (an imported table can be re-exported under a different name).
-#[derive(Debug)]
-pub struct Table {
+pub struct Table<'g> {
     /// Where is the table defined?
     pub origin: MemberOrigin,
 
     /// Name of the method in the class (if exported, this matches the export name)
     pub field_name: UnqualifiedName,
+
+    /// Field in the class which stores the table
+    pub field: Option<&'g FieldData<'g>>,
 
     /// Table type
     pub table_type: TableType,
@@ -64,24 +66,29 @@ pub struct Table {
     pub maximum: Option<u32>,
 }
 
-#[derive(Debug)]
-pub struct Memory {
+pub struct Memory<'g> {
     /// Where is the memory defined?
     pub origin: MemberOrigin,
 
     /// Name of the field in the class (if exported, this matches the export name)
     pub field_name: UnqualifiedName,
 
+    /// Field in the class which stores the memory
+    pub field: Option<&'g FieldData<'g>>,
+
     /// Memory type
     pub memory_type: MemoryType,
 }
 
-pub struct Global<'a> {
+pub struct Global<'a, 'g> {
     /// Where is the table defined?
     pub origin: MemberOrigin,
 
     /// Name of the field in the class (if exported, this matches the export name)
     pub field_name: UnqualifiedName,
+
+    /// Field in the class which stores the global
+    pub field: Option<&'g FieldData<'g>>,
 
     /// Global type
     pub global_type: StackType,
@@ -105,13 +112,13 @@ pub struct Element<'a> {
 }
 
 /// WASM functions are represented as methods
-pub struct Function {
-    /// Where is the function defined?
-    pub origin: MemberOrigin,
-
-    /// Name of the method in the class
-    pub method_name: UnqualifiedName,
-
+pub struct Function<'g> {
     /// Function type
-    pub func_type: FuncType,
+    pub func_type: FunctionType,
+
+    /// Method in the class containing the implementation
+    ///
+    /// Note: the method will have an "adapted" signature, meaning there is always one final
+    /// argument that is the module itself. In addition, it should always be a static method.
+    pub method: &'g MethodData<'g>,
 }

@@ -1,14 +1,10 @@
 use super::{
-    BinaryName, BranchInstruction, ClassConstantIndex, Constant, ConstantIndex, Frame, Instruction,
-    Offset, RefType, SynLabel, UnqualifiedName, VerificationType,
+    BinaryName, BranchInstruction, ClassConstantIndex, Constant, Frame, Offset, RefType, SynLabel,
 };
 
 #[derive(Debug)]
 pub enum Error {
-    ConstantPoolOverflow {
-        constant: Constant,
-        offset: u16,
-    },
+    ConstantPoolOverflow(ConstantPoolOverflow),
     IoError(std::io::Error),
     MethodCodeMaxStackOverflow(Offset),
     MethodCodeMaxLocalsOverflow(Offset),
@@ -29,7 +25,7 @@ pub enum Error {
 
     /// Error trying to verify
     VerifierError {
-        instruction: Instruction,
+        instruction: String, // VerifierInstruction<'g>,
         kind: VerifierErrorKind,
     },
     VerifierBranchingError {
@@ -40,8 +36,8 @@ pub enum Error {
     /// A label needs to have incompatible frames
     IncompatibleFrames(
         SynLabel,
-        Frame<RefType, (RefType, Offset)>,
-        Frame<RefType, (RefType, Offset)>,
+        Frame<RefType<BinaryName>, (RefType<BinaryName>, Offset)>,
+        Frame<RefType<BinaryName>, (RefType<BinaryName>, Offset)>,
     ),
 
     /// A particular offset has two conflicting frames
@@ -50,10 +46,18 @@ pub enum Error {
         Frame<ClassConstantIndex, u16>,
         Frame<ClassConstantIndex, u16>,
     ),
+}
 
-    MissingClass(BinaryName),
-    MissingMember(BinaryName, UnqualifiedName),
-    AmbiguousMethod(BinaryName, UnqualifiedName),
+#[derive(Debug)]
+pub struct ConstantPoolOverflow {
+    pub constant: Constant,
+    pub offset: u16,
+}
+
+impl From<ConstantPoolOverflow> for Error {
+    fn from(overflow: ConstantPoolOverflow) -> Error {
+        Error::ConstantPoolOverflow(overflow)
+    }
 }
 
 #[derive(Debug)]
@@ -63,11 +67,5 @@ pub enum VerifierErrorKind {
     NotArrayType,
     InvalidIndex,
     InvalidType,
-    MissingConstant(ConstantIndex),
-    NotLoadableConstant(Constant),
-    IncompatibleTypes(
-        VerificationType<RefType, (RefType, Offset)>,
-        VerificationType<RefType, (RefType, Offset)>,
-    ),
     BadDescriptor(String),
 }

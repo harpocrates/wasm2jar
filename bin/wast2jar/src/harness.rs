@@ -332,7 +332,20 @@ impl<'a> TestHarness<'a> {
             WastDirective::AssertUnlinkable { .. } => {
                 return Err(TestError::IncompleteHarness("assert_unlinkable"))
             }
-            WastDirective::Register { .. } => return Err(TestError::IncompleteHarness("register")),
+            WastDirective::Register { name, module, .. } => {
+                let harness = self.get_java_writer()?;
+                let module = match module {
+                    None => String::from("current"),
+                    Some(id) => format!("mod_{}", id.name()),
+                };
+                harness.inline_code_fmt(format_args!(
+                    "{imports}.put(\"{name}\", {module}.exports);",
+                    imports = JavaHarness::IMPORTS_VAR_NAME,
+                    name = name,
+                    module = module,
+                ))?;
+                harness.newline()?;
+            }
             WastDirective::AssertException { .. } => {
                 return Err(TestError::IncompleteHarness("assert_exception"))
             }
@@ -515,12 +528,12 @@ impl<'a> TestHarness<'a> {
     pub fn java_execute<W: io::Write>(
         execute: &wast::WastExecute,
         java_writer: &mut JavaWriter<W>,
-    ) -> io::Result<()> {
+    ) -> Result<(), TestError> {
         use wast::WastExecute;
 
         match execute {
-            WastExecute::Invoke(invoke) => Self::java_invoke(invoke, java_writer),
-            WastExecute::Module(_) => todo!(),
+            WastExecute::Invoke(invoke) => Self::java_invoke(invoke, java_writer)?,
+            WastExecute::Module(_) => return Err(TestError::IncompleteHarness("module")),
             WastExecute::Get { module, global } => {
                 let name = match module {
                     None => String::from("current"),
@@ -530,9 +543,11 @@ impl<'a> TestHarness<'a> {
                     "{name}.{field}",
                     name = name,
                     field = global
-                ))
+                ))?;
             }
         }
+
+        Ok(())
     }
 
     /// Print a WAST invoke into a Java method call

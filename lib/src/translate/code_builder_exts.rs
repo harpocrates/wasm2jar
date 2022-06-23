@@ -97,8 +97,14 @@ pub trait CodeBuilderExts<'a, 'g> {
     fn invoke_dynamic(
         &mut self,
         bootstrap: &'g BootstrapMethodData<'g>,
-        method_name: &UnqualifiedName,
-        descriptor: &MethodDescriptor<&'g ClassData<'g>>,
+        method_name: UnqualifiedName,
+        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+    ) -> Result<(), Error>;
+
+    /// Invoke `MethodHandle.invokeExact` using the specified method descriptor
+    fn invoke_invoke_exact(
+        &mut self,
+        descriptor: MethodDescriptor<&'g ClassData<'g>>,
     ) -> Result<(), Error>;
 
     /// Get/put a field
@@ -431,19 +437,31 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
         self.push_instruction(Instruction::Invoke(invoke_typ, method))
     }
 
-    /// Invoke dynamic
     fn invoke_dynamic(
         &mut self,
         bootstrap: &'g BootstrapMethodData<'g>,
-        method_name: &UnqualifiedName,
-        descriptor: &MethodDescriptor<&'g ClassData<'g>>,
+        method_name: UnqualifiedName,
+        descriptor: MethodDescriptor<&'g ClassData<'g>>,
     ) -> Result<(), Error> {
         let indy = InvokeDynamicData {
-            name: method_name.clone(),
-            descriptor: descriptor.clone(),
+            name: method_name,
+            descriptor,
             bootstrap,
         };
         self.push_instruction(Instruction::InvokeDynamic(indy))
+    }
+
+    fn invoke_invoke_exact(
+        &mut self,
+        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+    ) -> Result<(), Error> {
+        let method = self.class_graph.add_method(MethodData {
+            class: self.java.classes.lang.invoke.method_handle,
+            name: UnqualifiedName::INVOKEEXACT,
+            descriptor,
+            is_static: false,
+        });
+        self.push_instruction(Instruction::Invoke(InvokeType::Virtual, method))
     }
 
     fn access_field(

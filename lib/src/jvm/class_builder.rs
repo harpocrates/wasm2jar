@@ -254,6 +254,7 @@ impl<'g> ClassBuilder<'g> {
             methods: &self.methods,
             constants_pool: &self.constants_pool,
             method,
+            attributes: vec![],
         })
     }
 }
@@ -273,9 +274,22 @@ pub struct MethodBuilder<'a, 'g> {
 
     /// The current method
     pub method: &'g MethodData<'g>,
+
+    /// Method attributes
+    ///
+    /// The "Code" attribute will be automatically added
+    pub attributes: Vec<Attribute>,
 }
 
 impl<'a, 'g> MethodBuilder<'a, 'g> {
+    pub fn add_generic_signature(&mut self, signature: &str) -> Result<(), Error> {
+        let signature = self.constants_pool.get_utf8(signature)?;
+        let signature = Signature { signature };
+        self.attributes
+            .push(self.constants_pool.get_attribute(signature)?);
+        Ok(())
+    }
+
     pub fn finish(self) -> Result<(), Error> {
         let name_index = self.constants_pool.get_utf8(self.method.name.as_str())?;
         let descriptor_index = self
@@ -283,12 +297,13 @@ impl<'a, 'g> MethodBuilder<'a, 'g> {
             .get_utf8(&self.method.descriptor.render())?;
 
         let code = self.code.result()?;
-        let code = self.constants_pool.get_attribute(code)?;
+        let mut attributes = self.attributes;
+        attributes.push(self.constants_pool.get_attribute(code)?);
         let method = Method {
             access_flags: self.access_flags,
             name_index,
             descriptor_index,
-            attributes: vec![code],
+            attributes,
         };
 
         self.methods.push(Box::new(method));

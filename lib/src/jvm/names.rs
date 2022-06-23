@@ -175,6 +175,7 @@ impl UnqualifiedName {
     pub const INSERTARGUMENTS: Self = Self::name("insertArguments");
     pub const INTBITSTOFLOAT: Self = Self::name("intBitsToFloat");
     pub const INTVALUE: Self = Self::name("intValue");
+    pub const INVOKEEXACT: Self = Self::name("invokeExact");
     pub const LENGTH: Self = Self::name("length");
     pub const LITTLEENDIAN: Self = Self::name("LITTLE_ENDIAN");
     pub const LONGBITSTODOUBLE: Self = Self::name("longBitsToDouble");

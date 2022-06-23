@@ -122,3 +122,16 @@ pub struct Function<'g> {
     /// argument that is the module itself. In addition, it should always be a static method.
     pub method: &'g MethodData<'g>,
 }
+
+pub enum WasmImport<'a, 'g> {
+    Function {
+        /// Name of the module of the import
+        module: &'a str,
+
+        /// Name of the imported function
+        name: &'a str,
+
+        /// Field (on the main WASM object) holding the method handle
+        field: &'g FieldData<'g>,
+    },
+}

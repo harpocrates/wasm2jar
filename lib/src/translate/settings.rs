@@ -13,6 +13,9 @@ pub struct Settings {
     /// Function name prefix (eg. `func`)
     pub wasm_function_name_prefix: UnqualifiedName,
 
+    /// Name for fields associated with imports
+    pub wasm_import_name_prefix: UnqualifiedName,
+
     /// Global name prefix (eg. `global`)
     pub wasm_global_name_prefix: UnqualifiedName,
 
@@ -133,6 +136,7 @@ impl Settings {
             output_full_class_name: make_name(output_full_class_name)?,
             start_function_name: make_name("initialize")?,
             wasm_function_name_prefix: make_name("func")?,
+            wasm_import_name_prefix: make_name("imprt")?,
             wasm_global_name_prefix: make_name("global")?,
             wasm_table_name_prefix: make_name("table")?,
             wasm_memory_name_prefix: make_name("memory")?,
@@ -146,6 +150,17 @@ impl Settings {
             bitwise_floating_abs: true,
             renamer: AssertUnwindSafe(Box::new(JavaRenamer::new())),
         })
+    }
+
+    pub fn wasm_function_name(&self, func_idx: usize) -> UnqualifiedName {
+        self.wasm_function_name_prefix
+            .concat(&UnqualifiedName::number(func_idx))
+    }
+
+    /// Name given to the `MethodHandle` fields that store imported functions
+    pub fn wasm_import_name(&self, import_idx: usize) -> UnqualifiedName {
+        self.wasm_import_name_prefix
+            .concat(&UnqualifiedName::number(import_idx))
     }
 }
 

@@ -31,6 +31,9 @@ impl JavaHarness {
     /// Name of the boolean variable used to track if some test has failed
     pub const FAILURE_VAR_NAME: &'static str = "somethingFailed";
 
+    /// Name of the variable used for tracking current imports
+    pub const IMPORTS_VAR_NAME: &'static str = "currentImports";
+
     const MAX_TESTS_PER_METHOD: usize = 512;
 
     /// Create a new Java harness class
@@ -50,10 +53,17 @@ impl JavaHarness {
         };
 
         // Class pre-amble
-        harness
-            .writer
-            .inline_code("import java.lang.invoke.MethodHandle;")?;
-        harness.writer.newline()?;
+        for import in &[
+            "java.lang.invoke.MethodHandle",
+            "java.lang.invoke.MethodHandles",
+            "java.lang.invoke.MethodType",
+            "java.util.Map",
+        ] {
+            harness
+                .writer
+                .inline_code_fmt(format_args!("import {import};", import = import))?;
+            harness.writer.newline()?;
+        }
 
         harness
             .writer
@@ -96,13 +106,11 @@ impl JavaHarness {
         self.methods_generated.push(method_name);
 
         // Copy over the arguments
-        let mut needs_comma = false;
+        self.writer
+            .inline_code("Map<String, Map<String, Object>> ")?;
+        self.writer.inline_code(Self::IMPORTS_VAR_NAME)?;
         for (mod_typ, mod_name) in &self.modules_in_scope {
-            if needs_comma {
-                self.writer.inline_code(", ")?;
-            } else {
-                needs_comma = true;
-            }
+            self.writer.inline_code(", ")?;
             self.writer.inline_code(mod_typ)?;
             self.writer.inline_code(" ")?;
             self.writer.inline_code(mod_name)?;
@@ -149,8 +157,9 @@ impl JavaHarness {
         // Make the `run` method
         self.writer.newline()?;
         self.writer.inline_code_fmt(format_args!(
-            "public static boolean run{}()",
-            self.run_methods_so_far
+            "public static boolean run{}(Map<String, Map<String, Object>> {})",
+            self.run_methods_so_far,
+            Self::IMPORTS_VAR_NAME,
         ))?;
         self.writer.open_curly_block()?;
         self.writer
@@ -162,9 +171,10 @@ impl JavaHarness {
         self.writer.newline()?;
         for (mod_typ, mod_name) in &self.modules_in_scope {
             self.writer.inline_code_fmt(format_args!(
-                "{typ} {name} = new {typ}();",
+                "{typ} {name} = new {typ}({imports});",
                 name = mod_name,
                 typ = mod_typ,
+                imports = Self::IMPORTS_VAR_NAME,
             ))?;
             self.writer.newline()?;
         }
@@ -179,13 +189,9 @@ impl JavaHarness {
             ))?;
 
             // Pass in all the modules as arguments
-            let mut needs_comma = false;
+            self.writer.inline_code(Self::IMPORTS_VAR_NAME)?;
             for (_, mod_name) in &self.modules_in_scope {
-                if needs_comma {
-                    self.writer.inline_code(", ")?;
-                } else {
-                    needs_comma = true;
-                }
+                self.writer.inline_code(", ")?;
                 self.writer.inline_code(mod_name)?;
             }
 
@@ -210,16 +216,47 @@ impl JavaHarness {
         // Make a main method that has an exit code corresponding to the output of `run`
         self.writer.newline()?;
         self.writer
-            .inline_code("public static void main(String[] args)")?;
+            .inline_code("public static void main(String[] args) throws Throwable")?;
         self.writer.open_curly_block()?;
 
         self.writer
             .inline_code_fmt(format_args!("boolean {} = false;", Self::FAILURE_VAR_NAME))?;
+        self.writer.newline()?;
+
+        self.writer.inline_code_fmt(format_args!(
+            "Map<String, Map<String, Object>> {} = new java.util.HashMap<>();",
+            Self::IMPORTS_VAR_NAME
+        ))?;
+        self.writer.newline()?;
+
+        // Populate spectest
+        self.writer
+            .inline_code("final var lookup = java.lang.invoke.MethodHandles.lookup();")?;
+        self.writer.newline()?;
+        self.writer
+            .inline_code("final var spectest = new java.util.HashMap<String, Object>();")?;
+        self.writer.newline()?;
+        self.writer.inline_code(
+            "spectest.put(\"print_i32\", lookup.findVirtual(java.io.PrintStream.class, \"print\", MethodType.methodType(void.class, int.class)).bindTo(System.out));",
+        )?;
+        self.writer.newline()?;
+        self.writer.inline_code_fmt(format_args!(
+            "{}.put(\"spectest\", spectest);",
+            Self::IMPORTS_VAR_NAME
+        ))?;
+        self.writer.newline()?;
+
+        //  "print_i32_f32": console.log.bind(console),
+        //  "print_f64_f64": console.log.bind(console),
+        //  "print_f32": console.log.bind(console),
+        //  "print_f64": console.log.bind(console),
+
         for idx in 0..self.run_methods_so_far {
             self.writer.inline_code_fmt(format_args!(
-                "{failVar} = {failVar} || run{idx}();",
+                "{failVar} = {failVar} || run{idx}({imports});",
                 failVar = Self::FAILURE_VAR_NAME,
                 idx = idx,
+                imports = Self::IMPORTS_VAR_NAME,
             ))?;
             self.writer.newline()?;
         }

@@ -1,6 +1,6 @@
 use super::{
     AccessMode, BootstrapUtilities, CodeBuilderExts, Element, Error, Function, FunctionTranslator,
-    Global, MemberOrigin, Memory, Settings, Table, UtilitiesStrategy, UtilityClass,
+    Global, MemberOrigin, Memory, Settings, Table, UtilitiesStrategy, UtilityClass, WasmImport,
 };
 use crate::jvm;
 use crate::jvm::{
@@ -9,14 +9,16 @@ use crate::jvm::{
     InnerClasses, Instruction, JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name,
     NestHost, NestMembers, RefType, UnqualifiedName, Width,
 };
-use crate::wasm::{ref_type_from_general, StackType, TableType, WasmModuleResourcesExt};
+use crate::wasm::{
+    ref_type_from_general, FunctionType, StackType, TableType, WasmModuleResourcesExt,
+};
 use std::iter;
 use wasmparser::types::Types;
 use wasmparser::{
     Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader, Export,
-    ExportSectionReader, ExternalKind, FunctionBody, GlobalSectionReader, Import,
-    ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
-    TableSectionReader, TypeRef, Validator,
+    ExportSectionReader, ExternalKind, FunctionBody, FunctionSectionReader, GlobalSectionReader,
+    Import, ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
+    TableSectionReader, TypeDef, TypeRef, TypeSectionReader, Validator,
 };
 
 /// Main entry point for translating a WASM module
@@ -35,6 +37,12 @@ pub struct ModuleTranslator<'a, 'g> {
 
     /// Populated when we visit exports
     exports: Vec<Export<'a>>,
+
+    /// Populated when we visit imports
+    imports: Vec<WasmImport<'a, 'g>>,
+
+    /// Populated as soon as we visit the type section
+    types: Vec<FunctionType>,
 
     /// Populated when we visit functions
     functions: Vec<Function<'g>>,
@@ -97,7 +105,9 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             class_graph,
             current_part,
             utilities,
+            types: vec![],
             exports: vec![],
+            imports: vec![],
             functions: vec![],
             tables: vec![],
             memories: vec![],
@@ -189,7 +199,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 encoding,
                 range,
             } => self.validator.version(num, encoding, &range)?,
-            Payload::TypeSection(section) => self.validator.type_section(&section)?,
+            Payload::TypeSection(section) => self.visit_types(section)?,
             Payload::ImportSection(section) => self.visit_imports(section)?,
             Payload::AliasSection(section) => self.validator.alias_section(&section)?,
             Payload::InstanceSection(section) => self.validator.instance_section(&section)?,
@@ -198,7 +208,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             Payload::TagSection(section) => self.validator.tag_section(&section)?,
             Payload::GlobalSection(section) => self.visit_globals(section)?,
             Payload::ExportSection(section) => self.visit_exports(section)?,
-            Payload::FunctionSection(section) => self.validator.function_section(&section)?,
+            Payload::FunctionSection(section) => self.visit_function_declarations(section)?,
             Payload::StartSection { func, range } => self.validator.start_section(func, &range)?,
             Payload::ElementSection(section) => self.visit_elements(section)?,
             Payload::DataCountSection { count, range } => {
@@ -239,36 +249,22 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     fn visit_function_body(&mut self, function_body: FunctionBody) -> Result<(), Error> {
         let validator = self.validator.code_section_entry(&function_body)?;
 
-        // Build up the type and argument
-        let typ = validator
-            .resources()
-            .function_idx_type(self.current_func_idx)?;
-
-        // Build up a method descriptor, which includes a trailing "WASM module" argument
-        let mut method_descriptor = typ.method_descriptor(&self.class.java.classes);
-        method_descriptor
-            .parameters
-            .push(FieldType::object(self.class.class));
-
-        let mut method_builder = self.current_part.class.start_method(
-            MethodAccessFlags::STATIC,
-            self.settings
-                .wasm_function_name_prefix
-                .concat(&UnqualifiedName::number(self.current_func_idx as usize)),
-            method_descriptor,
-        )?;
-        self.functions.push(Function {
-            func_type: typ.clone(),
-            method: method_builder.method,
-        });
+        // Look up the previously declared method and start implementing it
+        let function = &self.functions[self.current_func_idx as usize];
+        self.current_func_idx += 1;
+        let mut method_builder = self
+            .current_part
+            .class
+            .implement_method(MethodAccessFlags::STATIC, function.method)?;
 
         let mut function_translator = FunctionTranslator::new(
-            typ,
+            &function.func_type,
             &self.settings,
             &mut self.utilities,
             &mut self.current_part.bootstrap,
             &mut method_builder.code,
             self.class.class,
+            &self.functions,
             &self.tables,
             &self.memories,
             &self.globals,
@@ -278,7 +274,6 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         function_translator.translate()?;
 
         method_builder.finish()?;
-        self.current_func_idx += 1;
 
         Ok(())
     }
@@ -335,6 +330,51 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         Ok(())
     }
 
+    /// Visit type section
+    ///
+    /// Ideally, we wouldn't need to manually track this since `wasmparser` already needs to track
+    /// this information. However, we only get access in a function validator, which is too late.
+    fn visit_types(&mut self, types: TypeSectionReader<'a>) -> Result<(), Error> {
+        self.validator.type_section(&types)?;
+        for ty in types {
+            match ty? {
+                TypeDef::Func(func_type) => {
+                    self.types.push(FunctionType::from_general(&func_type)?);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Visit function section
+    fn visit_function_declarations(
+        &mut self,
+        functions: FunctionSectionReader<'a>,
+    ) -> Result<(), Error> {
+        self.validator.function_section(&functions)?;
+        for (func_idx, func_type_idx) in functions.into_iter().enumerate() {
+            // Offset by imported functions
+            let func_idx = func_idx + self.current_func_idx as usize;
+
+            // Build up a method descriptor, which includes a trailing "WASM module" argument
+            let func_type = self.types[func_type_idx? as usize].clone();
+            let mut descriptor = func_type.method_descriptor(&self.class.java.classes);
+            descriptor
+                .parameters
+                .push(FieldType::object(self.class.class));
+
+            let method = self.class_graph.add_method(MethodData {
+                class: self.current_part.class.class, // TODO: choose the right part here
+                name: self.settings.wasm_function_name(func_idx),
+                descriptor,
+                is_static: true,
+            });
+
+            self.functions.push(Function { func_type, method });
+        }
+        Ok(())
+    }
+
     /// Visit the imports
     fn visit_imports(&mut self, imports: ImportSectionReader<'a>) -> Result<(), Error> {
         self.validator.import_section(&imports)?;
@@ -373,7 +413,64 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 });
             }
 
-            TypeRef::Func(_) => todo!("import function"),
+            TypeRef::Func(func_type_idx) => {
+                let java = &self.class.java;
+
+                // This is the index which which the imported function is called
+                let func_idx = self.current_func_idx;
+                self.current_func_idx += 1;
+
+                // This is the expected descriptor of the imported function
+                let func_type = self.types[func_type_idx as usize].clone();
+                let imported_descriptor = func_type.method_descriptor(&java.classes);
+
+                // Build up a method descriptor, which includes a trailing "WASM module" argument
+                let mut descriptor = imported_descriptor.clone();
+                descriptor
+                    .parameters
+                    .push(FieldType::object(self.class.class));
+
+                // Field that will store the `MethodHandle` corresponding to the imported function
+                let field = self.class.add_field(
+                    FieldAccessFlags::PRIVATE | FieldAccessFlags::FINAL,
+                    self.settings.wasm_import_name(func_idx as usize),
+                    FieldType::object(java.classes.lang.invoke.method_handle),
+                )?;
+                self.imports.push(WasmImport::Function {
+                    field,
+                    module: import.module,
+                    name: import.name,
+                });
+
+                // Trampoline method, whose sole responsibility is to invoke the method handle
+                let mut method_builder = self.current_part.class.start_method(
+                    MethodAccessFlags::STATIC,
+                    self.settings.wasm_function_name(func_idx as usize),
+                    descriptor.clone(),
+                )?;
+                self.functions.push(Function {
+                    func_type,
+                    method: method_builder.method,
+                });
+                let code = &mut method_builder.code;
+
+                // `wasmModule.importedMethodHandle.invokeExact(arg0, ..., argn)`
+                code.get_local(
+                    imported_descriptor.parameter_length(false) as u16,
+                    &FieldType::object(self.class.class),
+                )?;
+                code.access_field(field, AccessMode::Read)?;
+                let mut offset = 0;
+                for parameter in &imported_descriptor.parameters {
+                    code.get_local(offset, parameter)?;
+                    offset += parameter.width() as u16;
+                }
+                let return_type = imported_descriptor.return_type;
+                code.invoke_invoke_exact(imported_descriptor)?;
+                code.return_(return_type)?;
+
+                method_builder.finish()?;
+            }
             TypeRef::Memory(_) => todo!("import memory"),
             TypeRef::Tag(_) => todo!("import tag"),
         }
@@ -556,16 +653,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                         .get_local(0, &FieldType::object(self.class.class))?;
 
                     // Call the implementation
-                    let method_name = self
-                        .settings
-                        .wasm_function_name_prefix
-                        .concat(&UnqualifiedName::number(export.index as usize));
-                    let method = self.class_graph.add_method(MethodData {
-                        class: self.current_part.class.class,
-                        name: method_name,
-                        descriptor: underlying_descriptor,
-                        is_static: true,
-                    });
+                    let method = self.functions[export.index as usize].method;
                     method_builder.code.invoke(method)?;
                     method_builder.code.return_(export_descriptor.return_type)?;
 
@@ -612,9 +700,12 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             MethodAccessFlags::PUBLIC,
             UnqualifiedName::INIT,
             MethodDescriptor {
-                parameters: vec![],
+                parameters: vec![FieldType::object(self.class.java.classes.util.map)],
                 return_type: None,
             },
+        )?;
+        method_builder.add_generic_signature(
+            "(Ljava/util/Map<Ljava/lang/String;Ljava/util/Map<Ljava/lang/String;Ljava/lang/Object;>;>;)V"
         )?;
         let jvm_code = &mut method_builder.code;
 
@@ -677,6 +768,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 init_expr,
             } = element.kind
             {
+                let offset_var = 2;
                 let table = &self.tables[table_index as usize];
                 if !table.origin.exported {
                     // Load onto the stack the table array
@@ -685,11 +777,11 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
                     // Store the starting offset in a local variable
                     self.translate_init_expr(jvm_code, &init_expr)?;
-                    jvm_code.push_instruction(Instruction::IStore(1))?;
+                    jvm_code.push_instruction(Instruction::IStore(offset_var))?;
 
                     for item in &element.items {
                         jvm_code.push_instruction(Instruction::Dup)?;
-                        jvm_code.push_instruction(Instruction::ILoad(1))?;
+                        jvm_code.push_instruction(Instruction::ILoad(offset_var))?;
                         match item {
                             ElementItem::Func(func_idx) => {
                                 let method = self.functions[*func_idx as usize].method;
@@ -701,12 +793,12 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                             }
                         }
                         jvm_code.push_instruction(Instruction::AAStore)?;
-                        jvm_code.push_instruction(Instruction::IInc(1, 1))?;
+                        jvm_code.push_instruction(Instruction::IInc(offset_var, 1))?;
                     }
 
                     // Kill the local variable, drop the array
                     jvm_code.push_instruction(Instruction::Pop)?;
-                    jvm_code.push_instruction(Instruction::IKill(1))?;
+                    jvm_code.push_instruction(Instruction::IKill(offset_var))?;
                 } else {
                     todo!()
                 }
@@ -747,6 +839,44 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 }
             }
         }
+
+        // Read from imports
+        jvm_code.push_instruction(Instruction::ALoad(0))?;
+        jvm_code.push_instruction(Instruction::ALoad(1))?;
+        for import in &self.imports {
+            jvm_code.push_instruction(Instruction::Dup2)?;
+            match import {
+                WasmImport::Function {
+                    module,
+                    name,
+                    field,
+                } => {
+                    /* TODO: error handling for
+                     *
+                     *   - missing module or function in module
+                     *   - method handle that doesn't have the right expected type
+                     */
+
+                    // Get the module
+                    jvm_code.const_string(module.to_string())?;
+                    jvm_code.invoke(jvm_code.java.members.util.map.get)?;
+                    jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
+                        jvm_code.java.classes.util.map,
+                    )))?;
+
+                    // Get the imported handle
+                    jvm_code.const_string(name.to_string())?;
+                    jvm_code.invoke(jvm_code.java.members.util.map.get)?;
+                    jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
+                        jvm_code.java.classes.lang.invoke.method_handle,
+                    )))?;
+
+                    // Assign it to the right field
+                    jvm_code.access_field(field, AccessMode::Write)?;
+                }
+            }
+        }
+        jvm_code.push_instruction(Instruction::Pop2)?;
 
         // Exports object
         // TODO: make unmodifiable

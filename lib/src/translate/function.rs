@@ -1,11 +1,10 @@
 use super::{
-    AccessMode, BootstrapUtilities, BranchCond, CodeBuilderExts, Error, Global, Memory, Settings,
-    Table, UtilityClass, UtilityMethod,
+    AccessMode, BootstrapUtilities, BranchCond, CodeBuilderExts, Error, Function, Global, Memory,
+    Settings, Table, UtilityClass, UtilityMethod,
 };
 use crate::jvm::{
     BaseType, BranchInstruction, BytecodeBuilder, ClassData, EqComparison, FieldType, Instruction,
-    MethodData, MethodDescriptor, OffsetVec, OrdComparison, RefType, SynLabel, UnqualifiedName,
-    Width,
+    MethodDescriptor, OffsetVec, OrdComparison, RefType, SynLabel, UnqualifiedName, Width,
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
@@ -22,7 +21,7 @@ use wasmparser::{
 /// Context for translating a WASM function into a JVM one
 pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
     /// WASM type of the function being translated
-    function_typ: FunctionType,
+    function_typ: &'b FunctionType,
 
     /// Translation settings
     settings: &'b Settings,
@@ -38,6 +37,9 @@ pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
 
     /// Main module class
     class: &'g ClassData<'g>,
+
+    /// Functions
+    wasm_functions: &'b [Function<'g>],
 
     /// Tables
     wasm_tables: &'b [Table<'g>],
@@ -69,12 +71,13 @@ pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
 
 impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
     pub fn new(
-        function_typ: FunctionType,
+        function_typ: &'b FunctionType,
         settings: &'b Settings,
         utilities: &'b mut UtilityClass<'g>,
         bootstrap_utilities: &'b mut BootstrapUtilities<'g>,
         jvm_code: &'b mut BytecodeBuilder<'c, 'g>,
         class: &'g ClassData<'g>,
+        wasm_functions: &'b [Function<'g>],
         wasm_tables: &'b [Table<'g>],
         wasm_memories: &'b [Memory<'g>],
         wasm_globals: &'b [Global<'a, 'g>],
@@ -97,6 +100,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             jvm_code,
             jvm_locals,
             class,
+            wasm_functions,
             wasm_tables,
             wasm_memories,
             wasm_globals,
@@ -827,13 +831,8 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
                 self.visit_cond(BranchCond::IfNull(EqComparison::EQ), next_op)?
             }
             Operator::RefFunc { function_index } => {
-                let func_typ = self
-                    .wasm_validator
-                    .resources()
-                    .function_idx_type(function_index)?;
-
-                let method = self.bad_get_func(function_index, &func_typ);
-                self.jvm_code.const_methodhandle(method)?;
+                let function = &self.wasm_functions[function_index as usize];
+                self.jvm_code.const_methodhandle(function.method)?;
             }
 
             _ => todo!(),
@@ -1256,57 +1255,20 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
     }
 
     /// Visit a call
-    fn visit_call(&mut self, func_idx: u32) -> Result<(), Error> {
-        let func_typ = self
-            .wasm_validator
-            .resources()
-            .function_idx_type(func_idx)?;
+    fn visit_call(&mut self, function_index: u32) -> Result<(), Error> {
+        let function = &self.wasm_functions[function_index as usize];
 
         // Load the module reference onto the stack (it is always the last argument)
         let (off, field_type) = self.jvm_locals.lookup_this()?;
         self.jvm_code.get_local(off, &field_type)?;
 
-        let method = self.bad_get_func(func_idx, &func_typ);
-
-        self.jvm_code.invoke(method)?;
-        if func_typ.outputs.len() > 1 {
-            self.unpack_stack_from_array(&func_typ.outputs)?;
+        // Call the corresponding method and unpack the outputs if need be
+        self.jvm_code.invoke(function.method)?;
+        if function.func_type.outputs.len() > 1 {
+            self.unpack_stack_from_array(&function.func_type.outputs)?;
         }
 
         Ok(())
-    }
-
-    // TODO: this is a terrible, no good hack:
-    //
-    //   - we shouldn't be modifying the class graph in the function translation (worse even:
-    //     the addition we make here might be redundant!)
-    //   - we shouldn't assume that the function is in `Part0`
-    //   - we shouldn't assume that the function index is directly into functions defined in
-    //     this module (imported functions come first!)
-    //
-    fn bad_get_func(&self, func_idx: u32, func_typ: &FunctionType) -> &'g MethodData<'g> {
-        let class_name = self
-            .settings
-            .output_full_class_name
-            .concat(&UnqualifiedName::DOLLAR)
-            .concat(&self.settings.part_short_class_name)
-            .concat(&UnqualifiedName::number(0));
-        let method_name = self
-            .settings
-            .wasm_function_name_prefix
-            .concat(&UnqualifiedName::number(func_idx as usize));
-
-        let class_graph = self.jvm_code.class_graph;
-        let mut desc = func_typ.method_descriptor(&self.jvm_code.java.classes);
-        desc.parameters.push(FieldType::object(self.class));
-        class_graph.add_method(MethodData {
-            class: class_graph
-                .lookup_class(&class_name)
-                .expect("part class not in class graph"),
-            name: method_name.clone(),
-            descriptor: desc,
-            is_static: true,
-        })
     }
 
     /// Visit a `call_indirect`
@@ -1331,7 +1293,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         self.jvm_code
             .push_instruction(Instruction::ALoad(this_off))?;
         self.jvm_code
-            .invoke_dynamic(bootstrap_method, &UnqualifiedName::CALLINDIRECT, &desc)?;
+            .invoke_dynamic(bootstrap_method, UnqualifiedName::CALLINDIRECT, desc)?;
         if func_typ.outputs.len() > 1 {
             self.unpack_stack_from_array(&func_typ.outputs)?;
         }
@@ -1570,7 +1532,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             parameters: vec![FieldType::int()],
             return_type: Some(table.table_type.field_type(&self.jvm_code.java.classes)),
         };
-        self.visit_table_operator(table_idx, &UnqualifiedName::TABLEGET, desc)?;
+        self.visit_table_operator(table_idx, UnqualifiedName::TABLEGET, desc)?;
 
         Ok(())
     }
@@ -1586,7 +1548,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             ],
             return_type: None,
         };
-        self.visit_table_operator(table_idx, &UnqualifiedName::TABLESET, desc)?;
+        self.visit_table_operator(table_idx, UnqualifiedName::TABLESET, desc)?;
 
         Ok(())
     }
@@ -1602,7 +1564,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             ],
             return_type: Some(FieldType::int()),
         };
-        self.visit_table_operator(table_idx, &UnqualifiedName::TABLEGROW, desc)?;
+        self.visit_table_operator(table_idx, UnqualifiedName::TABLEGROW, desc)?;
 
         Ok(())
     }
@@ -1613,7 +1575,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             parameters: vec![],
             return_type: Some(FieldType::int()),
         };
-        self.visit_table_operator(table_idx, &UnqualifiedName::TABLESIZE, desc)?;
+        self.visit_table_operator(table_idx, UnqualifiedName::TABLESIZE, desc)?;
 
         Ok(())
     }
@@ -1630,7 +1592,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             ],
             return_type: None,
         };
-        self.visit_table_operator(table_idx, &UnqualifiedName::TABLEFILL, desc)?;
+        self.visit_table_operator(table_idx, UnqualifiedName::TABLEFILL, desc)?;
 
         Ok(())
     }
@@ -1640,7 +1602,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
     fn visit_table_operator(
         &mut self,
         table_idx: u32,
-        method_name: &UnqualifiedName,
+        method_name: UnqualifiedName,
         mut method_type: MethodDescriptor<&'g ClassData<'g>>,
     ) -> Result<(), Error> {
         let table = &self.wasm_tables[table_idx as usize];
@@ -1660,7 +1622,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         self.jvm_code
             .push_instruction(Instruction::ALoad(this_off))?;
         self.jvm_code
-            .invoke_dynamic(bootstrap_method, method_name, &method_type)?;
+            .invoke_dynamic(bootstrap_method, method_name, method_type)?;
 
         Ok(())
     }
@@ -1758,7 +1720,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             parameters: vec![FieldType::int()],
             return_type: Some(FieldType::int()),
         };
-        self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYGROW, desc)?;
+        self.visit_memory_operator(memory_idx, UnqualifiedName::MEMORYGROW, desc)?;
 
         Ok(())
     }
@@ -1769,7 +1731,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             parameters: vec![FieldType::int(), FieldType::int(), FieldType::int()],
             return_type: None,
         };
-        self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYFILL, desc)?;
+        self.visit_memory_operator(memory_idx, UnqualifiedName::MEMORYFILL, desc)?;
 
         Ok(())
     }
@@ -1780,7 +1742,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             parameters: vec![],
             return_type: Some(FieldType::int()),
         };
-        self.visit_memory_operator(memory_idx, &UnqualifiedName::MEMORYSIZE, desc)?;
+        self.visit_memory_operator(memory_idx, UnqualifiedName::MEMORYSIZE, desc)?;
 
         Ok(())
     }
@@ -1790,7 +1752,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
     fn visit_memory_operator(
         &mut self,
         memory_idx: u32,
-        method_name: &UnqualifiedName,
+        method_name: UnqualifiedName,
         mut method_type: MethodDescriptor<&'g ClassData<'g>>,
     ) -> Result<(), Error> {
         let memory = &self.wasm_memories[memory_idx as usize];
@@ -1810,7 +1772,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         self.jvm_code
             .push_instruction(Instruction::ALoad(this_off))?;
         self.jvm_code
-            .invoke_dynamic(bootstrap_method, method_name, &method_type)?;
+            .invoke_dynamic(bootstrap_method, method_name, method_type)?;
 
         Ok(())
     }

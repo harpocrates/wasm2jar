@@ -14,7 +14,7 @@ use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::ops::Not;
 use wasmparser::{
-    BlockType, BrTable, FuncValidator, FunctionBody, MemoryImmediate, Operator, Type,
+    BlockType, BrTable, FuncValidator, FunctionBody, MemoryImmediate, Operator, ValType,
     ValidatorResources,
 };
 
@@ -129,7 +129,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         for _ in 0..reader.read_var_u32()? {
             let offset = reader.original_position();
             let count = reader.read_var_u32()?;
-            let local_type = reader.read_type()?;
+            let local_type = reader.read_val_type()?;
             self.wasm_validator
                 .define_locals(offset, count, local_type)?;
 
@@ -1178,7 +1178,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
     }
 
     /// Visit a `select`
-    fn visit_select(&mut self, ty: Option<Type>, condition: BranchCond) -> Result<(), Error> {
+    fn visit_select(&mut self, ty: Option<ValType>, condition: BranchCond) -> Result<(), Error> {
         let ty = match ty {
             None => None,
             Some(ty) => Some(StackType::from_general(ty)?),

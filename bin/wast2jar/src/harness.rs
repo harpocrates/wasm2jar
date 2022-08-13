@@ -9,8 +9,11 @@ use std::panic::catch_unwind;
 use std::path::Path;
 use std::process::Command;
 use wasm2jar::{jvm, translate};
+use wast::component::Component;
+use wast::core::Module;
 use wast::parser::{self, ParseBuffer};
-use wast::{Float32, Float64, Id, Module, QuoteModule, Span, Wast, WastDirective, Wat};
+use wast::token::{Float32, Float64, Id, Span};
+use wast::{QuoteWat, Wast, WastDirective, Wat};
 
 pub struct TestHarness<'a> {
     /// Path of the initial WAST source (re-interpreted into a string as best as possible)
@@ -93,22 +96,8 @@ impl<'a> TestHarness<'a> {
         use jvm::Name;
 
         match directive {
-            WastDirective::Module(module) => {
+            WastDirective::Wat(module) => {
                 self.end_java_harness(false)?;
-                let module = QuoteModule::Module(module);
-                for (class_name, class) in self.visit_module(module)? {
-                    let class_file = self
-                        .output_directory
-                        .join(format!("{}.class", class_name.as_str()));
-                    class
-                        .save_to_path(&class_file, true)
-                        .map_err(|err| translate::Error::BytecodeGen(jvm::Error::IoError(err)))?;
-                }
-            }
-
-            WastDirective::QuoteModule { source, .. } => {
-                self.end_java_harness(false)?;
-                let module = QuoteModule::Quote(source);
                 for (class_name, class) in self.visit_module(module)? {
                     let class_file = self
                         .output_directory
@@ -357,11 +346,13 @@ impl<'a> TestHarness<'a> {
     /// Try to translate a module
     fn visit_module(
         &mut self,
-        module: QuoteModule<'a>,
+        module: QuoteWat<'a>,
     ) -> Result<Vec<(jvm::BinaryName, jvm::ClassFile)>, TestError> {
         let id: Option<Id<'a>> = match &module {
-            QuoteModule::Module(Module { id, .. }) => *id,
-            QuoteModule::Quote(_) => None,
+            QuoteWat::Wat(Wat::Module(Module { id, .. })) => *id,
+            QuoteWat::Wat(Wat::Component(Component { id, .. })) => *id,
+            QuoteWat::QuoteModule(_, _) => None,
+            QuoteWat::QuoteComponent(_, _) => None,
         };
         let name = if let Some(id) = id {
             let name = id.name().to_owned();
@@ -375,18 +366,8 @@ impl<'a> TestHarness<'a> {
 
         // Translate the module
         let settings = translate::Settings::new(&name, None)?;
-        let wasm_bytes: Vec<u8> = match module {
-            QuoteModule::Module(mut module) => module.encode()?,
-            QuoteModule::Quote(wat_bytes) => {
-                let mut wat_str = String::new();
-                for wat_byte_line in wat_bytes {
-                    wat_str.push_str(&String::from_utf8_lossy(wat_byte_line));
-                    wat_str.push('\n');
-                }
-                let wat_buf = ParseBuffer::new(&wat_str)?;
-                parser::parse::<Wat>(&wat_buf)?.module.encode()?
-            }
-        };
+        let mut module = module;
+        let wasm_bytes: Vec<u8> = module.encode()?;
 
         let translation_result =
             || -> Result<Vec<(jvm::BinaryName, jvm::ClassFile)>, translate::Error> {
@@ -419,7 +400,7 @@ impl<'a> TestHarness<'a> {
     /// Try to translate a module, expecting to get a certain error message
     fn visit_module_expecting_error(
         &mut self,
-        module: QuoteModule<'a>,
+        module: QuoteWat<'a>,
         span: Span,
         expecting_message: &str,
         expecting_invalid: bool, // otherwise it` is expecting malformed
@@ -533,7 +514,7 @@ impl<'a> TestHarness<'a> {
 
         match execute {
             WastExecute::Invoke(invoke) => Self::java_invoke(invoke, java_writer)?,
-            WastExecute::Module(_) => return Err(TestError::IncompleteHarness("module")),
+            WastExecute::Wat(_) => return Err(TestError::IncompleteHarness("wat module")),
             WastExecute::Get { module, global } => {
                 let name = match module {
                     None => String::from("current"),
@@ -581,11 +562,11 @@ impl<'a> TestHarness<'a> {
 
     /// Print a WAST expression into a Java expression
     pub fn java_expr<W: io::Write>(
-        expr: &wast::Expression,
+        expr: &wast::core::Expression,
         java_writer: &mut JavaWriter<W>,
     ) -> io::Result<()> {
         use std::num::FpCategory;
-        use wast::Instruction;
+        use wast::core::Instruction;
 
         let instrs = &expr.instrs;
         assert_eq!(

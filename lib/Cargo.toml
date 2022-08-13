@@ -3,9 +3,12 @@ name = "wasm2jar"
 version = "0.1.0"
 authors = ["Alec Theriault <alec.theriault@gmail.com>"]
 edition = "2021"
+rust-version = "1.63"
+repository = "https://github.com/harpocrates/wasm2jar/tree/main/lib"
+categories = ["command-line-utilities", "wasm", "compilers"]
 
 [dependencies]
-wasmparser = "0.84.0"
+wasmparser = "0.88.0"
 bitflags = "1.3.2"
 byteorder = "1.4.3"
 log = "0.4"

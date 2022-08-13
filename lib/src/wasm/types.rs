@@ -1,5 +1,5 @@
 use crate::jvm::{ClassData, FieldType, JavaClasses, MethodDescriptor, RefType, Width};
-use wasmparser::{Type, WasmFuncType};
+use wasmparser::{ValType, WasmFuncType};
 
 /// Subset of WASM types that we know how to put on the WASM stack
 #[derive(Debug, Copy, Clone)]
@@ -26,14 +26,14 @@ impl StackType {
     }
 
     /// Mapping from general types into stack types
-    pub const fn from_general(wasm_type: Type) -> Result<StackType, BadType> {
+    pub const fn from_general(wasm_type: ValType) -> Result<StackType, BadType> {
         Ok(match wasm_type {
-            Type::I32 => StackType::I32,
-            Type::I64 => StackType::I64,
-            Type::F32 => StackType::F32,
-            Type::F64 => StackType::F64,
-            Type::FuncRef => StackType::FuncRef,
-            Type::ExternRef => StackType::ExternRef,
+            ValType::I32 => StackType::I32,
+            ValType::I64 => StackType::I64,
+            ValType::F32 => StackType::F32,
+            ValType::F64 => StackType::F64,
+            ValType::FuncRef => StackType::FuncRef,
+            ValType::ExternRef => StackType::ExternRef,
             _ => return Err(BadType::UnsupportedType(wasm_type)),
         })
     }
@@ -41,12 +41,12 @@ impl StackType {
 
 /// Mapping from general types into reference types
 pub const fn ref_type_from_general<'g>(
-    wasm_type: Type,
+    wasm_type: ValType,
     java: &JavaClasses<'g>,
 ) -> Result<RefType<&'g ClassData<'g>>, BadType> {
     Ok(match wasm_type {
-        Type::FuncRef => RefType::Object(java.lang.invoke.method_handle),
-        Type::ExternRef => RefType::Object(java.lang.object),
+        ValType::FuncRef => RefType::Object(java.lang.invoke.method_handle),
+        ValType::ExternRef => RefType::Object(java.lang.object),
         _ => return Err(BadType::UnsupportedReferenceType(wasm_type)),
     })
 }
@@ -127,10 +127,10 @@ impl TableType {
     }
 
     /// Mapping from general types into table types
-    pub const fn from_general(wasm_type: Type) -> Result<TableType, BadType> {
+    pub const fn from_general(wasm_type: ValType) -> Result<TableType, BadType> {
         Ok(match wasm_type {
-            Type::FuncRef => TableType::FuncRef,
-            Type::ExternRef => TableType::ExternRef,
+            ValType::FuncRef => TableType::FuncRef,
+            ValType::ExternRef => TableType::ExternRef,
             _ => return Err(BadType::UnsupportedTableType(wasm_type)),
         })
     }
@@ -139,9 +139,9 @@ impl TableType {
 /// Ways in which types can go wrong
 #[derive(Debug)]
 pub enum BadType {
-    UnsupportedType(Type),
-    UnsupportedReferenceType(Type),
-    UnsupportedTableType(Type),
+    UnsupportedType(ValType),
+    UnsupportedReferenceType(ValType),
+    UnsupportedTableType(ValType),
     MissingTypeIdx(u32),
     MissingFuncIdx(u32),
 }

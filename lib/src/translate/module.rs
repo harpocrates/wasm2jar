@@ -18,7 +18,7 @@ use wasmparser::{
     Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader, Export,
     ExportSectionReader, ExternalKind, FunctionBody, FunctionSectionReader, GlobalSectionReader,
     Import, ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
-    TableSectionReader, TypeDef, TypeRef, TypeSectionReader, Validator,
+    TableSectionReader, Type, TypeRef, TypeSectionReader, Validator,
 };
 
 /// Main entry point for translating a WASM module
@@ -230,8 +230,15 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             Payload::ComponentImportSection(section) => {
                 self.validator.component_import_section(&section)?
             }
-            Payload::ComponentFunctionSection(section) => {
-                self.validator.component_function_section(&section)?
+            Payload::CoreTypeSection(section) => self.validator.core_type_section(&section)?,
+            Payload::ComponentInstanceSection(section) => {
+                self.validator.component_instance_section(&section)?
+            }
+            Payload::ComponentCanonicalSection(section) => {
+                self.validator.component_canonical_section(&section)?
+            }
+            Payload::ComponentAliasSection(section) => {
+                self.validator.component_alias_section(&section)?
             }
             Payload::ComponentSection { range, .. } => self.validator.component_section(&range)?,
             Payload::ComponentExportSection(section) => {
@@ -338,7 +345,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         self.validator.type_section(&types)?;
         for ty in types {
             match ty? {
-                TypeDef::Func(func_type) => {
+                Type::Func(func_type) => {
                     self.types.push(FunctionType::from_general(&func_type)?);
                 }
             }

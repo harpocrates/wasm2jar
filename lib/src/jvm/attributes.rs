@@ -271,6 +271,9 @@ impl Serialize for NestMembers {
     }
 }
 
+/// Every inner class referenced in a class' constant pool must be included in the inner classes
+/// attribute on the class.
+///
 /// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7.6
 #[derive(Debug)]
 pub struct InnerClasses(pub Vec<InnerClass>);

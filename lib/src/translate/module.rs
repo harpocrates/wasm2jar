@@ -1,6 +1,6 @@
 use super::{
     AccessMode, BootstrapUtilities, CodeBuilderExts, Element, Error, Function, FunctionTranslator,
-    Global, MemberOrigin, Memory, Settings, Table, UtilitiesStrategy, UtilityClass, WasmImport,
+    Global, MemberOrigin, Memory, Settings, Table, UtilitiesStrategy, UtilityClass, ImportName, ExportName
 };
 use crate::jvm;
 use crate::jvm::{
@@ -10,12 +10,12 @@ use crate::jvm::{
     NestHost, NestMembers, RefType, UnqualifiedName, Width,
 };
 use crate::wasm::{
-    ref_type_from_general, FunctionType, StackType, TableType, WasmModuleResourcesExt,
+    ref_type_from_general, FunctionType, StackType, TableType,
 };
 use std::iter;
 use wasmparser::types::Types;
 use wasmparser::{
-    Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader, Export,
+    Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader,
     ExportSectionReader, ExternalKind, FunctionBody, FunctionSectionReader, GlobalSectionReader,
     Import, ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
     TableSectionReader, Type, TypeRef, TypeSectionReader, Validator,
@@ -35,17 +35,11 @@ pub struct ModuleTranslator<'a, 'g> {
     /// Utility class (just a carrier for whatever helper methods we may want)
     utilities: UtilityClass<'g>,
 
-    /// Populated when we visit exports
-    exports: Vec<Export<'a>>,
-
-    /// Populated when we visit imports
-    imports: Vec<WasmImport<'a, 'g>>,
-
     /// Populated as soon as we visit the type section
     types: Vec<FunctionType>,
 
     /// Populated when we visit functions
-    functions: Vec<Function<'g>>,
+    functions: Vec<Function<'a, 'g>>,
 
     /// Populated when we visit tables
     tables: Vec<Table<'g>>,
@@ -106,8 +100,6 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             current_part,
             utilities,
             types: vec![],
-            exports: vec![],
-            imports: vec![],
             functions: vec![],
             tables: vec![],
             memories: vec![],
@@ -377,7 +369,13 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 is_static: true,
             });
 
-            self.functions.push(Function { func_type, method });
+            self.functions.push(Function {
+                func_type,
+                method,
+                tailcall_method: None,
+                import: None,
+                export: None,
+            });
         }
         Ok(())
     }
@@ -438,16 +436,15 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     .push(FieldType::object(self.class.class));
 
                 // Field that will store the `MethodHandle` corresponding to the imported function
-                let field = self.class.add_field(
+                let import_field = self.class.add_field(
                     FieldAccessFlags::PRIVATE | FieldAccessFlags::FINAL,
                     self.settings.wasm_import_name(func_idx as usize),
                     FieldType::object(java.classes.lang.invoke.method_handle),
                 )?;
-                self.imports.push(WasmImport::Function {
-                    field,
+                let import_name = ImportName {
                     module: import.module,
                     name: import.name,
-                });
+                };
 
                 // Trampoline method, whose sole responsibility is to invoke the method handle
                 let mut method_builder = self.current_part.class.start_method(
@@ -458,6 +455,9 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 self.functions.push(Function {
                     func_type,
                     method: method_builder.method,
+                    tailcall_method: None,
+                    import: Some((import_name, import_field)),
+                    export: None,
                 });
                 let code = &mut method_builder.code;
 
@@ -466,7 +466,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     imported_descriptor.parameter_length(false) as u16,
                     &FieldType::object(self.class.class),
                 )?;
-                code.access_field(field, AccessMode::Read)?;
+                code.access_field(import_field, AccessMode::Read)?;
                 let mut offset = 0;
                 for parameter in &imported_descriptor.parameters {
                     code.get_local(offset, parameter)?;
@@ -579,13 +579,22 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
     /// Visit the exports
     ///
-    /// The actual processing of the exports is in `generate_exports`, since the module resources
-    /// aren't ready at this point.
+    /// The actual processing of the exports is in `generate_constructor` or `generate_exports`,
+    /// since the module resources aren't ready at this point.
     fn visit_exports(&mut self, exports: ExportSectionReader<'a>) -> Result<(), Error> {
         self.validator.export_section(&exports)?;
         for export in exports {
             let export = export?;
+            let export_name = ExportName { name: export.name };
             match export.kind {
+                ExternalKind::Func => {
+                    let function: &mut Function = self
+                        .functions
+                        .get_mut(export.index as usize)
+                        .expect("Exporting function that doesn't exist");
+                    function.export = Some((export_name, self.settings.methods_for_function_exports));
+                }
+
                 ExternalKind::Table => {
                     let table: &mut Table = self
                         .tables
@@ -619,55 +628,51 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     global.origin.exported = true;
                 }
 
-                _ => self.exports.push(export),
+                _ => unimplemented!(),
             }
         }
         Ok(())
     }
 
     /// Generate members in the outer class corresponding to exports
-    fn generate_exports(&mut self, types: &Types) -> Result<(), Error> {
-        for export in &self.exports {
-            log::trace!("Export {:?}", export);
-            match export.kind {
-                ExternalKind::Func => {
-                    // Exported function
-                    let export_descriptor = types
-                        .function_idx_type(export.index)?
-                        .method_descriptor(&self.class.java.classes);
+    fn generate_exports(&mut self) -> Result<(), Error> {
+        for function in &self.functions {
+            let export_name = if let Some((ExportName { name }, true)) = function.export {
+                name
+            } else {
+                continue
+            };
 
-                    // Implementation function
-                    let mut underlying_descriptor = export_descriptor.clone();
-                    underlying_descriptor
-                        .parameters
-                        .push(FieldType::object(self.class.class));
+            let export_descriptor = function.func_type.method_descriptor(&self.class.java.classes);
 
-                    let name: String = self.settings.renamer.rename_function(export.name);
-                    let mut method_builder = self.class.start_method(
-                        MethodAccessFlags::PUBLIC,
-                        UnqualifiedName::from_string(name).map_err(Error::MalformedName)?,
-                        export_descriptor.clone(),
-                    )?;
+            // Implementation function
+            let mut underlying_descriptor = export_descriptor.clone();
+            underlying_descriptor
+                .parameters
+                .push(FieldType::object(self.class.class));
 
-                    // Push the method arguments onto the stack
-                    let mut offset = 1;
-                    for parameter in &export_descriptor.parameters {
-                        method_builder.code.get_local(offset, parameter)?;
-                        offset += parameter.width() as u16;
-                    }
-                    method_builder
-                        .code
-                        .get_local(0, &FieldType::object(self.class.class))?;
+            let name: String = self.settings.renamer.rename_function(export_name);
+            let mut method_builder = self.class.start_method(
+                MethodAccessFlags::PUBLIC,
+                UnqualifiedName::from_string(name).map_err(Error::MalformedName)?,
+                export_descriptor.clone(),
+            )?;
 
-                    // Call the implementation
-                    let method = self.functions[export.index as usize].method;
-                    method_builder.code.invoke(method)?;
-                    method_builder.code.return_(export_descriptor.return_type)?;
-
-                    method_builder.finish()?;
-                }
-                _ => todo!(),
+            // Push the method arguments onto the stack
+            let mut offset = 1;
+            for parameter in &export_descriptor.parameters {
+                method_builder.code.get_local(offset, parameter)?;
+                offset += parameter.width() as u16;
             }
+            method_builder
+                .code
+                .get_local(0, &FieldType::object(self.class.class))?;
+
+            // Call the implementation
+            method_builder.code.invoke(function.method)?;
+            method_builder.code.return_(export_descriptor.return_type)?;
+
+            method_builder.finish()?;
         }
 
         Ok(())
@@ -850,37 +855,34 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         // Read from imports
         jvm_code.push_instruction(Instruction::ALoad(0))?;
         jvm_code.push_instruction(Instruction::ALoad(1))?;
-        for import in &self.imports {
-            jvm_code.push_instruction(Instruction::Dup2)?;
-            match import {
-                WasmImport::Function {
-                    module,
-                    name,
-                    field,
-                } => {
-                    /* TODO: error handling for
+        for function in &self.functions {
+            if let Some((import_loc, import_field)) = &function.import {
+                jvm_code.push_instruction(Instruction::Dup2)?;
+
+                /* TODO: error handling for
                      *
                      *   - missing module or function in module
                      *   - method handle that doesn't have the right expected type
                      */
 
                     // Get the module
-                    jvm_code.const_string(module.to_string())?;
+                    jvm_code.const_string(import_loc.module.to_string())?;
                     jvm_code.invoke(jvm_code.java.members.util.map.get)?;
                     jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
                         jvm_code.java.classes.util.map,
                     )))?;
 
                     // Get the imported handle
-                    jvm_code.const_string(name.to_string())?;
+                    jvm_code.const_string(import_loc.name.to_string())?;
                     jvm_code.invoke(jvm_code.java.members.util.map.get)?;
                     jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
                         jvm_code.java.classes.lang.invoke.method_handle,
                     )))?;
 
                     // Assign it to the right field
-                    jvm_code.access_field(field, AccessMode::Write)?;
-                }
+                    jvm_code.access_field(import_field, AccessMode::Write)?;
+            } else {
+                break
             }
         }
         jvm_code.push_instruction(Instruction::Pop2)?;
@@ -901,43 +903,43 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         jvm_code.push_instruction(Instruction::Dup)?;
         jvm_code.invoke(jvm_code.java.members.util.hash_map.init)?;
 
-        // Add exports to the exports map
-        for export in &self.exports {
+        // Add function exports to the exports map
+        for function in &self.functions {
+            let export_name = if let Some((ExportName { name }, _)) = function.export {
+                name
+            } else {
+                continue
+            };
+
             jvm_code.push_instruction(Instruction::Dup)?;
-            match export.kind {
-                ExternalKind::Func => {
-                    jvm_code.const_string(export.name.to_string())?;
+            jvm_code.const_string(export_name.to_string())?;
 
-                    // Implementation function
-                    let method = self.functions[export.index as usize].method;
-                    let method_handle = ConstantData::MethodHandle(method);
+            // Implementation function
+            let method = function.method;
+            let method_handle = ConstantData::MethodHandle(method);
 
-                    // `MethodHandles.insertArguments(hdl, n - 1, new Object[1] { this })`
-                    jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
-                    jvm_code.const_int((method.descriptor.parameters.len() - 1) as i32)?;
-                    jvm_code.const_int(1)?;
-                    jvm_code.new_ref_array(RefType::Object(jvm_code.java.classes.lang.object))?;
-                    jvm_code.dup()?;
-                    jvm_code.const_int(0)?;
-                    jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.push_instruction(Instruction::AAStore)?;
-                    jvm_code.invoke(
-                        jvm_code
-                            .java
-                            .members
-                            .lang
-                            .invoke
-                            .method_handles
-                            .insert_arguments,
-                    )?;
+            // `MethodHandles.insertArguments(hdl, n - 1, new Object[1] { this })`
+            jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
+            jvm_code.const_int((method.descriptor.parameters.len() - 1) as i32)?;
+            jvm_code.const_int(1)?;
+            jvm_code.new_ref_array(RefType::Object(jvm_code.java.classes.lang.object))?;
+            jvm_code.dup()?;
+            jvm_code.const_int(0)?;
+            jvm_code.push_instruction(Instruction::ALoad(0))?;
+            jvm_code.push_instruction(Instruction::AAStore)?;
+            jvm_code.invoke(
+                jvm_code
+                    .java
+                    .members
+                    .lang
+                    .invoke
+                    .method_handles
+                    .insert_arguments,
+            )?;
 
-                    // Put the value in the map
-                    jvm_code.invoke(jvm_code.java.members.util.map.put)?;
-                    jvm_code.pop()?;
-                }
-
-                _ => unimplemented!("non-function export"),
-            }
+            // Put the value in the map
+            jvm_code.invoke(jvm_code.java.members.util.map.put)?;
+            jvm_code.pop()?;
         }
 
         jvm_code.push_instruction(Instruction::PutField(exports_field))?;
@@ -988,8 +990,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     ///
     /// The first element in the output vector is the output class. The rest of the elements are
     /// the "part" inner classes.
-    pub fn result(mut self, types: &Types) -> Result<Vec<(BinaryName, ClassFile)>, Error> {
-        self.generate_exports(types)?;
+    pub fn result(mut self) -> Result<Vec<(BinaryName, ClassFile)>, Error> {
+        self.generate_exports()?;
         self.generate_constructor()?;
 
         // Assemble all the parts

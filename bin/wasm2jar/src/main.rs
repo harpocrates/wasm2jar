@@ -56,11 +56,11 @@ fn main() -> Result<(), translate::Error> {
     log::info!("Reading and translating '{}'", &wasm_file);
     let wasm_bytes = fs::read(&wasm_file).map_err(jvm::Error::IoError)?;
     let mut translator = translate::ModuleTranslator::new(settings, &class_graph, &java)?;
-    let types = translator.parse_module(&wasm_bytes)?;
+    let _types = translator.parse_module(&wasm_bytes)?;
 
     // Write out the results
     let mut output_files = vec![];
-    for (class_name, class) in translator.result(&types)? {
+    for (class_name, class) in translator.result()? {
         let class_file = format!("{}.class", class_name.as_str());
         log::info!("Writing '{}'", &class_file);
         class

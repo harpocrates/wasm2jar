@@ -39,7 +39,7 @@ pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
     class: &'g ClassData<'g>,
 
     /// Functions
-    wasm_functions: &'b [Function<'g>],
+    wasm_functions: &'b [Function<'a, 'g>],
 
     /// Tables
     wasm_tables: &'b [Table<'g>],
@@ -77,7 +77,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         bootstrap_utilities: &'b mut BootstrapUtilities<'g>,
         jvm_code: &'b mut BytecodeBuilder<'c, 'g>,
         class: &'g ClassData<'g>,
-        wasm_functions: &'b [Function<'g>],
+        wasm_functions: &'b [Function<'a, 'g>],
         wasm_tables: &'b [Table<'g>],
         wasm_memories: &'b [Memory<'g>],
         wasm_globals: &'b [Global<'a, 'g>],

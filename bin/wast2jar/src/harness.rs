@@ -377,8 +377,8 @@ impl<'a> TestHarness<'a> {
 
                 let mut translator =
                     translate::ModuleTranslator::new(settings, &class_graph, &java)?;
-                let types = translator.parse_module(&wasm_bytes)?;
-                translator.result(&types)
+                let _types = translator.parse_module(&wasm_bytes)?;
+                translator.result()
             };
 
         // TODO: catch should be removed once `wasm2jar` doesn't use `todo`

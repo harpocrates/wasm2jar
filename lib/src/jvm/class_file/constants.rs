@@ -1,165 +1,97 @@
-use super::{
-    Attribute, AttributeLike, ConstantPoolOverflow, Error, Offset, OffsetResult, OffsetVec,
-    Serialize, Width,
-};
+use crate::jvm::class_file::{Attribute, AttributeLike, Serialize};
+use crate::jvm::class_graph::{AccessMode, ClassId, ConstantData, FieldId, MethodId};
+use crate::jvm::code::InvokeType;
+use crate::jvm::descriptors::RenderDescriptor;
+use crate::jvm::names::Name;
+use crate::jvm::{Error, RefType};
+use crate::util::{Offset, OffsetVec, Width};
 use byteorder::WriteBytesExt;
-use elsa::map::FrozenMap;
-use elsa::vec::FrozenVec;
 use std::borrow::{Borrow, Cow};
+use std::collections::HashMap;
 use std::result::Result;
 
 /// Class file constants pool builder
 ///
-/// The pool is append only, which makes it possible to get-or-else-insert without requiring
-/// mutable access. After the pool is fully built up, it can be consumed into a regular
-/// `OffsetVec`.
-pub struct ConstantsPool {
-    constants: FrozenVec<Box<(u16, Constant)>>,
+/// The pool is append only and only after the pool is fully built up, it can be consumed into a
+/// regular [`OffsetVec`]. The [`ConstantsWriter`] trait exposes inserting types into the constants
+/// pool.
+pub struct ConstantsPool<'g> {
+    constants: OffsetVec<Constant>,
 
-    classes: FrozenMap<Utf8ConstantIndex, Box<ClassConstantIndex>>,
-    fieldrefs:
-        FrozenMap<(ClassConstantIndex, NameAndTypeConstantIndex), Box<FieldRefConstantIndex>>,
-    methodrefs: FrozenMap<
-        (ClassConstantIndex, NameAndTypeConstantIndex, bool),
-        Box<MethodRefConstantIndex>,
-    >,
-    strings: FrozenMap<Utf8ConstantIndex, Box<StringConstantIndex>>,
-    integers: FrozenMap<i32, Box<ConstantIndex>>,
-    floats: FrozenMap<[u8; 4], Box<ConstantIndex>>,
-    longs: FrozenMap<i64, Box<ConstantIndex>>,
-    doubles: FrozenMap<[u8; 8], Box<ConstantIndex>>,
-    name_and_types:
-        FrozenMap<(Utf8ConstantIndex, Utf8ConstantIndex), Box<NameAndTypeConstantIndex>>,
-    utf8s: FrozenMap<String, Box<Utf8ConstantIndex>>,
-    method_handles: FrozenMap<(HandleKind, ConstantIndex), Box<ConstantIndex>>,
-    method_types: FrozenMap<Utf8ConstantIndex, Box<ConstantIndex>>,
-    invoke_dynamics: FrozenMap<(u16, NameAndTypeConstantIndex), Box<InvokeDynamicConstantIndex>>,
+    classes: HashMap<RefType<ClassId<'g>>, ClassConstantIndex>,
+    fieldrefs: HashMap<FieldId<'g>, FieldRefConstantIndex>,
+    methodrefs: HashMap<MethodId<'g>, MethodRefConstantIndex>,
+    strings: HashMap<Utf8ConstantIndex, StringConstantIndex>,
+    integers: HashMap<i32, ConstantIndex>,
+    floats: HashMap<[u8; 4], ConstantIndex>,
+    longs: HashMap<i64, ConstantIndex>,
+    doubles: HashMap<[u8; 8], ConstantIndex>,
+    name_and_types: HashMap<(Utf8ConstantIndex, Utf8ConstantIndex), NameAndTypeConstantIndex>,
+    utf8s: HashMap<String, Utf8ConstantIndex>,
+    method_handles: HashMap<(HandleKind, ConstantIndex), ConstantIndex>,
+    method_types: HashMap<Utf8ConstantIndex, ConstantIndex>,
+    invoke_dynamics: HashMap<(u16, NameAndTypeConstantIndex), InvokeDynamicConstantIndex>,
 }
 
-impl ConstantsPool {
+impl<'g> ConstantsPool<'g> {
     /// Make a fresh empty constants pool
-    pub fn new() -> ConstantsPool {
+    pub fn new() -> ConstantsPool<'g> {
         ConstantsPool {
-            constants: FrozenVec::new(),
-            classes: FrozenMap::new(),
-            fieldrefs: FrozenMap::new(),
-            methodrefs: FrozenMap::new(),
-            strings: FrozenMap::new(),
-            integers: FrozenMap::new(),
-            floats: FrozenMap::new(),
-            longs: FrozenMap::new(),
-            doubles: FrozenMap::new(),
-            name_and_types: FrozenMap::new(),
-            utf8s: FrozenMap::new(),
-            method_handles: FrozenMap::new(),
-            method_types: FrozenMap::new(),
-            invoke_dynamics: FrozenMap::new(),
+            constants: OffsetVec::new_starting_at(Offset(1)),
+            classes: HashMap::new(),
+            fieldrefs: HashMap::new(),
+            methodrefs: HashMap::new(),
+            strings: HashMap::new(),
+            integers: HashMap::new(),
+            floats: HashMap::new(),
+            longs: HashMap::new(),
+            doubles: HashMap::new(),
+            name_and_types: HashMap::new(),
+            utf8s: HashMap::new(),
+            method_handles: HashMap::new(),
+            method_types: HashMap::new(),
+            invoke_dynamics: HashMap::new(),
         }
+    }
+
+    /// List out all of the classes referenced in the constant pool
+    pub fn referenced_classes(&self) -> impl Iterator<Item = ClassId<'g>> + '_ {
+        self.classes
+            .keys()
+            .filter_map(|class: &RefType<ClassId<'g>>| -> Option<ClassId<'g>> {
+                match class {
+                    RefType::Object(cls) => Some(*cls),
+                    RefType::ObjectArray(arr) => Some(arr.element_type),
+                    _ => None,
+                }
+            })
     }
 
     /// Push a constant into the constant pool, provided there is space for it
     ///
     /// Note: the largest valid index is 65536, indexing starts at 1, and some constants take two
     /// spaces.
-    fn push_constant(&self, constant: Constant) -> Result<ConstantIndex, ConstantPoolOverflow> {
+    fn push_constant(&mut self, constant: Constant) -> Result<ConstantIndex, ConstantPoolOverflow> {
         // Compute the offset at which this constant will be inserted
-        let offset: u16 = match self.constants.last() {
-            None => 1, // constant pool starts at 1, not 0
-            Some((off, cnst)) => off + (cnst.width() as u16),
-        };
+        let offset: u16 = self.constants.offset_len().0 as u16;
 
         // Detect if the next constant would overflow the pool
         if offset.checked_add(constant.width() as u16).is_none() {
             return Err(ConstantPoolOverflow { constant, offset });
         }
 
-        self.constants.push(Box::new((offset, constant)));
+        self.constants.push(constant);
         Ok(ConstantIndex(offset))
     }
 
     /// Consume the pool and return the final vector of constants
     pub fn into_offset_vec(self) -> OffsetVec<Constant> {
-        let mut output = OffsetVec::new_starting_at(Offset(1));
-        output.extend(self.constants.into_vec().into_iter().map(|entry| entry.1));
-        output
-    }
-
-    /// Get a constant from the pool
-    pub fn get(&self, index: ConstantIndex) -> OffsetResult<Constant> {
-        match self
-            .constants
-            .binary_search_by_key(&index.0, |entry| entry.0)
-        {
-            Err(insert_at) if insert_at == self.constants.len() => OffsetResult::TooLarge,
-            Err(insert_at) => OffsetResult::InvalidOffset(insert_at),
-            Ok(found_idx) => OffsetResult::Ok(found_idx, &self.constants[found_idx].1),
-        }
-    }
-
-    /// Get or insert a class constant from the constant pool
-    pub fn get_class(
-        &self,
-        name: Utf8ConstantIndex,
-    ) -> Result<ClassConstantIndex, ConstantPoolOverflow> {
-        if let Some(idx) = self.classes.get(&name) {
-            Ok(*idx)
-        } else {
-            let constant = Constant::Class(name);
-            let idx = ClassConstantIndex(self.push_constant(constant)?);
-            self.classes.insert(name, Box::new(idx));
-            Ok(idx)
-        }
-    }
-
-    /// Get or insert an integer constant from the constant pool
-    pub fn get_integer(&self, integer: i32) -> Result<ConstantIndex, ConstantPoolOverflow> {
-        if let Some(idx) = self.integers.get(&integer) {
-            Ok(*idx)
-        } else {
-            let idx = self.push_constant(Constant::Integer(integer))?;
-            self.integers.insert(integer, Box::new(idx));
-            Ok(idx)
-        }
-    }
-
-    /// Get or insert a long constant from the constant pool
-    pub fn get_long(&self, long: i64) -> Result<ConstantIndex, ConstantPoolOverflow> {
-        if let Some(idx) = self.longs.get(&long) {
-            Ok(*idx)
-        } else {
-            let idx = self.push_constant(Constant::Long(long))?;
-            self.longs.insert(long, Box::new(idx));
-            Ok(idx)
-        }
-    }
-
-    /// Get or insert a float constant from the constant pool
-    pub fn get_float(&self, float: f32) -> Result<ConstantIndex, ConstantPoolOverflow> {
-        let float_bytes = float.to_ne_bytes();
-        if let Some(idx) = self.floats.get(&float_bytes) {
-            Ok(*idx)
-        } else {
-            let idx = self.push_constant(Constant::Float(float))?;
-            self.floats.insert(float_bytes, Box::new(idx));
-            Ok(idx)
-        }
-    }
-
-    /// Get or insert a double constant from the constant pool
-    pub fn get_double(&self, double: f64) -> Result<ConstantIndex, ConstantPoolOverflow> {
-        let double_bytes = double.to_ne_bytes();
-        if let Some(idx) = self.doubles.get(&double_bytes) {
-            Ok(*idx)
-        } else {
-            let idx = self.push_constant(Constant::Double(double))?;
-            self.doubles.insert(double_bytes, Box::new(idx));
-            Ok(idx)
-        }
+        self.constants
     }
 
     /// Get or insert a utf8 constant from the constant pool
     pub fn get_utf8<'a, S: Into<Cow<'a, str>>>(
-        &self,
+        &mut self,
         utf8: S,
     ) -> Result<Utf8ConstantIndex, ConstantPoolOverflow> {
         let cow = utf8.into();
@@ -170,14 +102,14 @@ impl ConstantsPool {
             let owned = cow.into_owned();
             let constant = Constant::Utf8(owned.clone());
             let idx = Utf8ConstantIndex(self.push_constant(constant)?);
-            self.utf8s.insert(owned, Box::new(idx));
+            self.utf8s.insert(owned, idx);
             Ok(idx)
         }
     }
 
     /// Get or insert a string constant from the constant pool
     pub fn get_string(
-        &self,
+        &mut self,
         utf8: Utf8ConstantIndex,
     ) -> Result<StringConstantIndex, ConstantPoolOverflow> {
         if let Some(idx) = self.strings.get(&utf8) {
@@ -185,14 +117,14 @@ impl ConstantsPool {
         } else {
             let constant = Constant::String(utf8);
             let idx = StringConstantIndex(self.push_constant(constant)?);
-            self.strings.insert(utf8, Box::new(idx));
+            self.strings.insert(utf8, idx);
             Ok(idx)
         }
     }
 
     /// Get or insert a name & type constant from the constant pool
     pub fn get_name_and_type(
-        &self,
+        &mut self,
         name: Utf8ConstantIndex,
         descriptor: Utf8ConstantIndex,
     ) -> Result<NameAndTypeConstantIndex, ConstantPoolOverflow> {
@@ -202,53 +134,14 @@ impl ConstantsPool {
         } else {
             let constant = Constant::NameAndType { name, descriptor };
             let idx = NameAndTypeConstantIndex(self.push_constant(constant)?);
-            self.name_and_types.insert(name_and_type_key, Box::new(idx));
-            Ok(idx)
-        }
-    }
-
-    /// Get or insert a name & type constant from the constant pool
-    pub fn get_field_ref(
-        &self,
-        class_: ClassConstantIndex,
-        name_and_type: NameAndTypeConstantIndex,
-    ) -> Result<FieldRefConstantIndex, ConstantPoolOverflow> {
-        let field_key = (class_, name_and_type);
-        if let Some(idx) = self.fieldrefs.get(&field_key) {
-            Ok(*idx)
-        } else {
-            let constant = Constant::FieldRef(class_, name_and_type);
-            let idx = FieldRefConstantIndex(self.push_constant(constant)?);
-            self.fieldrefs.insert(field_key, Box::new(idx));
-            Ok(idx)
-        }
-    }
-
-    /// Get or insert a method reference constant from the constant pool
-    pub fn get_method_ref(
-        &self,
-        class: ClassConstantIndex,
-        name_and_type: NameAndTypeConstantIndex,
-        is_interface: bool,
-    ) -> Result<MethodRefConstantIndex, ConstantPoolOverflow> {
-        let method_key = (class, name_and_type, is_interface);
-        if let Some(idx) = self.methodrefs.get(&method_key) {
-            Ok(*idx)
-        } else {
-            let constant = Constant::MethodRef {
-                class,
-                name_and_type,
-                is_interface,
-            };
-            let idx = MethodRefConstantIndex(self.push_constant(constant)?);
-            self.methodrefs.insert(method_key, Box::new(idx));
+            self.name_and_types.insert(name_and_type_key, idx);
             Ok(idx)
         }
     }
 
     /// Get or insert a method handle constant from the constant pool
-    pub fn get_method_handle(
-        &self,
+    fn get_method_handle(
+        &mut self,
         handle_kind: HandleKind,
         member: ConstantIndex,
     ) -> Result<ConstantIndex, ConstantPoolOverflow> {
@@ -261,29 +154,14 @@ impl ConstantsPool {
                 member,
             };
             let idx = self.push_constant(constant)?;
-            self.method_handles.insert(handle_key, Box::new(idx));
-            Ok(idx)
-        }
-    }
-
-    /// Get or insert a method type constant from the constant pool
-    pub fn get_method_type(
-        &self,
-        descriptor: Utf8ConstantIndex,
-    ) -> Result<ConstantIndex, ConstantPoolOverflow> {
-        if let Some(idx) = self.method_types.get(&descriptor) {
-            Ok(*idx)
-        } else {
-            let constant = Constant::MethodType { descriptor };
-            let idx = self.push_constant(constant)?;
-            self.method_types.insert(descriptor, Box::new(idx));
+            self.method_handles.insert(handle_key, idx);
             Ok(idx)
         }
     }
 
     /// Get or insert an invoke dynamic constant from the constant pool
     pub fn get_invoke_dynamic(
-        &self,
+        &mut self,
         bootstrap_method: u16,
         method_descriptor: NameAndTypeConstantIndex,
     ) -> Result<InvokeDynamicConstantIndex, ConstantPoolOverflow> {
@@ -296,13 +174,13 @@ impl ConstantsPool {
                 method_descriptor,
             };
             let idx = InvokeDynamicConstantIndex(self.push_constant(constant)?);
-            self.invoke_dynamics.insert(indy_key, Box::new(idx));
+            self.invoke_dynamics.insert(indy_key, idx);
             Ok(idx)
         }
     }
 
     /// Add an attribute to the constant pool
-    pub fn get_attribute<'g, A: AttributeLike>(&self, attribute: A) -> Result<Attribute, Error> {
+    pub fn get_attribute<A: AttributeLike>(&mut self, attribute: A) -> Result<Attribute, Error> {
         let name_index = self.get_utf8(A::NAME)?;
         let mut info = vec![];
 
@@ -310,6 +188,12 @@ impl ConstantsPool {
 
         Ok(Attribute { name_index, info })
     }
+}
+
+#[derive(Debug)]
+pub struct ConstantPoolOverflow {
+    pub constant: Constant,
+    pub offset: u16,
 }
 
 /// Constants as in the constant pool
@@ -511,10 +395,10 @@ impl Width for Constant {
 pub struct ConstantIndex(pub u16);
 
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct Utf8ConstantIndex(ConstantIndex);
+pub struct Utf8ConstantIndex(pub ConstantIndex);
 
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct StringConstantIndex(ConstantIndex);
+pub struct StringConstantIndex(pub ConstantIndex);
 
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
 pub struct NameAndTypeConstantIndex(ConstantIndex);
@@ -651,5 +535,180 @@ impl Serialize for HandleKind {
             HandleKind::InvokeInterface => 9,
         };
         byte.serialize(writer)
+    }
+}
+
+pub trait ConstantsWriter<'g, Index = ConstantIndex> {
+    /// Get or insert a constant into the constant pool and return the associated index
+    fn constant_index(
+        &self,
+        constants_pool: &mut ConstantsPool<'g>,
+    ) -> Result<Index, ConstantPoolOverflow>;
+}
+
+/// When making a `CONSTANT_Class_info`, reference types are almost always objects. However,
+/// there are a handful of places where an array type needs to be fit in (eg. for a `checkcast`
+/// to an array type). See [this section of the spec][0] for more.
+///
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.4.1
+impl<'g> ConstantsWriter<'g, ClassConstantIndex> for RefType<ClassId<'g>> {
+    fn constant_index(
+        &self,
+        constants: &mut ConstantsPool<'g>,
+    ) -> Result<ClassConstantIndex, ConstantPoolOverflow> {
+        if let Some(idx) = constants.classes.get(self) {
+            Ok(*idx)
+        } else {
+            let name = match self {
+                RefType::Object(class) => constants.get_utf8(class.name.as_str())?,
+                other => constants.get_utf8(other.render())?,
+            };
+            let constant = Constant::Class(name);
+            let idx = ClassConstantIndex(constants.push_constant(constant)?);
+            constants.classes.insert(*self, idx);
+            Ok(idx)
+        }
+    }
+}
+
+/// Write a `CONSTANT_Class_info`
+impl<'g> ConstantsWriter<'g, ClassConstantIndex> for ClassId<'g> {
+    fn constant_index(
+        &self,
+        constants: &mut ConstantsPool<'g>,
+    ) -> Result<ClassConstantIndex, ConstantPoolOverflow> {
+        RefType::Object(*self).constant_index(constants)
+    }
+}
+
+/// Write a `CONSTANT_Methodref_info` or `CONSTANT_InterfaceMethodref_info`
+impl<'g> ConstantsWriter<'g, MethodRefConstantIndex> for MethodId<'g> {
+    fn constant_index(
+        &self,
+        constants: &mut ConstantsPool<'g>,
+    ) -> Result<MethodRefConstantIndex, ConstantPoolOverflow> {
+        if let Some(idx) = constants.methodrefs.get(self) {
+            Ok(*idx)
+        } else {
+            let class_idx = self.class.constant_index(constants)?;
+            let method_utf8 = constants.get_utf8(self.name.as_str())?;
+            let desc_utf8 = constants.get_utf8(&self.descriptor.render())?;
+            let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
+            let constant = Constant::MethodRef {
+                class: class_idx,
+                name_and_type: name_and_type_idx,
+                is_interface: self.class.is_interface(),
+            };
+            let idx = MethodRefConstantIndex(constants.push_constant(constant)?);
+            constants.methodrefs.insert(*self, idx);
+            Ok(idx)
+        }
+    }
+}
+
+/// Write a `CONSTANT_Fieldref_info`
+impl<'g> ConstantsWriter<'g, FieldRefConstantIndex> for FieldId<'g> {
+    fn constant_index(
+        &self,
+        constants: &mut ConstantsPool<'g>,
+    ) -> Result<FieldRefConstantIndex, ConstantPoolOverflow> {
+        if let Some(idx) = constants.fieldrefs.get(self) {
+            Ok(*idx)
+        } else {
+            let class_idx = self.class.constant_index(constants)?;
+            let field_utf8 = constants.get_utf8(self.name.as_str())?;
+            let desc_utf8 = constants.get_utf8(&self.descriptor.render())?;
+            let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
+            let constant = Constant::FieldRef(class_idx, name_and_type_idx);
+            let idx = FieldRefConstantIndex(constants.push_constant(constant)?);
+            constants.fieldrefs.insert(*self, idx);
+            Ok(idx)
+        }
+    }
+}
+
+/// Write a constant which can be loaded up using `ldc` or `ldc_2`
+impl<'g> ConstantsWriter<'g, ConstantIndex> for ConstantData<'g> {
+    fn constant_index(
+        &self,
+        constants: &mut ConstantsPool<'g>,
+    ) -> Result<ConstantIndex, ConstantPoolOverflow> {
+        match self {
+            ConstantData::String(string) => {
+                let str_utf8 = constants.get_utf8(&**string)?;
+                let str_idx = constants.get_string(str_utf8)?;
+                Ok(str_idx.into())
+            }
+            ConstantData::Class(class) => Ok(class.constant_index(constants)?.into()),
+            ConstantData::Integer(integer) => {
+                if let Some(idx) = constants.integers.get(integer) {
+                    Ok(*idx)
+                } else {
+                    let idx = constants.push_constant(Constant::Integer(*integer))?;
+                    constants.integers.insert(*integer, idx);
+                    Ok(idx)
+                }
+            }
+            ConstantData::Long(long) => {
+                if let Some(idx) = constants.longs.get(long) {
+                    Ok(*idx)
+                } else {
+                    let idx = constants.push_constant(Constant::Long(*long))?;
+                    constants.longs.insert(*long, idx);
+                    Ok(idx)
+                }
+            }
+            ConstantData::Float(float_bytes) => {
+                if let Some(idx) = constants.floats.get(float_bytes) {
+                    Ok(*idx)
+                } else {
+                    let float = f32::from_le_bytes(*float_bytes);
+                    let idx = constants.push_constant(Constant::Float(float))?;
+                    constants.floats.insert(*float_bytes, idx);
+                    Ok(idx)
+                }
+            }
+            ConstantData::Double(double_bytes) => {
+                if let Some(idx) = constants.doubles.get(double_bytes) {
+                    Ok(*idx)
+                } else {
+                    let double = f64::from_le_bytes(*double_bytes);
+                    let idx = constants.push_constant(Constant::Double(double))?;
+                    constants.doubles.insert(*double_bytes, idx);
+                    Ok(idx)
+                }
+            }
+            ConstantData::FieldHandle(access_mode, field) => {
+                let field_idx = field.constant_index(constants)?;
+                let handle = match (access_mode, field.is_static()) {
+                    (AccessMode::Read, true) => HandleKind::GetStatic,
+                    (AccessMode::Read, false) => HandleKind::GetField,
+                    (AccessMode::Write, true) => HandleKind::PutStatic,
+                    (AccessMode::Write, false) => HandleKind::PutField,
+                };
+                constants.get_method_handle(handle, field_idx.into())
+            }
+            ConstantData::MethodHandle(method) => {
+                let method_idx = method.constant_index(constants)?;
+                let handle = match method.infer_invoke_type() {
+                    InvokeType::Static => HandleKind::InvokeStatic,
+                    InvokeType::Special => HandleKind::NewInvokeSpecial,
+                    InvokeType::Interface(_) => HandleKind::InvokeInterface,
+                    InvokeType::Virtual => HandleKind::InvokeVirtual,
+                };
+                constants.get_method_handle(handle, method_idx.into())
+            }
+            ConstantData::MethodType(method) => {
+                let descriptor = constants.get_utf8(method.render())?;
+                if let Some(idx) = constants.method_types.get(&descriptor) {
+                    Ok(*idx)
+                } else {
+                    let constant = Constant::MethodType { descriptor };
+                    let idx = constants.push_constant(constant)?;
+                    constants.method_types.insert(descriptor, idx);
+                    Ok(idx)
+                }
+            }
+        }
     }
 }

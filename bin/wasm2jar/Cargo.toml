@@ -16,3 +16,4 @@ env_logger = "0.9"
 [[bin]]
 name = "wasm2jar"
 path = "src/main.rs"
+doc = false

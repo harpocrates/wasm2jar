@@ -12,15 +12,21 @@
 //!     emit them
 //!
 
-use super::*;
+use crate::jvm::class_file::{
+    ClassConstantIndex, ConstantIndex, FieldRefConstantIndex, InvokeDynamicConstantIndex,
+    MethodRefConstantIndex, Serialize,
+};
+use crate::jvm::class_graph::{ClassId, ConstantData, FieldId, InvokeDynamicData, MethodId};
+use crate::jvm::{BaseType, RefType};
+use crate::util::Width;
 use byteorder::WriteBytesExt;
 use std::convert::TryFrom;
 use std::io::Result;
 use std::ops::Not;
 
 /// Non-branching JVM bytecode instruction
-#[derive(Clone, Debug)]
-pub enum Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Instruction<Class, Constant, Field, Method, IndyMethod> {
     Nop,
     AConstNull,
     IConstM1,
@@ -59,12 +65,6 @@ pub enum Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod> {
     FStore(u16),
     DStore(u16),
     AStore(u16),
-    IKill(u16), // imaginary instruction to signal a local is no longer to be used
-    LKill(u16),
-    FKill(u16),
-    DKill(u16),
-    AKill(u16),
-    AHint(ClassHint), // hint for the verifier to infer a more general type
     IAStore,
     LAStore,
     FAStore,
@@ -148,7 +148,6 @@ pub enum Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod> {
 }
 
 pub type SerializableInstruction = Instruction<
-    (),
     ClassConstantIndex,
     ConstantIndex,
     FieldRefConstantIndex,
@@ -156,21 +155,26 @@ pub type SerializableInstruction = Instruction<
     InvokeDynamicConstantIndex,
 >;
 
-impl<ClassHint, Class, Constant, Field, Method, IndyMethod>
-    Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod>
+/// Default instruction is `nop`
+impl<Class, Constant, Field, Method, IndyMethod> Default
+    for Instruction<Class, Constant, Field, Method, IndyMethod>
 {
-    pub fn map<ClassHint2, Class2, Constant2, Field2, Method2, IndyMethod2, E>(
+    fn default() -> Self {
+        Instruction::Nop
+    }
+}
+
+impl<Class, Constant, Field, Method, IndyMethod>
+    Instruction<Class, Constant, Field, Method, IndyMethod>
+{
+    pub fn map<Class2, Constant2, Field2, Method2, IndyMethod2, E>(
         &self,
-        map_class_hint: impl Fn(&ClassHint) -> std::result::Result<ClassHint2, E>,
-        map_class: impl Fn(&Class) -> std::result::Result<Class2, E>,
-        map_constant: impl Fn(&Constant) -> std::result::Result<Constant2, E>,
-        map_field: impl Fn(&Field) -> std::result::Result<Field2, E>,
-        map_method: impl Fn(&Method) -> std::result::Result<Method2, E>,
-        map_indy_method: impl Fn(&IndyMethod) -> std::result::Result<IndyMethod2, E>,
-    ) -> std::result::Result<
-        Instruction<ClassHint2, Class2, Constant2, Field2, Method2, IndyMethod2>,
-        E,
-    > {
+        map_class: impl FnOnce(&Class) -> std::result::Result<Class2, E>,
+        map_constant: impl FnOnce(&Constant) -> std::result::Result<Constant2, E>,
+        map_field: impl FnOnce(&Field) -> std::result::Result<Field2, E>,
+        map_method: impl FnOnce(&Method) -> std::result::Result<Method2, E>,
+        map_indy_method: impl FnOnce(&IndyMethod) -> std::result::Result<IndyMethod2, E>,
+    ) -> std::result::Result<Instruction<Class2, Constant2, Field2, Method2, IndyMethod2>, E> {
         use Instruction::*;
         Ok(match self {
             Nop => Nop,
@@ -211,12 +215,6 @@ impl<ClassHint, Class, Constant, Field, Method, IndyMethod>
             FStore(idx) => FStore(*idx),
             DStore(idx) => DStore(*idx),
             AStore(idx) => AStore(*idx),
-            IKill(idx) => IKill(*idx),
-            LKill(idx) => LKill(*idx),
-            FKill(idx) => FKill(*idx),
-            DKill(idx) => FKill(*idx),
-            AKill(idx) => AKill(*idx),
-            AHint(hint) => AHint(map_class_hint(hint)?),
             IAStore => IAStore,
             LAStore => LAStore,
             FAStore => FAStore,
@@ -301,19 +299,26 @@ impl<ClassHint, Class, Constant, Field, Method, IndyMethod>
     }
 }
 
-impl<ClassHint, Class, Field, Method, IndyMethod> Width
-    for Instruction<ClassHint, Class, ConstantIndex, Field, Method, IndyMethod>
+pub type VerifierInstruction<'g> = Instruction<
+    RefType<ClassId<'g>>,
+    ConstantData<'g>,
+    FieldId<'g>,
+    MethodId<'g>,
+    InvokeDynamicData<'g>,
+>;
+
+// Dummy impl mostly so that `VerifierInstructions` can still be used in a basic block
+impl<'g> Width for VerifierInstruction<'g> {
+    fn width(&self) -> usize {
+        1
+    }
+}
+
+impl<Class, Field, Method, IndyMethod> Width
+    for Instruction<Class, ConstantIndex, Field, Method, IndyMethod>
 {
     fn width(&self) -> usize {
         match self {
-          Instruction::IKill(_)
-          | Instruction::LKill(_)
-          | Instruction::FKill(_)
-          | Instruction::DKill(_)
-          | Instruction::AKill(_)
-          | Instruction::AHint(_)
-          => 0,
-
           Instruction::Nop
           | Instruction::AConstNull
           | Instruction::IConstM1
@@ -557,12 +562,6 @@ impl Serialize for SerializableInstruction {
             Instruction::FStore(idx) => serialize_load_or_store(*idx, 0x43, 0x38, writer)?,
             Instruction::DStore(idx) => serialize_load_or_store(*idx, 0x47, 0x39, writer)?,
             Instruction::AStore(idx) => serialize_load_or_store(*idx, 0x4B, 0x3A, writer)?,
-            Instruction::IKill(_)
-            | Instruction::LKill(_)
-            | Instruction::FKill(_)
-            | Instruction::DKill(_)
-            | Instruction::AKill(_)
-            | Instruction::AHint(_) => (),
             Instruction::IAStore => 0x4fu8.serialize(writer)?,
             Instruction::LAStore => 0x50u8.serialize(writer)?,
             Instruction::FAStore => 0x51u8.serialize(writer)?,
@@ -736,13 +735,41 @@ impl Serialize for SerializableInstruction {
 /// offsets into the code array, wide jump targets will become signed 32-bit offsets into the code
 /// array, and fallthrough targets will be replaced with unit (since they are implicit from the
 /// order of the blocks in the code array).
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum BranchInstruction<Lbl, LblWide, LblNext> {
-    If(OrdComparison, Lbl, LblNext), // covers `ifeq`, `ifne`, `iflt`, `ifge`, `ifgt`, `ifle`
-    IfICmp(OrdComparison, Lbl, LblNext), // covers `if_icmpeq`, `if_icmpne`, `if_icmplt`, ... `if_icmple`
-    IfACmp(EqComparison, Lbl, LblNext),  // covers `if_acmpeq`, `if_acmpne`
+    /// Compare the top of the operand stack (should be an `int`) to zero and jump if the
+    /// comparison succeeds (otherwise continue to the next label).
+    ///
+    /// This covers `ifeq`, `ifne`, `iflt`, `ifge`, `ifgt`, and `ifle`.
+    If(OrdComparison, Lbl, LblNext),
+
+    /// Compare the top two elements of the operand stack (should be `int`s) to each other and jump
+    /// if the comparison succeeds (otherwise continue to the next label).
+    ///
+    /// This covers `if_icmpeq`, `if_icmpne`, `if_icmplt`, `if_icmpge`, `if_icmpgt`, and
+    /// `if_icmple`.
+    IfICmp(OrdComparison, Lbl, LblNext),
+
+    /// Compare the top of the operand stack (should be a reference) to `null` and jump if the
+    /// comparison succeeds (otherwise continue to the next label).
+    ///
+    /// This covers `ifnull` and `ifnonnull`.
+    IfNull(EqComparison, Lbl, LblNext),
+
+    /// Compare the top two elements of the operand stack (should be references) to each other and
+    /// jump if the comparison succeeds (otherwise continue to the next label).
+    ///
+    /// This covers `if_acmpeq` and `if_acmpne`.
+    IfACmp(EqComparison, Lbl, LblNext),
+
+    /// Unconditionally jump to the specified label.
     Goto(Lbl),
+
+    /// Unconditionally jump to the specified label, but with a wide relative address.
     GotoW(LblWide),
+
+    /// Use the top of the operand stack (should be an `int`) to do a switch over a contiguous
+    /// range of values, falling back to a default jump target if none match.
     TableSwitch {
         /// `default` must be at a multiple of four bytes from the start of the current method, so
         /// there must be a 0-3 inclusive byte padding
@@ -758,6 +785,9 @@ pub enum BranchInstruction<Lbl, LblWide, LblNext> {
         /// Jump targets
         targets: Vec<LblWide>,
     },
+
+    /// Use the top of the operand stack (should be an `int`) to do a switch over a non-contiguous
+    /// range of values, falling back to a default jump target if none match.
     LookupSwitch {
         /// `default` must be at a multiple of four bytes from the start of the current method, so
         /// there must be a 0-3 inclusive byte padding
@@ -769,14 +799,27 @@ pub enum BranchInstruction<Lbl, LblWide, LblNext> {
         /// Jump targets (sorted so that the keys are ascending)
         targets: Vec<(i32, LblWide)>,
     },
+
+    /// Return from the method an `int` at the top of the operand stack
     IReturn,
+
+    /// Return from the method a `long` at the top of the operand stack
     LReturn,
+
+    /// Return from the method a `float` at the top of the operand stack
     FReturn,
+
+    /// Return from the method a `double` at the top of the operand stack
     DReturn,
+
+    /// Return from the method a reference at the top of the operand stack
     AReturn,
+
+    /// Return from a `void` method
     Return,
+
+    /// Throw an exception at the top of the operand stack
     AThrow,
-    IfNull(EqComparison, Lbl, LblNext), // covers `ifnull`, `ifnonnull`
 
     /// This is a synthetic marker used to explicitly end a block which just falls through to the
     /// next block. In the JVM, this is implicit when a block ends without a jump. Making it
@@ -839,6 +882,21 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
             BranchInstruction::AThrow => JumpTargets::None,
             BranchInstruction::IfNull(_, lbl, _) => JumpTargets::Regular(*lbl),
             BranchInstruction::FallThrough(_) => JumpTargets::None,
+        }
+    }
+
+    /// If the instruction requires padding, set that padding. Otherwise, passes through the
+    /// instruction unchanged.
+    pub fn set_padding(&mut self, padding: u8) {
+        let pad_to = padding;
+        match self {
+            BranchInstruction::TableSwitch {
+                ref mut padding, ..
+            } => *padding = pad_to,
+            BranchInstruction::LookupSwitch {
+                ref mut padding, ..
+            } => *padding = pad_to,
+            _no_padding_used => (),
         }
     }
 
@@ -1044,8 +1102,20 @@ impl<A> JumpTargets<A, A> {
 /// Possible bit shifts
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub enum ShiftType {
+    /// Shift bits left, filling new bits on the right with 0.
+    ///
+    /// This behaviour matches multiplication by two for signed and unsigned numbers.
     Left,
+
+    /// Shift bits right, filling new bits on the left with 0.
+    ///
+    /// This behaviour matches division by two for unsigned numbers.
     LogicalRight,
+
+    /// Shift bits right, filling new bits on the left with 0 if the leftmost bit was originally 0
+    /// and 1 if the leftmost bit was originally a 1.
+    ///
+    /// This behaviour matches division by two for signed numbers.
     ArithmeticRight,
 }
 

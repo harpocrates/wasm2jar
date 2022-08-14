@@ -1,4 +1,6 @@
-use crate::jvm::{ClassData, FieldType, JavaClasses, MethodDescriptor, RefType, Width};
+use crate::jvm::class_graph::{ClassId, JavaClasses};
+use crate::jvm::{FieldType, MethodDescriptor, RefType};
+use crate::util::Width;
 use wasmparser::{ValType, WasmFuncType};
 
 /// Subset of WASM types that we know how to put on the WASM stack
@@ -14,7 +16,7 @@ pub enum StackType {
 
 impl StackType {
     /// Convert a stack type into the corresponding JVM type
-    pub const fn field_type<'g>(self, java: &JavaClasses<'g>) -> FieldType<&'g ClassData<'g>> {
+    pub const fn field_type<'g>(self, java: &JavaClasses<'g>) -> FieldType<ClassId<'g>> {
         match self {
             StackType::I32 => FieldType::int(),
             StackType::I64 => FieldType::long(),
@@ -43,7 +45,7 @@ impl StackType {
 pub const fn ref_type_from_general<'g>(
     wasm_type: ValType,
     java: &JavaClasses<'g>,
-) -> Result<RefType<&'g ClassData<'g>>, BadType> {
+) -> Result<RefType<ClassId<'g>>, BadType> {
     Ok(match wasm_type {
         ValType::FuncRef => RefType::Object(java.lang.invoke.method_handle),
         ValType::ExternRef => RefType::Object(java.lang.object),
@@ -84,10 +86,7 @@ impl FunctionType {
     }
 
     /// Into a method descriptor
-    pub fn method_descriptor<'g>(
-        &self,
-        java: &JavaClasses<'g>,
-    ) -> MethodDescriptor<&'g ClassData<'g>> {
+    pub fn method_descriptor<'g>(&self, java: &JavaClasses<'g>) -> MethodDescriptor<ClassId<'g>> {
         let return_type = match self.outputs.as_slice() {
             [] => None,
             [output_ty] => Some(output_ty.field_type(java)),
@@ -114,7 +113,7 @@ pub enum TableType {
 
 impl TableType {
     /// Convert a stack type into the corresponding JVM reference type
-    pub const fn ref_type<'g>(self, java: &JavaClasses<'g>) -> RefType<&'g ClassData<'g>> {
+    pub const fn ref_type<'g>(self, java: &JavaClasses<'g>) -> RefType<ClassId<'g>> {
         match self {
             TableType::FuncRef => RefType::Object(java.lang.invoke.method_handle),
             TableType::ExternRef => RefType::Object(java.lang.object),
@@ -122,7 +121,7 @@ impl TableType {
     }
 
     /// Convert a stack type into the corresponding JVM type
-    pub const fn field_type<'g>(self, java: &JavaClasses<'g>) -> FieldType<&'g ClassData<'g>> {
+    pub const fn field_type<'g>(self, java: &JavaClasses<'g>) -> FieldType<ClassId<'g>> {
         FieldType::Ref(self.ref_type(java))
     }
 

@@ -1,3 +1,4 @@
+use crate::util::{OffsetVec, Width};
 use byteorder::{BigEndian, WriteBytesExt};
 use std::io::Result;
 
@@ -79,6 +80,18 @@ impl<A: Serialize> Serialize for Vec<A> {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
         (self.len() as u16).serialize(writer)?;
         for elem in self {
+            elem.serialize(writer)?;
+        }
+        Ok(())
+    }
+}
+
+/// This is a lot like `Vec`, except the first thing serialized/deserialized is the maximum offset
+/// instead of the total number of elements.
+impl<A: Width + Serialize> Serialize for OffsetVec<A> {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
+        (self.offset_len().0 as u16).serialize(writer)?;
+        for (_, _, elem) in self {
             elem.serialize(writer)?;
         }
         Ok(())

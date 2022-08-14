@@ -1,51 +1,36 @@
-use crate::jvm::{
-    BaseType, BootstrapMethodData, BranchInstruction, BytecodeBuilder, ClassData, ConstantData,
-    EqComparison, Error, FieldData, FieldType, Instruction, InvokeDynamicData, InvokeType,
-    MethodData, MethodDescriptor, OrdComparison, RefType, UnqualifiedName, Width,
+use crate::jvm::class_graph::{
+    AccessMode, BootstrapMethodId, ClassId, ConstantData, FieldId, InvokeDynamicData, MethodData,
+    MethodId,
 };
+use crate::jvm::code::{
+    BranchInstruction, CodeBuilder, EqComparison, Instruction, InvokeType, OrdComparison,
+};
+use crate::jvm::{
+    BaseType, Error, FieldType, MethodAccessFlags, MethodDescriptor, RefType, UnqualifiedName,
+};
+use crate::util::Width;
 use std::borrow::Cow;
 use std::ops::Not;
 
-pub trait CodeBuilderExts<'a, 'g> {
+/// Extension trait for providing conveniences over top of [`CodeBuilder`]
+pub trait CodeBuilderExts<'g> {
     /// Zero initialize a local variable
-    fn zero_local(
-        &mut self,
-        offset: u16,
-        field_type: FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error>;
+    fn zero_local(&mut self, offset: u16, field_type: FieldType<ClassId<'g>>) -> Result<(), Error>;
 
-    /// Push a null of a specific value to the stack
-    fn const_null(&mut self, ref_type: RefType<&'g ClassData<'g>>) -> Result<(), Error>;
+    /// Push a `null` of a specific value to the stack
+    fn const_null(&mut self, ref_type: RefType<ClassId<'g>>) -> Result<(), Error>;
 
     /// Push a constant string to the stack
     fn const_string(&mut self, string: impl Into<Cow<'static, str>>) -> Result<(), Error>;
 
     /// Get a local at a particular offset
-    fn get_local(
-        &mut self,
-        offset: u16,
-        field_type: &FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error>;
+    fn get_local(&mut self, offset: u16, field_type: &FieldType<ClassId<'g>>) -> Result<(), Error>;
 
     /// Set a local at a particular offset
-    fn set_local(
-        &mut self,
-        offset: u16,
-        field_type: &FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error>;
-
-    /// Kill a local variable
-    fn kill_local(
-        &mut self,
-        offset: u16,
-        field_type: FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error>;
+    fn set_local(&mut self, offset: u16, field_type: &FieldType<ClassId<'g>>) -> Result<(), Error>;
 
     /// Return from the function
-    fn return_(
-        &mut self,
-        field_type_opt: Option<FieldType<&'g ClassData<'g>>>,
-    ) -> Result<(), Error>;
+    fn return_(&mut self, field_type_opt: Option<FieldType<ClassId<'g>>>) -> Result<(), Error>;
 
     /// Push an integer constant onto the stack
     fn const_int(&mut self, integer: i32) -> Result<(), Error>;
@@ -69,10 +54,10 @@ pub trait CodeBuilderExts<'a, 'g> {
     fn const_double(&mut self, double: f64) -> Result<(), Error>;
 
     /// Push a value of type `java/lang/Class` onto the stack
-    fn const_class(&mut self, ty: FieldType<&'g ClassData<'g>>) -> Result<(), Error>;
+    fn const_class(&mut self, ty: FieldType<ClassId<'g>>) -> Result<(), Error>;
 
     /// Push a value of type `java/lang/invoke/MethodHandle` based on a method onto the stack
-    fn const_methodhandle(&mut self, method: &'g MethodData<'g>) -> Result<(), Error>;
+    fn const_methodhandle(&mut self, method: MethodId<'g>) -> Result<(), Error>;
 
     /// Pop the top of the stack, accounting for the different possible type widths
     fn pop(&mut self) -> Result<(), Error>;
@@ -84,49 +69,41 @@ pub trait CodeBuilderExts<'a, 'g> {
     fn condition(&mut self, condition: &BranchCond) -> Result<(), Error>;
 
     /// Invoke a method
-    fn invoke(&mut self, method: &'g MethodData<'g>) -> Result<(), Error>;
+    fn invoke(&mut self, method: MethodId<'g>) -> Result<(), Error>;
 
     /// Invoke a method explicitly specifying the invocation type
     fn invoke_explicit(
         &mut self,
         invoke_typ: InvokeType,
-        method: &'g MethodData<'g>,
+        method: MethodId<'g>,
     ) -> Result<(), Error>;
 
     /// Invoke dynamic
     fn invoke_dynamic(
         &mut self,
-        bootstrap: &'g BootstrapMethodData<'g>,
+        bootstrap: BootstrapMethodId<'g>,
         method_name: UnqualifiedName,
-        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+        descriptor: MethodDescriptor<ClassId<'g>>,
     ) -> Result<(), Error>;
 
     /// Invoke `MethodHandle.invokeExact` using the specified method descriptor
     fn invoke_invoke_exact(
         &mut self,
-        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+        descriptor: MethodDescriptor<ClassId<'g>>,
     ) -> Result<(), Error>;
 
     /// Get/put a field
-    fn access_field(
-        &mut self,
-        field: &'g FieldData<'g>,
-        access_mode: AccessMode,
-    ) -> Result<(), Error>;
+    fn access_field(&mut self, field: FieldId<'g>, access_mode: AccessMode) -> Result<(), Error>;
 
     /// Construct a new object of the given type
-    fn new(&mut self, class: &'g ClassData<'g>) -> Result<(), Error>;
+    fn new(&mut self, class: ClassId<'g>) -> Result<(), Error>;
 
     /// Construct a new array of the given type
-    fn new_ref_array(&mut self, elem_type: RefType<&'g ClassData<'g>>) -> Result<(), Error>;
+    fn new_ref_array(&mut self, elem_type: RefType<ClassId<'g>>) -> Result<(), Error>;
 }
 
-impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
-    fn zero_local(
-        &mut self,
-        offset: u16,
-        field_type: FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error> {
+impl<'g> CodeBuilderExts<'g> for CodeBuilder<'g> {
+    fn zero_local(&mut self, offset: u16, field_type: FieldType<ClassId<'g>>) -> Result<(), Error> {
         match field_type {
             FieldType::Base(
                 BaseType::Int
@@ -151,8 +128,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
                 self.push_instruction(Instruction::DStore(offset))?;
             }
             FieldType::Ref(ref_type) => {
-                self.push_instruction(Instruction::AConstNull)?;
-                self.push_instruction(Instruction::AHint(ref_type))?;
+                self.const_null(ref_type)?;
                 self.push_instruction(Instruction::AStore(offset))?;
             }
         };
@@ -160,9 +136,9 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Push a null of a specific value to the stack
-    fn const_null(&mut self, ref_type: RefType<&'g ClassData<'g>>) -> Result<(), Error> {
+    fn const_null(&mut self, ref_type: RefType<ClassId<'g>>) -> Result<(), Error> {
         self.push_instruction(Instruction::AConstNull)?;
-        self.push_instruction(Instruction::AHint(ref_type))?;
+        self.generalize_top_stack_type(ref_type)?;
         Ok(())
     }
 
@@ -174,11 +150,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Get a local at a particular offset
-    fn get_local(
-        &mut self,
-        offset: u16,
-        field_type: &FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error> {
+    fn get_local(&mut self, offset: u16, field_type: &FieldType<ClassId<'g>>) -> Result<(), Error> {
         let insn = match *field_type {
             FieldType::Base(
                 BaseType::Int
@@ -196,11 +168,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Set a local at a particular offset
-    fn set_local(
-        &mut self,
-        offset: u16,
-        field_type: &FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error> {
+    fn set_local(&mut self, offset: u16, field_type: &FieldType<ClassId<'g>>) -> Result<(), Error> {
         let insn = match *field_type {
             FieldType::Base(
                 BaseType::Int
@@ -217,33 +185,8 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
         self.push_instruction(insn)
     }
 
-    /// Kill a local variable
-    fn kill_local(
-        &mut self,
-        offset: u16,
-        field_type: FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error> {
-        let insn = match field_type {
-            FieldType::Base(
-                BaseType::Int
-                | BaseType::Char
-                | BaseType::Short
-                | BaseType::Byte
-                | BaseType::Boolean,
-            ) => Instruction::IKill(offset),
-            FieldType::Base(BaseType::Float) => Instruction::FKill(offset),
-            FieldType::Base(BaseType::Long) => Instruction::LKill(offset),
-            FieldType::Base(BaseType::Double) => Instruction::DKill(offset),
-            FieldType::Ref(_) => Instruction::AKill(offset),
-        };
-        self.push_instruction(insn)
-    }
-
     /// Return from the function
-    fn return_(
-        &mut self,
-        field_type_opt: Option<FieldType<&'g ClassData<'g>>>,
-    ) -> Result<(), Error> {
+    fn return_(&mut self, field_type_opt: Option<FieldType<ClassId<'g>>>) -> Result<(), Error> {
         let insn = match field_type_opt {
             None => BranchInstruction::Return,
             Some(FieldType::Base(
@@ -319,7 +262,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
             f if f == 3.0 => (Instruction::IConst3, true),
             f if f == 4.0 => (Instruction::IConst4, true),
             f if f == 5.0 => (Instruction::IConst5, true),
-            _ => (Instruction::Ldc(ConstantData::Float(float)), false),
+            _ => (Instruction::Ldc(ConstantData::float(float)), false),
         };
         self.push_instruction(insn)?;
         if needs_int_to_float_conversion {
@@ -338,7 +281,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
             f if f == 3.0 => (Instruction::IConst3, true),
             f if f == 4.0 => (Instruction::IConst4, true),
             f if f == 5.0 => (Instruction::IConst5, true),
-            _ => (Instruction::Ldc2(ConstantData::Double(double)), false),
+            _ => (Instruction::Ldc2(ConstantData::double(double)), false),
         };
         self.push_instruction(insn)?;
         if needs_int_to_double_conversion {
@@ -348,7 +291,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Push a constant of type `java.lang.Class` onto the stack
-    fn const_class(&mut self, ty: FieldType<&'g ClassData<'g>>) -> Result<(), Error> {
+    fn const_class(&mut self, ty: FieldType<ClassId<'g>>) -> Result<(), Error> {
         match ty {
             FieldType::Base(base_type) => {
                 let type_static_field = match base_type {
@@ -368,7 +311,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Push a constant of type `java.lang.invoke.MethodHandle` onto the stack
-    fn const_methodhandle(&mut self, method: &'g MethodData<'g>) -> Result<(), Error> {
+    fn const_methodhandle(&mut self, method: MethodId<'g>) -> Result<(), Error> {
         self.push_instruction(Instruction::Ldc(ConstantData::MethodHandle(method)))
     }
 
@@ -424,7 +367,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Invoke a method
-    fn invoke(&mut self, method: &'g MethodData<'g>) -> Result<(), Error> {
+    fn invoke(&mut self, method: MethodId<'g>) -> Result<(), Error> {
         self.invoke_explicit(method.infer_invoke_type(), method)
     }
 
@@ -432,16 +375,16 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     fn invoke_explicit(
         &mut self,
         invoke_typ: InvokeType,
-        method: &'g MethodData<'g>,
+        method: MethodId<'g>,
     ) -> Result<(), Error> {
         self.push_instruction(Instruction::Invoke(invoke_typ, method))
     }
 
     fn invoke_dynamic(
         &mut self,
-        bootstrap: &'g BootstrapMethodData<'g>,
+        bootstrap: BootstrapMethodId<'g>,
         method_name: UnqualifiedName,
-        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+        descriptor: MethodDescriptor<ClassId<'g>>,
     ) -> Result<(), Error> {
         let indy = InvokeDynamicData {
             name: method_name,
@@ -453,23 +396,19 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
 
     fn invoke_invoke_exact(
         &mut self,
-        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+        descriptor: MethodDescriptor<ClassId<'g>>,
     ) -> Result<(), Error> {
         let method = self.class_graph.add_method(MethodData {
             class: self.java.classes.lang.invoke.method_handle,
             name: UnqualifiedName::INVOKEEXACT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor,
-            is_static: false,
         });
         self.push_instruction(Instruction::Invoke(InvokeType::Virtual, method))
     }
 
-    fn access_field(
-        &mut self,
-        field: &'g FieldData<'g>,
-        access_mode: AccessMode,
-    ) -> Result<(), Error> {
-        self.push_instruction(match (field.is_static, access_mode) {
+    fn access_field(&mut self, field: FieldId<'g>, access_mode: AccessMode) -> Result<(), Error> {
+        self.push_instruction(match (field.is_static(), access_mode) {
             (true, AccessMode::Read) => Instruction::GetStatic(field),
             (true, AccessMode::Write) => Instruction::PutStatic(field),
             (false, AccessMode::Read) => Instruction::GetField(field),
@@ -477,12 +416,12 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
         })
     }
 
-    fn new(&mut self, class: &'g ClassData<'g>) -> Result<(), Error> {
+    fn new(&mut self, class: ClassId<'g>) -> Result<(), Error> {
         self.push_instruction(Instruction::New(RefType::Object(class)))
     }
 
     /// Construct a new array of the given type
-    fn new_ref_array(&mut self, elem_type: RefType<&'g ClassData<'g>>) -> Result<(), Error> {
+    fn new_ref_array(&mut self, elem_type: RefType<ClassId<'g>>) -> Result<(), Error> {
         self.push_instruction(Instruction::ANewArray(elem_type))
     }
 }
@@ -521,9 +460,4 @@ impl BranchCond {
             BranchCond::IfNull(eq) => BranchInstruction::IfNull(*eq, jump_lbl, fallthrough_lbl),
         }
     }
-}
-
-pub enum AccessMode {
-    Read,
-    Write,
 }

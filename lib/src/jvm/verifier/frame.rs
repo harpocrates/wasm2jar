@@ -1,66 +1,103 @@
 use super::*;
-use byteorder::WriteBytesExt;
+use crate::jvm::class_file::{
+    BytecodeIndex, ClassConstantIndex, ConstantPoolOverflow, ConstantsPool, StackMapFrame,
+};
+use crate::jvm::class_graph::{ClassGraph, ClassId, ConstantData, JavaClasses};
+use crate::jvm::code::{BranchInstruction, Instruction, InvokeType, SynLabel, VerifierInstruction};
+use crate::jvm::descriptors::RenderDescriptor;
+use crate::jvm::{
+    ArrayType, BaseType, BinaryName, FieldType, RefType, UnqualifiedName, VerifierErrorKind,
+};
+use crate::util::{Offset, OffsetVec, Width};
+use std::collections::HashMap;
 
-// TODO: rename various "interpret" functions "verify"
-
-/// A frame represents the state of the stack and local variables at any location in the bytecode
+/// Snapshot of the stack and local variables at a point in the bytecode
 ///
-/// In order to load bytecode into the JVM, the JVM requires that methods be annotated with
-/// `StackMapTable` attributes to describe the state of the frame at offsets that can be jumped to.
+/// Besides just being able to produce stack map entries, tracking frames let's us validate that
+/// the bytecode being created is valid - we can be more confident that our code is valid.
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct Frame<Cls, U> {
-    /// Local variables in the frame
+    /// Local variables in scope
     pub locals: OffsetVec<VerificationType<Cls, U>>,
 
-    /// Stack in the frame
+    /// Types of values on the stack
     pub stack: OffsetVec<VerificationType<Cls, U>>,
 }
 
-pub type VerifierInstruction<'g> = Instruction<
-    RefType<&'g ClassData<'g>>,
-    RefType<&'g ClassData<'g>>,
-    ConstantData<'g>,
-    &'g FieldData<'g>,
-    &'g MethodData<'g>,
-    InvokeDynamicData<'g>,
->;
+/// Stack map frame stored during verification
+pub type VerifierFrame<'g> = Frame<RefType<ClassId<'g>>, UninitializedRefType<'g>>;
 
-pub type VerifierFrame<'g> =
-    Frame<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)>;
-
-type VType<'g> = VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)>;
+type VType<'g> = VerificationType<RefType<ClassId<'g>>, UninitializedRefType<'g>>;
 
 impl<'g> VerifierFrame<'g> {
+    /// Generalize a type at the top of the stack
+    pub fn generalize_top_stack_type(
+        &mut self,
+        general_type: RefType<ClassId<'g>>,
+    ) -> Result<(), VerifierErrorKind> {
+        let general_type = VType::Object(general_type.clone());
+        let specific_type = pop_offset_vec(&mut self.stack)?;
+        let is_valid_weakening = VerificationType::is_assignable(&specific_type, &general_type);
+        if is_valid_weakening {
+            self.stack.push(general_type);
+            Ok(())
+        } else {
+            Err(VerifierErrorKind::InvalidType)
+        }
+    }
+
+    /// Kill a local variable (at the top of the local variables)
+    pub fn kill_top_local(
+        &mut self,
+        offset: u16,
+        local_type_assertion: Option<FieldType<ClassId<'g>>>,
+    ) -> Result<(), VerifierErrorKind> {
+        let killed_local = match self.locals.pop() {
+            Some((Offset(last), _, vtype)) if last == offset as usize => vtype,
+            _ => return Err(VerifierErrorKind::InvalidIndex),
+        };
+
+        if let Some(local_type) = local_type_assertion {
+            if !VerificationType::is_assignable(&killed_local, &VType::from(local_type)) {
+                return Err(VerifierErrorKind::InvalidType);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Update the frame to reflect the effects of the given (non-branching) instruction
-    ///
-    ///   * `insn_offset_in_basic_block` - used in uninitialized verification types
-    ///   * `class_graph` - used to check whether types are assignable
-    ///   * `this_class` - used to determine the type of `UninitializedThis` after `<init>`
-    ///
-    pub fn interpret_instruction(
+    pub fn verify_instruction(
         &mut self,
         insn: &VerifierInstruction<'g>,
-        insn_offset_in_block: Offset,
+        insn_offset_in_block: &Offset,
+        current_block: &SynLabel,
         java: &JavaClasses<'g>,
-        this_class: &RefType<&'g ClassData<'g>>,
+        this_class: &RefType<ClassId<'g>>,
     ) -> Result<(), VerifierErrorKind> {
-        interpret_instruction(self, java, this_class, insn, insn_offset_in_block)
+        verify_instruction(
+            self,
+            java,
+            this_class,
+            insn,
+            insn_offset_in_block,
+            current_block,
+        )
     }
 
     /// Update the frame to reflect the effects of the given branching instruction
-    ///
-    ///   * `class_graph` - used to check whether types are assignable
-    ///   * `this_method_return_type` - used to check typecheck return instructions
-    ///
-    pub fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
+    pub fn verify_branch_instruction<Lbl, LblWide, LblNext>(
         &mut self,
         insn: &BranchInstruction<Lbl, LblWide, LblNext>,
-        this_method_return_type: &Option<FieldType<&'g ClassData<'g>>>,
+        this_method_return_type: &Option<FieldType<ClassId<'g>>>,
     ) -> Result<(), VerifierErrorKind> {
-        interpret_branch_instruction(self, this_method_return_type, insn)
+        verify_branch_instruction(self, this_method_return_type, insn)
     }
 
     /// Update the maximum locals and stack
+    ///
+    /// Only has an effect if the size of the locals or the size of the stack is greater than the
+    /// previous maximum values.
     pub fn update_maximums(&self, max_locals: &mut Offset, max_stack: &mut Offset) {
         max_locals.0 = max_locals.0.max(self.locals.offset_len().0);
         max_stack.0 = max_stack.0.max(self.stack.offset_len().0);
@@ -69,19 +106,19 @@ impl<'g> VerifierFrame<'g> {
     /// Resolve the frame into its serializable form
     pub fn into_serializable(
         &self,
-        constants_pool: &ConstantsPool,
-        block_offset: Offset,
-    ) -> Result<Frame<ClassConstantIndex, u16>, ConstantPoolOverflow> {
+        constants_pool: &mut ConstantsPool<'g>,
+        block_offsets: &HashMap<SynLabel, Offset>,
+    ) -> Result<Frame<ClassConstantIndex, BytecodeIndex>, ConstantPoolOverflow> {
         Ok(Frame {
             stack: self
                 .stack
                 .iter()
-                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offset))
+                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offsets))
                 .collect::<Result<_, _>>()?,
             locals: self
                 .locals
                 .iter()
-                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offset))
+                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offsets))
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -91,7 +128,12 @@ impl<'g> VerifierFrame<'g> {
         let update_vtype = |vty: &VType<'g>| {
             vty.map(
                 |ref_type| ref_type.map(|cls| cls.name.clone()),
-                |(ref_type, off)| (ref_type.map(|cls| cls.name.clone()), *off),
+                |uninit_ref_type| {
+                    let ref_type = uninit_ref_type
+                        .verification_type
+                        .map(|cls| cls.name.clone());
+                    (ref_type, uninit_ref_type.offset_in_block)
+                },
             )
         };
         Frame {
@@ -105,11 +147,11 @@ impl<'g> VerifierFrame<'g> {
     }
 }
 
-impl Frame<ClassConstantIndex, u16> {
+impl Frame<ClassConstantIndex, BytecodeIndex> {
     /// Compute a stack map frame for this frame, given the previous frame
     ///
-    /// This will only use the `Full` option if none of the other stack map frame variants are
-    /// enough to encode the transition.
+    /// This will fall back to the `Full` option using [`Self::full_stack_map_frame`] only if none of the
+    /// other stack map frame variants are enough to encode the transition.
     pub fn stack_map_frame(&self, offset_delta: u16, previous_frame: &Self) -> StackMapFrame {
         match self.stack.len() {
             0 => {
@@ -169,7 +211,7 @@ impl Frame<ClassConstantIndex, u16> {
         self.full_stack_map_frame(offset_delta)
     }
 
-    /// Compute a full stack map frame
+    /// Compute a `Full` stack map frame
     pub fn full_stack_map_frame(&self, offset_delta: u16) -> StackMapFrame {
         StackMapFrame::Full {
             offset_delta,
@@ -179,172 +221,13 @@ impl Frame<ClassConstantIndex, u16> {
     }
 }
 
-/// These types are from [this hierarchy][0]
-///
-/// [0]: https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.10.1.2
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-pub enum VerificationType<Cls, U> {
-    Integer,
-    Float,
-    Double,
-    Long,
-    Null,
-
-    /// In the constructor, the `this` parameter starts with this type then turns into an object
-    /// type after `<init>` is called
-    UninitializedThis,
-
-    /// Object type
-    Object(Cls),
-
-    /// State of an object after `new` has been called by `<init>` has not been called
-    ///
-    ///   - while we are building up the CFG, we use `(RefType, Offset)` for `U`, tracking the
-    ///     type of the uninitialized object (which we get from the `new` instruction) and the
-    ///     offset of the `new` instruction in that basic block.
-    ///   - when serializing into a classfile, we use `u16` for `U`, corresponding to the offset of
-    ///     the `new` instruction from the start of the method body
-    Uninitialized(U),
-}
-
-impl<Cls, U> VerificationType<Cls, U> {
-    /// Is this type is a reference type?
-    pub fn is_reference(&self) -> bool {
-        match self {
-            VerificationType::Integer
-            | VerificationType::Float
-            | VerificationType::Double
-            | VerificationType::Long => false,
-
-            VerificationType::Null
-            | VerificationType::UninitializedThis
-            | VerificationType::Object(_)
-            | VerificationType::Uninitialized(_) => true,
-        }
-    }
-}
-
-impl<C, U> From<FieldType<C>> for VerificationType<RefType<C>, U> {
-    fn from(field_type: FieldType<C>) -> Self {
-        match field_type {
-            FieldType::Base(BaseType::Int)
-            | FieldType::Base(BaseType::Char)
-            | FieldType::Base(BaseType::Short)
-            | FieldType::Base(BaseType::Byte)
-            | FieldType::Base(BaseType::Boolean) => VerificationType::Integer,
-            FieldType::Base(BaseType::Float) => VerificationType::Float,
-            FieldType::Base(BaseType::Long) => VerificationType::Long,
-            FieldType::Base(BaseType::Double) => VerificationType::Double,
-            FieldType::Ref(ref_type) => VerificationType::Object(ref_type),
-        }
-    }
-}
-
-impl Serialize for VerificationType<ClassConstantIndex, u16> {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        match self {
-            VerificationType::Integer => 1u8.serialize(writer)?,
-            VerificationType::Float => 2u8.serialize(writer)?,
-            VerificationType::Double => 3u8.serialize(writer)?,
-            VerificationType::Long => 4u8.serialize(writer)?,
-            VerificationType::Null => 5u8.serialize(writer)?,
-            VerificationType::UninitializedThis => 6u8.serialize(writer)?,
-            VerificationType::Object(cls) => {
-                7u8.serialize(writer)?;
-                cls.serialize(writer)?;
-            }
-            VerificationType::Uninitialized(off) => {
-                8u8.serialize(writer)?;
-                off.serialize(writer)?;
-            }
-        };
-        Ok(())
-    }
-}
-
-impl<Cls, A> Width for VerificationType<Cls, A> {
-    fn width(&self) -> usize {
-        match self {
-            VerificationType::Double | VerificationType::Long => 2,
-            _ => 1,
-        }
-    }
-}
-
-impl<'g, U> VerificationType<RefType<&'g ClassData<'g>>, U> {
-    /// Check if one verification type is assignable to another
-    ///
-    /// TODO: there is no handling of uninitialized yet. This just means that we might get false
-    /// verification failures.
-    pub fn is_assignable<'a>(sub_type: &'a Self, super_type: &'a Self) -> bool
-    where
-        'g: 'a,
-    {
-        match (sub_type, super_type) {
-            (Self::Integer, Self::Integer) => true,
-            (Self::Float, Self::Float) => true,
-            (Self::Long, Self::Long) => true,
-            (Self::Double, Self::Double) => true,
-            (Self::Null, Self::Null) => true,
-            (Self::Null, Self::Object(_)) => true,
-            (Self::Object(t1), Self::Object(t2)) => ClassGraph::is_java_assignable(t1, t2),
-            _ => false,
-        }
-    }
-}
-
-impl<'g> VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)> {
-    /// Resolve the type into its serializable form
-    fn into_serializable(
-        &self,
-        constants_pool: &ConstantsPool,
-        block_offset: Offset,
-    ) -> Result<VerificationType<ClassConstantIndex, u16>, ConstantPoolOverflow> {
-        match self {
-            VerificationType::Integer => Ok(VerificationType::Integer),
-            VerificationType::Float => Ok(VerificationType::Float),
-            VerificationType::Long => Ok(VerificationType::Long),
-            VerificationType::Double => Ok(VerificationType::Double),
-            VerificationType::Null => Ok(VerificationType::Null),
-            VerificationType::UninitializedThis => Ok(VerificationType::UninitializedThis),
-            VerificationType::Object(ref_type) => {
-                let class_index = ref_type.constant_index(constants_pool)?;
-                Ok(VerificationType::Object(class_index))
-            }
-            VerificationType::Uninitialized((_, Offset(offset_in_block))) => Ok(
-                VerificationType::Uninitialized((block_offset.0 + offset_in_block) as u16),
-            ),
-        }
-    }
-}
-
-impl<C, U> VerificationType<C, U> {
-    pub fn map<C2, U2>(
-        &self,
-        map_class: impl Fn(&C) -> C2,
-        map_uninitialized: impl Fn(&U) -> U2,
-    ) -> VerificationType<C2, U2> {
-        match self {
-            VerificationType::Integer => VerificationType::Integer,
-            VerificationType::Float => VerificationType::Float,
-            VerificationType::Long => VerificationType::Long,
-            VerificationType::Double => VerificationType::Double,
-            VerificationType::Null => VerificationType::Null,
-            VerificationType::UninitializedThis => VerificationType::UninitializedThis,
-            VerificationType::Object(cls) => VerificationType::Object(map_class(cls)),
-            VerificationType::Uninitialized(uninit) => {
-                VerificationType::Uninitialized(map_uninitialized(uninit))
-            }
-        }
-    }
-}
-
-fn interpret_instruction<'g>(
+fn verify_instruction<'g>(
     frame: &mut VerifierFrame<'g>,
     java: &JavaClasses<'g>,
-    this_class: &RefType<&'g ClassData<'g>>,
+    this_class: &RefType<ClassId<'g>>,
     insn: &VerifierInstruction<'g>,
-    insn_offset_in_basic_block: Offset,
+    insn_offset_in_basic_block: &Offset,
+    current_block: &SynLabel,
 ) -> Result<(), VerifierErrorKind> {
     use Instruction::*;
     use VerificationType::*;
@@ -380,10 +263,11 @@ fn interpret_instruction<'g>(
                 ConstantData::Class(_) => VType::Object(RefType::Object(java.lang.class)),
                 ConstantData::Integer(_) => VType::Integer,
                 ConstantData::Float(_) => VType::Float,
-                ConstantData::FieldGetterHandle(_)
-                | ConstantData::FieldSetterHandle(_)
-                | ConstantData::MethodHandle(_) => {
+                ConstantData::FieldHandle(_, _) | ConstantData::MethodHandle(_) => {
                     VType::Object(RefType::Object(java.lang.invoke.method_handle))
+                }
+                ConstantData::MethodType(_) => {
+                    VType::Object(RefType::Object(java.lang.invoke.method_type))
                 }
                 ConstantData::Long(_) | ConstantData::Double(_) => {
                     return Err(VerifierErrorKind::InvalidWidth(2))
@@ -396,9 +280,9 @@ fn interpret_instruction<'g>(
                 | ConstantData::Class(_)
                 | ConstantData::Integer(_)
                 | ConstantData::Float(_)
-                | ConstantData::FieldGetterHandle(_)
-                | ConstantData::FieldSetterHandle(_)
-                | ConstantData::MethodHandle(_) => return Err(VerifierErrorKind::InvalidWidth(1)),
+                | ConstantData::FieldHandle(_, _)
+                | ConstantData::MethodHandle(_)
+                | ConstantData::MethodType(_) => return Err(VerifierErrorKind::InvalidWidth(1)),
                 ConstantData::Long(_) => VType::Long,
                 ConstantData::Double(_) => VType::Double,
             });
@@ -494,52 +378,6 @@ fn interpret_instruction<'g>(
         AStore(offset) => {
             let popped_type = pop_offset_vec(stack)?;
             update_local_type(locals, *offset, popped_type)?;
-        }
-
-        IKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, Integer)) if last == *offset as usize => locals.pop(),
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-        FKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, Float)) if last == *offset as usize => locals.pop(),
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-        LKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, Long)) if last == *offset as usize => locals.pop(),
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-        DKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, Double)) if last == *offset as usize => locals.pop(),
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-        AKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, local_ty))
-                    if last == *offset as usize && local_ty.is_reference() =>
-                {
-                    locals.pop()
-                }
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-
-        AHint(general_type) => {
-            let general_type = VType::Object(general_type.clone());
-            let specific_type = pop_offset_vec(stack)?;
-            let is_valid_weakening = VerificationType::is_assignable(&specific_type, &general_type);
-            if is_valid_weakening {
-                stack.push(general_type);
-            } else {
-                return Err(VerifierErrorKind::InvalidType);
-            }
         }
 
         IAStore => {
@@ -932,7 +770,7 @@ fn interpret_instruction<'g>(
         }
 
         Invoke(invoke_type, method) => {
-            let is_interface = method.class.is_interface;
+            let is_interface = method.class.is_interface();
             let is_init = method.name == UnqualifiedName::INIT;
             let desc = &method.descriptor;
 
@@ -962,13 +800,10 @@ fn interpret_instruction<'g>(
                         replace_all(locals, &UninitializedThis, || Object(this_class.clone()));
                     }
 
-                    Uninitialized((reftype, off)) => {
-                        replace_all(stack, &Uninitialized((reftype.clone(), off)), || {
-                            Object(reftype.clone())
-                        });
-                        replace_all(locals, &Uninitialized((reftype.clone(), off)), || {
-                            Object(reftype.clone())
-                        });
+                    uninitialized @ Uninitialized(ref initialized_ref_type) => {
+                        let reftype = initialized_ref_type.verification_type;
+                        replace_all(stack, &uninitialized, || Object(reftype.clone()));
+                        replace_all(locals, &uninitialized, || Object(reftype.clone()));
                     }
 
                     _ => return Err(VerifierErrorKind::InvalidType),
@@ -1032,7 +867,12 @@ fn interpret_instruction<'g>(
 
         New(ref_type) => {
             if let RefType::Object(_) = ref_type {
-                stack.push(Uninitialized((*ref_type, insn_offset_in_basic_block)));
+                let uninitialized_ref_type = UninitializedRefType {
+                    verification_type: *ref_type,
+                    offset_in_block: *insn_offset_in_basic_block,
+                    block: *current_block,
+                };
+                stack.push(Uninitialized(uninitialized_ref_type));
             } else {
                 todo!("error - arrays cannot be constructed with `new`")
             }
@@ -1073,9 +913,9 @@ fn interpret_instruction<'g>(
     Ok(())
 }
 
-fn interpret_branch_instruction<'g, Lbl, LblWide, LblNext>(
+fn verify_branch_instruction<'g, Lbl, LblWide, LblNext>(
     frame: &mut VerifierFrame<'g>,
-    this_method_return_type: &Option<FieldType<&'g ClassData<'g>>>,
+    this_method_return_type: &Option<FieldType<ClassId<'g>>>,
     insn: &BranchInstruction<Lbl, LblWide, LblNext>,
 ) -> Result<(), VerifierErrorKind> {
     use BranchInstruction::*;

@@ -1,6 +1,8 @@
-use super::{
-    BinaryName, BranchInstruction, ClassConstantIndex, Constant, Frame, Offset, RefType, SynLabel,
-};
+use super::{BinaryName, RefType};
+use crate::jvm::class_file::{BytecodeIndex, ClassConstantIndex, ConstantPoolOverflow};
+use crate::jvm::code::{BranchInstruction, SynLabel};
+use crate::jvm::verifier::Frame;
+use crate::util::Offset;
 
 #[derive(Debug)]
 pub enum Error {
@@ -43,15 +45,9 @@ pub enum Error {
     /// A particular offset has two conflicting frames
     ConflictingFrames(
         Offset,
-        Frame<ClassConstantIndex, u16>,
-        Frame<ClassConstantIndex, u16>,
+        Frame<ClassConstantIndex, BytecodeIndex>,
+        Frame<ClassConstantIndex, BytecodeIndex>,
     ),
-}
-
-#[derive(Debug)]
-pub struct ConstantPoolOverflow {
-    pub constant: Constant,
-    pub offset: u16,
 }
 
 impl From<ConstantPoolOverflow> for Error {

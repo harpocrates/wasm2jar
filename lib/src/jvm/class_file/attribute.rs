@@ -1,8 +1,36 @@
-use super::{
-    Attribute, ClassConstantIndex, ConstantIndex, InnerClassAccessFlags, Serialize,
-    Utf8ConstantIndex, VerificationType,
-};
+use crate::jvm::class_file::{ClassConstantIndex, ConstantIndex, Serialize, Utf8ConstantIndex};
+use crate::jvm::verifier::VerificationType;
+use crate::jvm::InnerClassAccessFlags;
 use byteorder::WriteBytesExt;
+
+/// [Attributes][0] used in classes, fields, methods, and even on some attributes.
+///
+/// The representation is designed to be easily extended with custom attributes. While some
+/// attributes aren't essential, others are really important (eg. the [`Code`] attribute on a
+/// method carries the actual bytecode).
+///
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7
+#[derive(Debug)]
+pub struct Attribute {
+    /// Name of the attribute
+    pub name_index: Utf8ConstantIndex,
+
+    /// Encoded content of the attribute. The name of the attribute determines the structure of the
+    /// encoded information.
+    pub info: Vec<u8>,
+}
+
+impl Serialize for Attribute {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.name_index.serialize(writer)?;
+
+        // Attribute info length is 4 bytes
+        (self.info.len() as u32).serialize(writer)?;
+        writer.write_all(&self.info)?;
+
+        Ok(())
+    }
+}
 
 /// Attributes are all stored in the same way (see `Attribute`), but internally
 /// they represent very different things. This trait is implemented by things
@@ -12,7 +40,9 @@ pub trait AttributeLike: Serialize {
     const NAME: &'static str;
 }
 
-/// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7.2
+/// [Attribute][0] used to indicate a field has a constant value.
+///
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.7.2
 pub struct ConstantValue(ConstantIndex);
 
 impl Serialize for ConstantValue {
@@ -25,12 +55,27 @@ impl AttributeLike for ConstantValue {
     const NAME: &'static str = "ConstantValue";
 }
 
-/// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7.3
+/// [Attribute][0] used to store method bytecode.
+///
+/// See [`crate::jvm::code::CodeBuilder`] for an interface through which to construct bytecode.
+///
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.7.3
 pub struct Code {
+    /// Maximum depth of the operand stack throughout the body of the method (this takes into
+    /// account that some types are wider)
     pub max_stack: u16,
+
+    /// Maximum size of locals throughout the body of the method (this takes into account that some
+    /// types are wider)
     pub max_locals: u16,
+
+    /// Array of encoded bytecode
     pub code_array: BytecodeArray,
+
+    /// Exception handlers within the code
     pub exception_table: Vec<ExceptionHandler>,
+
+    /// Code attributes
     pub attributes: Vec<Attribute>,
 }
 
@@ -49,6 +94,7 @@ impl AttributeLike for Code {
     const NAME: &'static str = "Code";
 }
 
+/// Exception handler block as in [`Code`]
 pub struct ExceptionHandler {
     /// Start of exception handler range (inclusive)
     pub start_pc: BytecodeIndex,
@@ -59,6 +105,7 @@ pub struct ExceptionHandler {
     /// Start of the exception handler
     pub handler_pc: BytecodeIndex,
 
+    /// Exception type that is caught and handled by the handler
     pub catch_type: ClassConstantIndex,
 }
 
@@ -72,7 +119,7 @@ impl Serialize for ExceptionHandler {
     }
 }
 
-/// Encoded bytecode instructions
+/// Encoded bytecode instructions as in [`Code`]
 pub struct BytecodeArray(pub Vec<u8>);
 
 impl Serialize for BytecodeArray {
@@ -84,7 +131,11 @@ impl Serialize for BytecodeArray {
     }
 }
 
-/// Index into `BytecodeArray`
+/// Index into a [`BytecodeArray`]
+///
+/// Note that since instructions in the bytecode have variable widths, not every index points to an
+/// instruction - some point to the middle of an instruction. These situations are usually invalid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BytecodeIndex(pub u16);
 
 impl Serialize for BytecodeIndex {
@@ -93,7 +144,11 @@ impl Serialize for BytecodeIndex {
     }
 }
 
-/// [0]: https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.7.4
+/// [Attribute][0] used to store stack map frames for a [`Code`] section
+///
+/// See [`crate::jvm::verifier`] for more details on stack maps.
+///
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.7.4
 #[derive(Debug)]
 pub struct StackMapTable(pub Vec<StackMapFrame>);
 
@@ -107,38 +162,51 @@ impl Serialize for StackMapTable {
     }
 }
 
+/// Stack map frame as in [`StackMapTable`]
+///
+/// See [`crate::jvm::verifier`] for more details on stack maps and
+/// [`crate::jvm::verifier::Frame::stack_map_frame`] for how these are computed. The `offset_delta`
+/// field present in all variants is 1 less than the offset from the previous previous frame,
+/// unless the previous frame is the initial implicit frame (in which case it is just the offset
+/// without the off-by one).
 #[derive(Debug)]
 pub enum StackMapFrame {
     /// Frame has the same locals as the previous frame and number of stack items is zero
-    /// Tags: 0-63 or 251
     SameLocalsNoStack { offset_delta: u16 },
 
     /// Frame has the same locals as the previous frame and number of stack items is one
-    /// Tags: 64-127 or 247
     SameLocalsOneStack {
         offset_delta: u16,
-        stack: VerificationType<ClassConstantIndex, u16>,
+
+        /// Single element on the stack
+        stack: VerificationType<ClassConstantIndex, BytecodeIndex>,
     },
 
-    /// Frame is like the previous frame, but without the last `chopped_k` locals
-    ///
-    /// Note: `chopped_k` must be in the range 1 to 3 inclusive
-    /// Tags: 248-250
-    ChopLocalsNoStack { offset_delta: u16, chopped_k: u8 },
+    /// Frame is like the previous frame, but with 1 to 3 inclusive less locals
+    ChopLocalsNoStack {
+        offset_delta: u16,
+
+        /// Number of locals "chopped" off, must be in the range 1 to 3 inclusive
+        chopped_k: u8,
+    },
 
     /// Frame is like the previous frame, but with extra locals
-    /// Tags: 252-254
     AppendLocalsNoStack {
         offset_delta: u16,
-        locals: Vec<VerificationType<ClassConstantIndex, u16>>,
+
+        /// Extra locals added to the top of the existing stack of locals
+        locals: Vec<VerificationType<ClassConstantIndex, BytecodeIndex>>,
     },
 
     /// Frame has exactly the locals and stack specified
-    /// Tag: 255
     Full {
         offset_delta: u16,
-        locals: Vec<VerificationType<ClassConstantIndex, u16>>,
-        stack: Vec<VerificationType<ClassConstantIndex, u16>>,
+
+        /// Complete list of locals
+        locals: Vec<VerificationType<ClassConstantIndex, BytecodeIndex>>,
+
+        /// Complete stack
+        stack: Vec<VerificationType<ClassConstantIndex, BytecodeIndex>>,
     },
 }
 
@@ -215,13 +283,22 @@ impl Serialize for StackMapFrame {
     }
 }
 
-/// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7.23
+/// [Attribute][0] specifying the bootstrap methods on a class
+///
+/// Bootstrap methods are referred to in `invokedynamic` instructions (by their offset in the
+/// bootstrap method array in this attribute).
+///
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.7.23
 #[derive(Debug)]
 pub struct BootstrapMethods(pub Vec<BootstrapMethod>);
 
+/// Bootstrap method as in [`BootstrapMethods`]
 #[derive(Debug)]
 pub struct BootstrapMethod {
+    /// Method handle to use for bootstrapping
     pub bootstrap_method: ConstantIndex,
+
+    /// Bootstrap method constant arguments
     pub bootstrap_arguments: Vec<ConstantIndex>,
 }
 
@@ -243,6 +320,11 @@ impl Serialize for BootstrapMethod {
     }
 }
 
+/// [Attribute][0] specifying the nest host of a class
+///
+/// If this attribute is not present, the class is the host of a nest (possibly implicitly so).
+/// This attribute must not be present at the same time as [`NestMembers`].
+///
 /// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7.28
 #[derive(Debug)]
 pub struct NestHost(pub ClassConstantIndex);
@@ -257,6 +339,11 @@ impl Serialize for NestHost {
     }
 }
 
+/// [Attribute][0] specifying the nest members of a class
+///
+/// Every class without a [`NestHost`] attribute is a nest host. If the nest host has members, the
+/// class should have a [`NestMembers`] attribute to list them out.
+///
 /// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7.29
 #[derive(Debug)]
 pub struct NestMembers(pub Vec<ClassConstantIndex>);
@@ -271,6 +358,9 @@ impl Serialize for NestMembers {
     }
 }
 
+/// [Attribute][0] elaborating the inner class relationship of every class in the constant pool
+/// which is not a nest host.
+///
 /// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7.6
 #[derive(Debug)]
 pub struct InnerClasses(pub Vec<InnerClass>);
@@ -285,11 +375,19 @@ impl Serialize for InnerClasses {
     }
 }
 
+/// Inner class as in [`InnerClasses`]
 #[derive(Debug)]
 pub struct InnerClass {
+    /// Inner (nested) class
     pub inner_class: ClassConstantIndex,
+
+    /// Outer class (note this class may also be itself nested)
     pub outer_class: ClassConstantIndex,
+
+    /// Simple name of the inner class
     pub inner_name: Utf8ConstantIndex,
+
+    /// Inner class access modifiers
     pub access_flags: InnerClassAccessFlags,
 }
 
@@ -303,6 +401,13 @@ impl Serialize for InnerClass {
     }
 }
 
+/// [Attribute][0] for specifying the generic signature of a class, method, or field.
+///
+/// The [format of the signature is an extension][1] of the format used for descriptors that
+/// includes support for type parameters, wildcards, bounds, and checked exceptions.
+///
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.7.9
+/// [1]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.7.9.1
 #[derive(Debug)]
 pub struct Signature {
     pub signature: Utf8ConstantIndex,

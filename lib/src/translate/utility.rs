@@ -1,10 +1,16 @@
-use super::{AccessMode, CodeBuilderExts, Error, Memory, Settings, Table, UtilitiesStrategy};
+use super::{Error, Memory, Settings, Table, UtilitiesStrategy};
+use crate::jvm::class_graph::{
+    AccessMode, BootstrapMethodData, BootstrapMethodId, ClassData, ClassGraph, ClassId,
+    ConstantData, JavaClasses, JavaLibrary, MethodData, MethodId, NestedClassData,
+};
+use crate::jvm::code::{
+    BranchInstruction, CodeBuilder, CodeBuilderExts, CompareMode, Instruction, OrdComparison,
+    ShiftType,
+};
+use crate::jvm::model::{Class, Method};
 use crate::jvm::{
-    BaseType, BinaryName, BootstrapMethodData, BranchInstruction, BytecodeBuilder,
-    ClassAccessFlags, ClassBuilder, ClassData, ClassGraph, CompareMode, ConstantData, FieldType,
-    InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, JavaClasses, JavaLibrary,
-    MethodAccessFlags, MethodData, MethodDescriptor, Name, OrdComparison, RefType, ShiftType,
-    UnqualifiedName,
+    BaseType, BinaryName, ClassAccessFlags, FieldType, InnerClassAccessFlags, MethodAccessFlags,
+    MethodDescriptor, RefType, UnqualifiedName,
 };
 use std::collections::HashMap;
 
@@ -174,7 +180,7 @@ impl UtilityMethod {
     }
 
     /// Get the method descriptor
-    pub fn descriptor<'g>(&self, java: &JavaClasses<'g>) -> MethodDescriptor<&'g ClassData<'g>> {
+    pub fn descriptor<'g>(&self, java: &JavaClasses<'g>) -> MethodDescriptor<ClassId<'g>> {
         match self {
             UtilityMethod::I32DivS => MethodDescriptor {
                 parameters: vec![FieldType::int(), FieldType::int()],
@@ -358,10 +364,10 @@ enum UtilityClassInner<'g> {
     /// Generate an internal utility class
     Internal {
         /// Builder for the inner class
-        class: ClassBuilder<'g>,
+        class: Class<'g>,
 
         /// Set of the utility methods that have already been generated
-        methods: HashMap<UtilityMethod, &'g MethodData<'g>>,
+        methods: HashMap<UtilityMethod, MethodId<'g>>,
     },
 }
 
@@ -370,6 +376,7 @@ pub struct UtilityClass<'g>(UtilityClassInner<'g>);
 impl<'g> UtilityClass<'g> {
     pub fn new(
         settings: &Settings,
+        wasm_module_class: ClassId<'g>,
         class_graph: &'g ClassGraph<'g>,
         java: &'g JavaLibrary<'g>,
     ) -> Result<UtilityClass<'g>, Error> {
@@ -390,50 +397,33 @@ impl<'g> UtilityClass<'g> {
             .concat(&UnqualifiedName::DOLLAR)
             .concat(&inner_class_short_name);
 
-        let class = ClassBuilder::new(
-            ClassAccessFlags::SYNTHETIC,
+        let utility_id = class_graph.add_class(ClassData::new(
             class_name,
             java.classes.lang.object,
-            false,
-            vec![],
-            class_graph,
-            java,
-        )?;
-
-        // Add the `InnerClasses` attribute
-        let inner_classes: InnerClasses = {
-            let constants = &class.constants_pool;
-            let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
-            let outer_class = constants.get_class(outer_class_name)?;
-            let inner_class_name = constants.get_utf8(class.class.name.as_str())?;
-            let inner_class = constants.get_class(inner_class_name)?;
-            let inner_name = constants.get_utf8(inner_class_short_name.as_str())?;
-            let inner_class_attr = InnerClass {
-                inner_class,
-                outer_class,
-                inner_name,
+            ClassAccessFlags::SUPER | ClassAccessFlags::SYNTHETIC | ClassAccessFlags::FINAL,
+            Some(NestedClassData {
                 access_flags: InnerClassAccessFlags::STATIC,
-            };
-            InnerClasses(vec![inner_class_attr])
-        };
-        class.add_attribute(inner_classes)?;
+                simple_name: Some(inner_class_short_name.clone()),
+                enclosing_class: wasm_module_class,
+            }),
+        ));
 
         Ok(UtilityClass(UtilityClassInner::Internal {
-            class,
+            class: Class::new(utility_id),
             methods: HashMap::new(),
         }))
     }
 
     /// Extract the class name
-    pub fn class_name(&self) -> &BinaryName {
+    pub fn class_id(&self) -> ClassId<'g> {
         match &self.0 {
-            UtilityClassInner::External(name) => name,
-            UtilityClassInner::Internal { class, .. } => &class.class.name,
+            UtilityClassInner::External(_name) => todo!(),
+            UtilityClassInner::Internal { class, .. } => class.id,
         }
     }
 
     /// If there is a class being built, finalize and return it
-    pub fn into_builder(self) -> Option<ClassBuilder<'g>> {
+    pub fn into_builder(self) -> Option<Class<'g>> {
         match self.0 {
             UtilityClassInner::External(_) => None,
             UtilityClassInner::Internal { class, .. } => Some(class),
@@ -444,9 +434,9 @@ impl<'g> UtilityClass<'g> {
     pub fn invoke_utility<'a>(
         &mut self,
         method: UtilityMethod,
-        code: &mut BytecodeBuilder<'a, 'g>,
+        code: &mut CodeBuilder<'g>,
     ) -> Result<(), Error> {
-        let method = self.get_utility_method(method, &code.java.classes)?;
+        let method = self.get_utility_method(method, &code.java, code.class_graph)?;
         code.invoke(method)?;
         Ok(())
     }
@@ -455,14 +445,15 @@ impl<'g> UtilityClass<'g> {
     pub fn get_utility_method(
         &mut self,
         method: UtilityMethod,
-        java: &JavaClasses<'g>,
-    ) -> Result<&'g MethodData<'g>, Error> {
+        java: &'g JavaLibrary<'g>,
+        class_graph: &'g ClassGraph<'g>,
+    ) -> Result<MethodId<'g>, Error> {
         // Nothing for external utility classes or if the method is already generated
         match &mut self.0 {
             UtilityClassInner::External(_) => todo!(),
             UtilityClassInner::Internal { methods, .. } => {
                 if let Some(method_data) = methods.get(&method) {
-                    return Ok(method_data);
+                    return Ok(*method_data);
                 }
             }
         }
@@ -470,74 +461,80 @@ impl<'g> UtilityClass<'g> {
         // Dependencies
         match method {
             UtilityMethod::BootstrapTable => {
-                self.get_utility_method(UtilityMethod::NextSize, java)?;
-                self.get_utility_method(UtilityMethod::CopyResizedArray, java)?;
-                self.get_utility_method(UtilityMethod::IntIsNegativeOne, java)?;
-                self.get_utility_method(UtilityMethod::FillArrayRange, java)?;
+                self.get_utility_method(UtilityMethod::NextSize, java, class_graph)?;
+                self.get_utility_method(UtilityMethod::CopyResizedArray, java, class_graph)?;
+                self.get_utility_method(UtilityMethod::IntIsNegativeOne, java, class_graph)?;
+                self.get_utility_method(UtilityMethod::FillArrayRange, java, class_graph)?;
             }
             UtilityMethod::BootstrapMemory => {
-                self.get_utility_method(UtilityMethod::NextSize, java)?;
-                self.get_utility_method(UtilityMethod::CopyResizedByteBuffer, java)?;
-                self.get_utility_method(UtilityMethod::IntIsNegativeOne, java)?;
-                self.get_utility_method(UtilityMethod::FillByteBufferRange, java)?;
-                self.get_utility_method(UtilityMethod::BytesToMemoryPages, java)?;
-                self.get_utility_method(UtilityMethod::MemoryPagesToBytes, java)?;
+                self.get_utility_method(UtilityMethod::NextSize, java, class_graph)?;
+                self.get_utility_method(UtilityMethod::CopyResizedByteBuffer, java, class_graph)?;
+                self.get_utility_method(UtilityMethod::IntIsNegativeOne, java, class_graph)?;
+                self.get_utility_method(UtilityMethod::FillByteBufferRange, java, class_graph)?;
+                self.get_utility_method(UtilityMethod::BytesToMemoryPages, java, class_graph)?;
+                self.get_utility_method(UtilityMethod::MemoryPagesToBytes, java, class_graph)?;
             }
             _ => (),
         }
 
-        let descriptor = method.descriptor(java);
-        let (methods, class): (_, &mut ClassBuilder) = match &mut self.0 {
+        let descriptor = method.descriptor(&java.classes);
+        let (methods, class): (_, &mut Class) = match &mut self.0 {
             UtilityClassInner::Internal { class, methods } => (methods, class),
             _ => unreachable!("external utility classes should be filtered earlier"),
         };
-        let mut method_builder =
-            class.start_method(MethodAccessFlags::STATIC, method.name(), descriptor)?;
-        let code = &mut method_builder.code;
+        let method_id = class_graph.add_method(MethodData {
+            class: class.id,
+            name: method.name(),
+            descriptor,
+            access_flags: MethodAccessFlags::STATIC,
+        });
 
+        let mut code = CodeBuilder::new(class_graph, java, method_id);
         match method {
-            UtilityMethod::I32DivS => Self::generate_i32_div_s(code)?,
-            UtilityMethod::I64DivS => Self::generate_i64_div_s(code)?,
-            UtilityMethod::F32Abs => Self::generate_f32_abs(code)?,
-            UtilityMethod::F64Abs => Self::generate_f64_abs(code)?,
-            UtilityMethod::F32Trunc => Self::generate_f32_trunc(code)?,
-            UtilityMethod::F64Trunc => Self::generate_f64_trunc(code)?,
-            UtilityMethod::Unreachable => Self::generate_unreachable(code)?,
-            UtilityMethod::I32TruncF32S => Self::generate_i32_trunc_f32_s(code)?,
-            UtilityMethod::I32TruncF32U => Self::generate_i32_trunc_f32_u(code)?,
-            UtilityMethod::I32TruncF64S => Self::generate_i32_trunc_f64_s(code)?,
-            UtilityMethod::I32TruncF64U => Self::generate_i32_trunc_f64_u(code)?,
-            UtilityMethod::I64ExtendI32U => Self::generate_i64_extend_i32_u(code)?,
-            UtilityMethod::I64TruncF32S => Self::generate_i64_trunc_f32_s(code)?,
-            UtilityMethod::I64TruncF32U => Self::generate_i64_trunc_f32_u(code)?,
-            UtilityMethod::I64TruncF64S => Self::generate_i64_trunc_f64_s(code)?,
-            UtilityMethod::I64TruncF64U => Self::generate_i64_trunc_f64_u(code)?,
-            UtilityMethod::F32ConvertI32U => Self::generate_f32_convert_i32_u(code)?,
-            UtilityMethod::F32ConvertI64U => Self::generate_f32_convert_i64_u(code)?,
-            UtilityMethod::F64ConvertI32U => Self::generate_f64_convert_i32_u(code)?,
-            UtilityMethod::F64ConvertI64U => Self::generate_f64_convert_i64_u(code)?,
-            UtilityMethod::I32TruncSatF32U => Self::generate_i32_trunc_sat_f32_u(code)?,
-            UtilityMethod::I32TruncSatF64U => Self::generate_i32_trunc_sat_f64_u(code)?,
-            UtilityMethod::I64TruncSatF32U => Self::generate_i64_trunc_sat_f32_u(code)?,
-            UtilityMethod::I64TruncSatF64U => Self::generate_i64_trunc_sat_f64_u(code)?,
-            UtilityMethod::NextSize => Self::generate_next_size(code)?,
-            UtilityMethod::CopyResizedArray => Self::generate_copy_resized_array(code)?,
-            UtilityMethod::CopyResizedByteBuffer => Self::generate_copy_resized_bytebuffer(code)?,
-            UtilityMethod::IntIsNegativeOne => Self::generate_int_is_negative_one(code)?,
-            UtilityMethod::FillArrayRange => Self::generate_fill_array_range(code)?,
-            UtilityMethod::FillByteBufferRange => Self::generate_fill_bytebuffer_range(code)?,
-            UtilityMethod::BytesToMemoryPages => Self::generate_bytes_to_memory_pages(code)?,
-            UtilityMethod::MemoryPagesToBytes => Self::generate_memory_pages_to_bytes(code)?,
+            UtilityMethod::I32DivS => Self::generate_i32_div_s(&mut code)?,
+            UtilityMethod::I64DivS => Self::generate_i64_div_s(&mut code)?,
+            UtilityMethod::F32Abs => Self::generate_f32_abs(&mut code)?,
+            UtilityMethod::F64Abs => Self::generate_f64_abs(&mut code)?,
+            UtilityMethod::F32Trunc => Self::generate_f32_trunc(&mut code)?,
+            UtilityMethod::F64Trunc => Self::generate_f64_trunc(&mut code)?,
+            UtilityMethod::Unreachable => Self::generate_unreachable(&mut code)?,
+            UtilityMethod::I32TruncF32S => Self::generate_i32_trunc_f32_s(&mut code)?,
+            UtilityMethod::I32TruncF32U => Self::generate_i32_trunc_f32_u(&mut code)?,
+            UtilityMethod::I32TruncF64S => Self::generate_i32_trunc_f64_s(&mut code)?,
+            UtilityMethod::I32TruncF64U => Self::generate_i32_trunc_f64_u(&mut code)?,
+            UtilityMethod::I64ExtendI32U => Self::generate_i64_extend_i32_u(&mut code)?,
+            UtilityMethod::I64TruncF32S => Self::generate_i64_trunc_f32_s(&mut code)?,
+            UtilityMethod::I64TruncF32U => Self::generate_i64_trunc_f32_u(&mut code)?,
+            UtilityMethod::I64TruncF64S => Self::generate_i64_trunc_f64_s(&mut code)?,
+            UtilityMethod::I64TruncF64U => Self::generate_i64_trunc_f64_u(&mut code)?,
+            UtilityMethod::F32ConvertI32U => Self::generate_f32_convert_i32_u(&mut code)?,
+            UtilityMethod::F32ConvertI64U => Self::generate_f32_convert_i64_u(&mut code)?,
+            UtilityMethod::F64ConvertI32U => Self::generate_f64_convert_i32_u(&mut code)?,
+            UtilityMethod::F64ConvertI64U => Self::generate_f64_convert_i64_u(&mut code)?,
+            UtilityMethod::I32TruncSatF32U => Self::generate_i32_trunc_sat_f32_u(&mut code)?,
+            UtilityMethod::I32TruncSatF64U => Self::generate_i32_trunc_sat_f64_u(&mut code)?,
+            UtilityMethod::I64TruncSatF32U => Self::generate_i64_trunc_sat_f32_u(&mut code)?,
+            UtilityMethod::I64TruncSatF64U => Self::generate_i64_trunc_sat_f64_u(&mut code)?,
+            UtilityMethod::NextSize => Self::generate_next_size(&mut code)?,
+            UtilityMethod::CopyResizedArray => Self::generate_copy_resized_array(&mut code)?,
+            UtilityMethod::CopyResizedByteBuffer => {
+                Self::generate_copy_resized_bytebuffer(&mut code)?
+            }
+            UtilityMethod::IntIsNegativeOne => Self::generate_int_is_negative_one(&mut code)?,
+            UtilityMethod::FillArrayRange => Self::generate_fill_array_range(&mut code)?,
+            UtilityMethod::FillByteBufferRange => Self::generate_fill_bytebuffer_range(&mut code)?,
+            UtilityMethod::BytesToMemoryPages => Self::generate_bytes_to_memory_pages(&mut code)?,
+            UtilityMethod::MemoryPagesToBytes => Self::generate_memory_pages_to_bytes(&mut code)?,
 
             UtilityMethod::BootstrapTable => Self::generate_bootstrap_table(
-                code,
+                &mut code,
                 methods[&UtilityMethod::NextSize],
                 methods[&UtilityMethod::CopyResizedArray],
                 methods[&UtilityMethod::IntIsNegativeOne],
                 methods[&UtilityMethod::FillArrayRange],
             )?,
             UtilityMethod::BootstrapMemory => Self::generate_bootstrap_memory(
-                code,
+                &mut code,
                 methods[&UtilityMethod::CopyResizedByteBuffer],
                 methods[&UtilityMethod::MemoryPagesToBytes],
                 methods[&UtilityMethod::BytesToMemoryPages],
@@ -546,20 +543,23 @@ impl<'g> UtilityClass<'g> {
                 methods[&UtilityMethod::FillByteBufferRange],
             )?,
         }
-
-        let method_data = method_builder.method;
-        method_builder.finish()?;
+        class.add_method(Method {
+            id: method_id,
+            code_impl: Some(code.result()?),
+            exceptions: vec![],
+            generic_signature: None,
+        });
 
         match &mut self.0 {
             UtilityClassInner::External(_) => todo!(),
             UtilityClassInner::Internal { methods, .. } => {
-                methods.insert(method, method_data);
+                methods.insert(method, method_id);
             }
         }
-        Ok(method_data)
+        Ok(method_id)
     }
 
-    fn generate_i32_div_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i32_div_s<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let regular_div = code.fresh_label();
 
         // Check if second argument is -1...
@@ -596,7 +596,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_div_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i64_div_s<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let regular_div = code.fresh_label();
 
         // Check if second argument is -1...
@@ -628,7 +628,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f32_abs<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_f32_abs<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::FLoad(0))?;
         code.invoke(code.java.members.lang.float.float_to_raw_int_bits)?;
         code.const_int(0x7FFF_FFFF)?;
@@ -639,7 +639,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f64_abs<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_f64_abs<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::DLoad(0))?;
         code.invoke(code.java.members.lang.double.double_to_raw_long_bits)?;
         code.const_long(0x7FFF_FFFF_FFFF_FFFF)?;
@@ -650,7 +650,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f32_trunc<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_f32_trunc<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let negative = code.fresh_label();
 
         code.push_instruction(Instruction::FLoad(0))?;
@@ -674,7 +674,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f64_trunc<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_f64_trunc<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let negative = code.fresh_label();
 
         code.push_instruction(Instruction::DLoad(0))?;
@@ -696,7 +696,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_unreachable<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_unreachable<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.new(code.java.classes.lang.assertion_error)?;
         code.push_instruction(Instruction::Dup)?;
         code.const_string("unreachable")?;
@@ -706,7 +706,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i32_trunc_f32_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i32_trunc_f32_s<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // Check if the argument is too small...
@@ -739,7 +739,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i32_trunc_f32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i32_trunc_f32_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // temp variable
@@ -778,7 +778,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i32_trunc_f64_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i32_trunc_f64_s<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // Check if the argument is too small...
@@ -811,7 +811,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i32_trunc_f64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i32_trunc_f64_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // temp variable
@@ -850,7 +850,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_trunc_f32_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i64_trunc_f32_s<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // Check if the argument is too small...
@@ -883,7 +883,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_trunc_f32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i64_trunc_f32_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
         let is_first_bit_one = code.fresh_label();
 
@@ -938,7 +938,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_trunc_f64_s<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i64_trunc_f64_s<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
 
         // Check if the argument is too small...
@@ -971,7 +971,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_trunc_f64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i64_trunc_f64_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let error_case = code.fresh_label();
         let is_first_bit_one = code.fresh_label();
 
@@ -1026,7 +1026,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_extend_i32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i64_extend_i32_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::I2L)?;
         code.const_long(0x0000_0000_ffff_ffff)?;
@@ -1036,7 +1036,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f32_convert_i32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_f32_convert_i32_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::I2L)?;
         code.const_long(0x0000_0000_ffff_ffff)?;
@@ -1047,7 +1047,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f32_convert_i64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_f32_convert_i64_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let first_bit_one = code.fresh_label();
 
         code.push_instruction(Instruction::LLoad(0))?;
@@ -1077,7 +1077,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f64_convert_i32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_f64_convert_i32_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::I2L)?;
         code.const_long(0x0000_0000_ffff_ffff)?;
@@ -1088,7 +1088,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_f64_convert_i64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_f64_convert_i64_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let first_bit_one = code.fresh_label();
 
         code.push_instruction(Instruction::LLoad(0))?;
@@ -1119,7 +1119,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i32_trunc_sat_f32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i32_trunc_sat_f32_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let is_positive = code.fresh_label();
         let is_too_big = code.fresh_label();
 
@@ -1157,7 +1157,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i32_trunc_sat_f64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i32_trunc_sat_f64_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let is_positive = code.fresh_label();
         let is_too_big = code.fresh_label();
 
@@ -1189,7 +1189,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_trunc_sat_f32_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i64_trunc_sat_f32_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let is_positive = code.fresh_label();
         let is_first_bit_one = code.fresh_label();
 
@@ -1231,7 +1231,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_i64_trunc_sat_f64_u<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_i64_trunc_sat_f64_u<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let is_positive = code.fresh_label();
         let is_first_bit_one = code.fresh_label();
 
@@ -1285,7 +1285,7 @@ impl<'g> UtilityClass<'g> {
     ///   return (int) proposed;
     /// }
     /// ```
-    fn generate_next_size<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_next_size<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let curr_size_argument = 0;
         let grow_by_argument = 1;
         let max_size_argument = 2;
@@ -1334,7 +1334,7 @@ impl<'g> UtilityClass<'g> {
     ///   return oldTable.length;
     /// }
     /// ```
-    fn generate_copy_resized_array<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_copy_resized_array<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let new_table_argument = 0;
         let old_table_argument = 1;
         let filler_argument = 2;
@@ -1376,9 +1376,7 @@ impl<'g> UtilityClass<'g> {
     ///   return oldMemory.capacity() / 65536;
     /// }
     /// ```
-    fn generate_copy_resized_bytebuffer<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-    ) -> Result<(), Error> {
+    fn generate_copy_resized_bytebuffer<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let new_memory_argument = 0;
         let old_memory_argument = 1;
 
@@ -1412,7 +1410,7 @@ impl<'g> UtilityClass<'g> {
     ///   return (i == -1) ? true : false;
     /// }
     /// ```
-    fn generate_int_is_negative_one<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_int_is_negative_one<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let not_equal = code.fresh_label();
 
         code.push_instruction(Instruction::ILoad(0))?;
@@ -1437,7 +1435,7 @@ impl<'g> UtilityClass<'g> {
     ///   java.util.Arrays.fill(arr, from, Math.addExact(from, numToFill), filler);
     /// }
     /// ```
-    fn generate_fill_array_range<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_fill_array_range<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ALoad(3))?;
         code.push_instruction(Instruction::ILoad(0))?;
         code.push_instruction(Instruction::ILoad(0))?;
@@ -1467,7 +1465,7 @@ impl<'g> UtilityClass<'g> {
     ///   }
     /// }
     /// ```
-    fn generate_fill_bytebuffer_range<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_fill_bytebuffer_range<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let ok_case = code.fresh_label();
 
         // if (numToFill < 0) {
@@ -1527,7 +1525,7 @@ impl<'g> UtilityClass<'g> {
     ///   return byteCount / 65536;
     /// }
     /// ```
-    fn generate_bytes_to_memory_pages<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_bytes_to_memory_pages<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.const_int(16)?;
         code.push_instruction(Instruction::ISh(ShiftType::ArithmeticRight))?;
@@ -1546,7 +1544,7 @@ impl<'g> UtilityClass<'g> {
     ///   return memoryPages * 65536;
     /// }
     /// ```
-    fn generate_memory_pages_to_bytes<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_memory_pages_to_bytes<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::ILoad(0))?;
         code.const_int(16)?;
         code.push_instruction(Instruction::ISh(ShiftType::Left))?;
@@ -1558,11 +1556,11 @@ impl<'g> UtilityClass<'g> {
     /// Generate the bootstrap method used for table operators, including indirect calls. Here lie
     /// some dragons. The output is sensible, but the "how" is not obvious.
     fn generate_bootstrap_table<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-        next_size: &'g MethodData<'g>,
-        copy_resized_array: &'g MethodData<'g>,
-        int_is_negative_one: &'g MethodData<'g>,
-        fill_array_range: &'g MethodData<'g>,
+        code: &mut CodeBuilder<'g>,
+        next_size: MethodId<'g>,
+        copy_resized_array: MethodId<'g>,
+        int_is_negative_one: MethodId<'g>,
+        fill_array_range: MethodId<'g>,
     ) -> Result<(), Error> {
         let call_indirect_case = code.fresh_label();
         let table_get_case = code.fresh_label();
@@ -1722,9 +1720,7 @@ impl<'g> UtilityClass<'g> {
     ///   return new ConstantCallSite(handle);
     /// }
     /// ```
-    fn generate_call_indirect_table_case<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-    ) -> Result<(), Error> {
+    fn generate_call_indirect_table_case<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let type_argument = 2;
         let getter_argument = 3;
         let param_count_local = 7;
@@ -1870,7 +1866,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_get_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_get_table_case<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let type_argument = 2;
         let getter_argument = 3;
 
@@ -1933,7 +1929,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_set_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_set_table_case<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let type_argument = 2;
         let getter_argument = 3;
 
@@ -2004,7 +2000,7 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_size_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_size_table_case<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         let getter_argument = 3;
 
         // Class<?> tableType = getter.type().returnType();
@@ -2041,10 +2037,10 @@ impl<'g> UtilityClass<'g> {
 
     // TODO: avoid allocating a new table for `table.grow 0`
     fn generate_grow_table_case<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-        copy_resized_array: &'g MethodData<'g>,
-        int_is_negative_one: &'g MethodData<'g>,
-        next_size: &'g MethodData<'g>,
+        code: &mut CodeBuilder<'g>,
+        copy_resized_array: MethodId<'g>,
+        int_is_negative_one: MethodId<'g>,
+        next_size: MethodId<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
@@ -2358,8 +2354,8 @@ impl<'g> UtilityClass<'g> {
 
     // (I LTableElem; I)V
     fn generate_fill_table_case<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-        fill_array_range: &'g MethodData<'g>,
+        code: &mut CodeBuilder<'g>,
+        fill_array_range: MethodId<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
@@ -2439,13 +2435,13 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
-    fn generate_copy_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_copy_table_case<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::AConstNull)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
         Ok(())
     }
 
-    fn generate_init_table_case<'a>(code: &mut BytecodeBuilder<'a, 'g>) -> Result<(), Error> {
+    fn generate_init_table_case<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
         code.push_instruction(Instruction::AConstNull)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
         Ok(())
@@ -2453,13 +2449,13 @@ impl<'g> UtilityClass<'g> {
 
     /// Generate the bootstrap method used for memory operators
     fn generate_bootstrap_memory<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-        copy_resized_byte_buffer: &'g MethodData<'g>,
-        pages_to_bytes: &'g MethodData<'g>,
-        bytes_to_pages: &'g MethodData<'g>,
-        int_is_negative_one: &'g MethodData<'g>,
-        next_size: &'g MethodData<'g>,
-        fill_byte_buffer_range: &'g MethodData<'g>,
+        code: &mut CodeBuilder<'g>,
+        copy_resized_byte_buffer: MethodId<'g>,
+        pages_to_bytes: MethodId<'g>,
+        bytes_to_pages: MethodId<'g>,
+        int_is_negative_one: MethodId<'g>,
+        next_size: MethodId<'g>,
+        fill_byte_buffer_range: MethodId<'g>,
     ) -> Result<(), Error> {
         let memory_size_case = code.fresh_label();
         let memory_grow_case = code.fresh_label();
@@ -2525,8 +2521,8 @@ impl<'g> UtilityClass<'g> {
     }
 
     fn generate_size_memory_case<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-        bytes_to_pages: &'g MethodData<'g>,
+        code: &mut CodeBuilder<'g>,
+        bytes_to_pages: MethodId<'g>,
     ) -> Result<(), Error> {
         let getter_argument = 3;
 
@@ -2568,13 +2564,13 @@ impl<'g> UtilityClass<'g> {
     }
 
     // TODO: avoid allocating a new memory for `memory.grow 0`
-    fn generate_grow_memory_case<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-        copy_resized_byte_buffer: &'g MethodData<'g>,
-        pages_to_bytes: &'g MethodData<'g>,
-        bytes_to_pages: &'g MethodData<'g>,
-        int_is_negative_one: &'g MethodData<'g>,
-        next_size: &'g MethodData<'g>,
+    fn generate_grow_memory_case(
+        code: &mut CodeBuilder<'g>,
+        copy_resized_byte_buffer: MethodId<'g>,
+        pages_to_bytes: MethodId<'g>,
+        bytes_to_pages: MethodId<'g>,
+        int_is_negative_one: MethodId<'g>,
+        next_size: MethodId<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
@@ -2889,8 +2885,8 @@ impl<'g> UtilityClass<'g> {
     }
 
     fn generate_fill_memory_case<'a>(
-        code: &mut BytecodeBuilder<'a, 'g>,
-        fill_byte_buffer_range: &'g MethodData<'g>,
+        code: &mut CodeBuilder<'g>,
+        fill_byte_buffer_range: MethodId<'g>,
     ) -> Result<(), Error> {
         let getter_argument = 3; // MethodHandle
 
@@ -2937,10 +2933,10 @@ impl<'g> UtilityClass<'g> {
 /// Tracks utility bootstrap methods inside a given class
 pub struct BootstrapUtilities<'g> {
     /// Mapping from the table index to a bootstrap method index
-    table_bootstrap_methods: HashMap<u32, &'g BootstrapMethodData<'g>>,
+    table_bootstrap_methods: HashMap<u32, BootstrapMethodId<'g>>,
 
     /// Mapping from the memory index to a bootstrap method index
-    memory_bootstrap_methods: HashMap<u32, &'g BootstrapMethodData<'g>>,
+    memory_bootstrap_methods: HashMap<u32, BootstrapMethodId<'g>>,
 }
 impl<'g> BootstrapUtilities<'g> {
     pub fn new() -> Self {
@@ -2951,28 +2947,26 @@ impl<'g> BootstrapUtilities<'g> {
     }
 
     /// Get (and create if missing) a bootstrap method for a given table
-    ///
-    /// Note: the `constants` argument must correspond to the class in which the bootstrap method
-    /// is going to be _used_ (not where it is defined).
     pub fn get_table_bootstrap(
         &mut self,
         table_index: u32,
         table: &Table<'g>,
-        class_graph: &ClassGraph<'g>,
+        class_graph: &'g ClassGraph<'g>,
         utilities: &mut UtilityClass<'g>,
-        java: &JavaClasses<'g>,
-    ) -> Result<&'g BootstrapMethodData<'g>, Error> {
+        java: &'g JavaLibrary<'g>,
+    ) -> Result<BootstrapMethodId<'g>, Error> {
         if let Some(bootstrap) = self.table_bootstrap_methods.get(&table_index) {
             return Ok(*bootstrap);
         }
 
         // Get bootstrapping method is defined
-        let table_bootstrap = utilities.get_utility_method(UtilityMethod::BootstrapTable, &java)?;
+        let table_bootstrap =
+            utilities.get_utility_method(UtilityMethod::BootstrapTable, &java, class_graph)?;
 
         // Compute the getter and setter constant arguments for the bootstrap method
         let table_field = table.field.unwrap();
-        let table_get = ConstantData::FieldGetterHandle(table_field);
-        let table_set = ConstantData::FieldSetterHandle(table_field);
+        let table_get = ConstantData::FieldHandle(AccessMode::Read, table_field);
+        let table_set = ConstantData::FieldHandle(AccessMode::Write, table_field);
 
         /* Compute the maximum table size based on two constraints:
          *
@@ -2991,28 +2985,25 @@ impl<'g> BootstrapUtilities<'g> {
     }
 
     /// Get (and create if missing) a bootstrap method for a given memory
-    ///
-    /// Note: the `constants` argument must correspond to the class in which the bootstrap method
-    /// is going to be _used_ (not where it is defined).
     pub fn get_memory_bootstrap(
         &mut self,
         memory_index: u32,
         memory: &Memory<'g>,
-        class_graph: &ClassGraph<'g>,
+        class_graph: &'g ClassGraph<'g>,
         utilities: &mut UtilityClass<'g>,
-        java: &JavaClasses<'g>,
-    ) -> Result<&'g BootstrapMethodData<'g>, Error> {
+        java: &'g JavaLibrary<'g>,
+    ) -> Result<BootstrapMethodId<'g>, Error> {
         if let Some(bootstrap) = self.memory_bootstrap_methods.get(&memory_index) {
             return Ok(*bootstrap);
         }
 
         // Get the bootstrap method
         let memory_bootstrap =
-            utilities.get_utility_method(UtilityMethod::BootstrapMemory, java)?;
+            utilities.get_utility_method(UtilityMethod::BootstrapMemory, java, class_graph)?;
 
         let field = memory.field.unwrap(); // Should be populated by the time this is called
-        let memory_get = ConstantData::FieldGetterHandle(field);
-        let memory_set = ConstantData::FieldSetterHandle(field);
+        let memory_get = ConstantData::FieldHandle(AccessMode::Read, field);
+        let memory_set = ConstantData::FieldHandle(AccessMode::Write, field);
 
         let memory_maximum = memory.memory_type.maximum;
 

@@ -1,11 +1,14 @@
 use super::{
-    AccessMode, BootstrapUtilities, BranchCond, CodeBuilderExts, Error, Function, Global, Memory,
-    Settings, Table, UtilityClass, UtilityMethod,
+    BootstrapUtilities, Error, Function, Global, Memory, Settings, Table, UtilityClass,
+    UtilityMethod,
 };
-use crate::jvm::{
-    BaseType, BranchInstruction, BytecodeBuilder, ClassData, EqComparison, FieldType, Instruction,
-    MethodDescriptor, OffsetVec, OrdComparison, RefType, SynLabel, UnqualifiedName, Width,
+use crate::jvm::class_graph::{AccessMode, ClassId};
+use crate::jvm::code::{
+    BranchCond, BranchInstruction, CodeBuilder, CodeBuilderExts, EqComparison, Instruction,
+    OrdComparison, SynLabel,
 };
+use crate::jvm::{BaseType, FieldType, MethodDescriptor, RefType, UnqualifiedName};
+use crate::util::{OffsetVec, Width};
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
 };
@@ -19,7 +22,7 @@ use wasmparser::{
 };
 
 /// Context for translating a WASM function into a JVM one
-pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
+pub struct FunctionTranslator<'a, 'b, 'g> {
     /// WASM type of the function being translated
     function_typ: &'b FunctionType,
 
@@ -33,13 +36,13 @@ pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
     bootstrap_utilities: &'b mut BootstrapUtilities<'g>,
 
     /// Code builder
-    jvm_code: &'b mut BytecodeBuilder<'c, 'g>,
+    jvm_code: &'b mut CodeBuilder<'g>,
 
     /// Main module class
-    class: &'g ClassData<'g>,
+    class: ClassId<'g>,
 
     /// Functions
-    wasm_functions: &'b [Function<'g>],
+    wasm_functions: &'b [Function<'a, 'g>],
 
     /// Tables
     wasm_tables: &'b [Table<'g>],
@@ -69,15 +72,15 @@ pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
     wasm_unreachable_frame_count: usize,
 }
 
-impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
+impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
     pub fn new(
         function_typ: &'b FunctionType,
         settings: &'b Settings,
         utilities: &'b mut UtilityClass<'g>,
         bootstrap_utilities: &'b mut BootstrapUtilities<'g>,
-        jvm_code: &'b mut BytecodeBuilder<'c, 'g>,
-        class: &'g ClassData<'g>,
-        wasm_functions: &'b [Function<'g>],
+        jvm_code: &'b mut CodeBuilder<'g>,
+        class: ClassId<'g>,
+        wasm_functions: &'b [Function<'a, 'g>],
         wasm_tables: &'b [Table<'g>],
         wasm_memories: &'b [Memory<'g>],
         wasm_globals: &'b [Global<'a, 'g>],
@@ -192,9 +195,9 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         operator_offset: (Operator, usize),
         next_operator_offset: &mut Option<(Operator, usize)>,
     ) -> Result<(), Error> {
-        use crate::jvm::CompareMode::*;
-        use crate::jvm::Instruction::*;
-        use crate::jvm::ShiftType::*;
+        use crate::jvm::code::CompareMode::*;
+        use crate::jvm::code::Instruction::*;
+        use crate::jvm::code::ShiftType::*;
 
         let (operator, offset) = operator_offset;
         let next_op = next_operator_offset;
@@ -1081,7 +1084,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             for _ in 0..branch_values.len() {
                 let (local_idx, field_type) = self.jvm_locals.pop_local()?;
                 self.jvm_code.get_local(local_idx, &field_type)?;
-                self.jvm_code.kill_local(local_idx, field_type)?;
+                self.jvm_code.kill_top_local(local_idx, Some(field_type))?;
             }
         }
 
@@ -1213,7 +1216,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             self.jvm_code.push_instruction(Instruction::Pop)?;
         }
         if let Some(ref_ty) = ref_ty_hint.clone() {
-            self.jvm_code.push_instruction(Instruction::AHint(ref_ty))?;
+            self.jvm_code.generalize_top_stack_type(ref_ty)?;
         }
         self.jvm_code
             .push_branch_instruction(BranchInstruction::Goto(end_block))?;
@@ -1229,7 +1232,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             self.jvm_code.push_instruction(Instruction::Pop2)?;
         }
         if let Some(ref_ty) = ref_ty_hint {
-            self.jvm_code.push_instruction(Instruction::AHint(ref_ty))?;
+            self.jvm_code.generalize_top_stack_type(ref_ty)?;
         }
 
         self.jvm_code.place_label(end_block)?;
@@ -1287,7 +1290,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             table,
             &self.jvm_code.class_graph,
             &mut self.utilities,
-            &self.jvm_code.java.classes,
+            &self.jvm_code.java,
         )?;
 
         self.jvm_code
@@ -1370,12 +1373,10 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         let _ = self.jvm_locals.pop_local()?;
         let _ = self.jvm_locals.pop_local()?;
         let _ = self.jvm_locals.pop_local()?;
+        self.jvm_code.kill_top_local(tmp_offset, None)?;
         self.jvm_code
-            .push_instruction(Instruction::AKill(tmp_offset))?;
-        self.jvm_code
-            .push_instruction(Instruction::IKill(idx_offset))?;
-        self.jvm_code
-            .push_instruction(Instruction::AKill(arr_offset))?;
+            .kill_top_local(idx_offset, Some(FieldType::int()))?;
+        self.jvm_code.kill_top_local(arr_offset, None)?;
 
         Ok(())
     }
@@ -1453,9 +1454,8 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         let _ = self.jvm_locals.pop_local()?;
         let _ = self.jvm_locals.pop_local()?;
         self.jvm_code
-            .push_instruction(Instruction::IKill(idx_offset))?;
-        self.jvm_code
-            .push_instruction(Instruction::AKill(arr_offset))?;
+            .kill_top_local(idx_offset, Some(FieldType::int()))?;
+        self.jvm_code.kill_top_local(arr_offset, None)?;
 
         Ok(())
     }
@@ -1518,7 +1518,8 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             todo!()
         }
 
-        self.jvm_code.kill_local(temp_index, global_field_type)?;
+        self.jvm_code
+            .kill_top_local(temp_index, Some(global_field_type))?;
         self.jvm_locals.pop_local()?;
 
         Ok(())
@@ -1603,7 +1604,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         &mut self,
         table_idx: u32,
         method_name: UnqualifiedName,
-        mut method_type: MethodDescriptor<&'g ClassData<'g>>,
+        mut method_type: MethodDescriptor<ClassId<'g>>,
     ) -> Result<(), Error> {
         let table = &self.wasm_tables[table_idx as usize];
 
@@ -1616,7 +1617,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             table,
             &self.jvm_code.class_graph,
             &mut self.utilities,
-            &self.jvm_code.java.classes,
+            &self.jvm_code.java,
         )?;
 
         self.jvm_code
@@ -1695,7 +1696,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             self.jvm_code.push_instruction(Instruction::Swap)?;
             self.jvm_code.get_local(off, &FieldType::Base(ty))?;
             let (off, ty) = self.jvm_locals.pop_local()?;
-            self.jvm_code.kill_local(off, ty)?;
+            self.jvm_code.kill_top_local(off, Some(ty))?;
         }
 
         // Call the store function
@@ -1753,7 +1754,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         &mut self,
         memory_idx: u32,
         method_name: UnqualifiedName,
-        mut method_type: MethodDescriptor<&'g ClassData<'g>>,
+        mut method_type: MethodDescriptor<ClassId<'g>>,
     ) -> Result<(), Error> {
         let memory = &self.wasm_memories[memory_idx as usize];
 
@@ -1766,7 +1767,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             memory,
             &self.jvm_code.class_graph,
             &mut self.utilities,
-            &self.jvm_code.java.classes,
+            &self.jvm_code.java,
         )?;
 
         self.jvm_code
@@ -1789,7 +1790,7 @@ struct LocalsLayout<'g> {
     ///   * a reference to the module class
     ///   * a stack of additional tempporary locals
     ///
-    jvm_locals: OffsetVec<FieldType<&'g ClassData<'g>>>,
+    jvm_locals: OffsetVec<FieldType<ClassId<'g>>>,
 
     /// Index into `jvm_locals` for getting the "this" argument
     jvm_module_idx: usize,
@@ -1797,8 +1798,8 @@ struct LocalsLayout<'g> {
 
 impl<'g> LocalsLayout<'g> {
     fn new(
-        method_arguments: impl Iterator<Item = FieldType<&'g ClassData<'g>>>,
-        module_typ: RefType<&'g ClassData<'g>>,
+        method_arguments: impl Iterator<Item = FieldType<ClassId<'g>>>,
+        module_typ: RefType<ClassId<'g>>,
     ) -> Self {
         let mut jvm_locals = OffsetVec::from_iter(method_arguments);
         let jvm_module_idx = jvm_locals.len();
@@ -1810,7 +1811,7 @@ impl<'g> LocalsLayout<'g> {
     }
 
     /// Lookup the JVM local and index associated with the "this" argument
-    fn lookup_this(&self) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
+    fn lookup_this(&self) -> Result<(u16, FieldType<ClassId<'g>>), Error> {
         let (off, field_type) = self
             .jvm_locals
             .get_index(self.jvm_module_idx)
@@ -1822,10 +1823,7 @@ impl<'g> LocalsLayout<'g> {
     ///
     /// Adjusts for the fact that JVM locals sometimes take two slots, and that there is an extra
     /// local argument corresponding to the parameter that is used to pass around the module.
-    fn lookup_local(
-        &self,
-        mut local_idx: u32,
-    ) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
+    fn lookup_local(&self, mut local_idx: u32) -> Result<(u16, FieldType<ClassId<'g>>), Error> {
         if local_idx as usize >= self.jvm_module_idx {
             local_idx += 1;
         }
@@ -1837,7 +1835,7 @@ impl<'g> LocalsLayout<'g> {
     }
 
     /// Push a new local onto our "stack" of locals
-    fn push_local(&mut self, field_type: FieldType<&'g ClassData<'g>>) -> Result<u16, Error> {
+    fn push_local(&mut self, field_type: FieldType<ClassId<'g>>) -> Result<u16, Error> {
         let next_local_idx =
             u16::try_from(self.jvm_locals.offset_len().0).map_err(|_| Error::LocalsOverflow)?;
         self.jvm_locals.push(field_type);
@@ -1845,7 +1843,7 @@ impl<'g> LocalsLayout<'g> {
     }
 
     /// Pop a local from our "stack" of locals
-    fn pop_local(&mut self) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
+    fn pop_local(&mut self) -> Result<(u16, FieldType<ClassId<'g>>), Error> {
         self.jvm_locals
             .pop()
             .map(|(offset, _, field_type)| (offset.0 as u16, field_type))

@@ -180,6 +180,7 @@ impl UnqualifiedName {
     pub const LITTLEENDIAN: Self = Self::name("LITTLE_ENDIAN");
     pub const LONGBITSTODOUBLE: Self = Self::name("longBitsToDouble");
     pub const LONGVALUE: Self = Self::name("longValue");
+    pub const LOOKUP: Self = Self::name("Lookup");
     pub const MAX: Self = Self::name("max");
     pub const MAXVALUE: Self = Self::name("MAX_VALUE");
     pub const METHODTYPE: Self = Self::name("methodType");

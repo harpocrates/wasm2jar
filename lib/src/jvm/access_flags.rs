@@ -1,4 +1,4 @@
-use super::Serialize;
+use crate::jvm::class_file::Serialize;
 use bitflags::bitflags;
 use byteorder::WriteBytesExt;
 use std::io::Result;

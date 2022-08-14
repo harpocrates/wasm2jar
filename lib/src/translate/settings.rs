@@ -76,6 +76,10 @@ pub struct Settings {
     ///
     /// TODO: remove `AssertUnwindSafe` after we weed out panics that make catching necessary
     pub renamer: AssertUnwindSafe<Box<dyn Renamer>>,
+
+    /// Should extra public (non-static) methods be generated for exported functions? If so, the
+    /// renamer is how those method names will be determined.
+    pub methods_for_function_exports: bool,
 }
 
 /// Strategy for handling utility functions
@@ -149,6 +153,7 @@ impl Settings {
             trap_integer_division_overflow: true,
             bitwise_floating_abs: true,
             renamer: AssertUnwindSafe(Box::new(JavaRenamer::new())),
+            methods_for_function_exports: true,
         })
     }
 

@@ -1,4 +1,5 @@
-use super::{BinaryName, Name, Width};
+use super::{BinaryName, Name};
+use crate::util::{RefId, Width};
 use std::io::{Error, ErrorKind, Result};
 use std::iter::Peekable;
 use std::str::Chars;
@@ -14,6 +15,12 @@ pub trait RenderDescriptor {
 
     /// Write the descriptor to a string
     fn render_to(&self, write_to: &mut String);
+}
+
+impl<'g, T: RenderDescriptor> RenderDescriptor for RefId<'g, T> {
+    fn render_to(&self, write_to: &mut String) {
+        self.0.render_to(write_to)
+    }
 }
 
 pub trait ParseDescriptor: Sized {
@@ -109,6 +116,7 @@ pub enum RefType<Class> {
     PrimitiveArray(ArrayType<BaseType>),
 }
 
+/// Generic array type
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ArrayType<T> {
     /// Additional dimensions (`A[]` has 0 additional dimensions, `A[][][][]` has 3)
@@ -124,6 +132,13 @@ impl<T> ArrayType<T> {
             additional_dimensions: self.additional_dimensions,
             element_type: map_element(&self.element_type),
         }
+    }
+
+    /// Total number of dimensions in the array type
+    ///
+    /// This is always just `additional_dimensions + 1`
+    pub const fn dimensions(&self) -> usize {
+        self.additional_dimensions + 1
     }
 }
 

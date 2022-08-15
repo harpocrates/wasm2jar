@@ -1,17 +1,16 @@
 use super::{
-    AccessMode, BootstrapUtilities, CodeBuilderExts, Element, Error, Function, FunctionTranslator,
-    Global, MemberOrigin, Memory, Settings, Table, UtilitiesStrategy, UtilityClass, ImportName, ExportName
+    AccessMode, BootstrapUtilities, CodeBuilderExts, Element, Error, ExportName, Function,
+    FunctionTranslator, Global, ImportName, MemberOrigin, Memory, Settings, Table,
+    UtilitiesStrategy, UtilityClass,
 };
 use crate::jvm;
 use crate::jvm::{
     BinaryName, BranchInstruction, BytecodeBuilder, ClassAccessFlags, ClassBuilder, ClassFile,
     ClassGraph, ConstantData, FieldAccessFlags, FieldType, InnerClass, InnerClassAccessFlags,
     InnerClasses, Instruction, JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name,
-    NestHost, NestMembers, RefType, UnqualifiedName, Width,
+    RefType, UnqualifiedName, Width, ClassData
 };
-use crate::wasm::{
-    ref_type_from_general, FunctionType, StackType, TableType,
-};
+use crate::wasm::{ref_type_from_general, FunctionType, StackType, TableType};
 use std::iter;
 use wasmparser::types::Types;
 use wasmparser::{
@@ -82,13 +81,13 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             ClassAccessFlags::PUBLIC | ClassAccessFlags::SUPER,
             settings.output_full_class_name.clone(),
             java.classes.lang.object,
-            false,
+            None,
             vec![],
             class_graph,
             java,
         )?;
-        let current_part = Self::new_part(&settings, class_graph, java, 0)?;
-        let utilities = UtilityClass::new(&settings, class_graph, java)?;
+        let current_part = Self::new_part(&settings, class.class, class_graph, java, 0)?;
+        let utilities = UtilityClass::new(&settings, class.class, class_graph, java)?;
 
         Ok(ModuleTranslator {
             settings,
@@ -126,6 +125,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     /// Construct a new inner class part
     fn new_part(
         settings: &Settings,
+        wasm_module_class: &'g ClassData<'g>,
         class_graph: &'g ClassGraph<'g>,
         java: &'g JavaLibrary<'g>,
         part_idx: usize,
@@ -134,20 +134,20 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             .part_short_class_name
             .concat(&UnqualifiedName::number(part_idx));
         let class = ClassBuilder::new(
-            ClassAccessFlags::SYNTHETIC | ClassAccessFlags::SUPER,
+            ClassAccessFlags::SUPER | ClassAccessFlags::SYNTHETIC | ClassAccessFlags::FINAL,
             settings
                 .output_full_class_name
                 .concat(&UnqualifiedName::DOLLAR)
                 .concat(&name),
             java.classes.lang.object,
-            false,
+            Some((InnerClassAccessFlags::STATIC | InnerClassAccessFlags::PRIVATE, wasm_module_class)),
             vec![],
             class_graph,
             java,
         )?;
 
-        // Add the `NestHost` and `InnerClasses` attributes
-        let (nest_host, inner_classes): (NestHost, InnerClasses) = {
+        // Add the `InnerClasses` attributes
+        let inner_classes: InnerClasses = {
             let constants = &class.constants_pool;
             let outer_class_name = constants.get_utf8(settings.output_full_class_name.as_str())?;
             let outer_class = constants.get_class(outer_class_name)?;
@@ -160,9 +160,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 inner_name,
                 access_flags: InnerClassAccessFlags::STATIC | InnerClassAccessFlags::PRIVATE,
             };
-            (NestHost(outer_class), InnerClasses(vec![inner_class_attr]))
+            InnerClasses(vec![inner_class_attr])
         };
-        class.add_attribute(nest_host)?;
         class.add_attribute(inner_classes)?;
 
         Ok(CurrentPart {
@@ -251,10 +250,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         // Look up the previously declared method and start implementing it
         let function = &self.functions[self.current_func_idx as usize];
         self.current_func_idx += 1;
-        let mut method_builder = self
-            .current_part
-            .class
-            .implement_method(MethodAccessFlags::STATIC, function.method)?;
+        let mut method_builder = self.current_part.class.implement_method(function.method)?;
 
         let mut function_translator = FunctionTranslator::new(
             &function.func_type,
@@ -365,8 +361,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             let method = self.class_graph.add_method(MethodData {
                 class: self.current_part.class.class, // TODO: choose the right part here
                 name: self.settings.wasm_function_name(func_idx),
+                access_flags: MethodAccessFlags::STATIC,
                 descriptor,
-                is_static: true,
             });
 
             self.functions.push(Function {
@@ -592,7 +588,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                         .functions
                         .get_mut(export.index as usize)
                         .expect("Exporting function that doesn't exist");
-                    function.export = Some((export_name, self.settings.methods_for_function_exports));
+                    function.export =
+                        Some((export_name, self.settings.methods_for_function_exports));
                 }
 
                 ExternalKind::Table => {
@@ -640,10 +637,12 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             let export_name = if let Some((ExportName { name }, true)) = function.export {
                 name
             } else {
-                continue
+                continue;
             };
 
-            let export_descriptor = function.func_type.method_descriptor(&self.class.java.classes);
+            let export_descriptor = function
+                .func_type
+                .method_descriptor(&self.class.java.classes);
 
             // Implementation function
             let mut underlying_descriptor = export_descriptor.clone();
@@ -860,29 +859,29 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.push_instruction(Instruction::Dup2)?;
 
                 /* TODO: error handling for
-                     *
-                     *   - missing module or function in module
-                     *   - method handle that doesn't have the right expected type
-                     */
+                 *
+                 *   - missing module or function in module
+                 *   - method handle that doesn't have the right expected type
+                 */
 
-                    // Get the module
-                    jvm_code.const_string(import_loc.module.to_string())?;
-                    jvm_code.invoke(jvm_code.java.members.util.map.get)?;
-                    jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
-                        jvm_code.java.classes.util.map,
-                    )))?;
+                // Get the module
+                jvm_code.const_string(import_loc.module.to_string())?;
+                jvm_code.invoke(jvm_code.java.members.util.map.get)?;
+                jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
+                    jvm_code.java.classes.util.map,
+                )))?;
 
-                    // Get the imported handle
-                    jvm_code.const_string(import_loc.name.to_string())?;
-                    jvm_code.invoke(jvm_code.java.members.util.map.get)?;
-                    jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
-                        jvm_code.java.classes.lang.invoke.method_handle,
-                    )))?;
+                // Get the imported handle
+                jvm_code.const_string(import_loc.name.to_string())?;
+                jvm_code.invoke(jvm_code.java.members.util.map.get)?;
+                jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
+                    jvm_code.java.classes.lang.invoke.method_handle,
+                )))?;
 
-                    // Assign it to the right field
-                    jvm_code.access_field(import_field, AccessMode::Write)?;
+                // Assign it to the right field
+                jvm_code.access_field(import_field, AccessMode::Write)?;
             } else {
-                break
+                break;
             }
         }
         jvm_code.push_instruction(Instruction::Pop2)?;
@@ -908,7 +907,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             let export_name = if let Some((ExportName { name }, _)) = function.export {
                 name
             } else {
-                continue
+                continue;
             };
 
             jvm_code.push_instruction(Instruction::Dup)?;
@@ -998,9 +997,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         let mut parts = self.previous_parts;
         parts.push(self.current_part.result()?);
 
-        // Construct the `NestMembers` and `InnerClasses` attribute
-        let (nest_members, inner_classes): (NestMembers, InnerClasses) = {
-            let mut nest_members = vec![];
+        // Construct the `InnerClasses` attribute
+        let inner_classes: InnerClasses = {
             let mut inner_class_attrs = vec![];
             let constants = &self.class.constants_pool;
             let outer_class_name =
@@ -1015,7 +1013,6 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     constants.get_utf8(self.utilities.class_name().as_str())?;
                 let utilities_class = constants.get_class(utilities_class_name)?;
                 let utilities_name = constants.get_utf8(inner_class.as_str())?;
-                nest_members.push(utilities_class);
                 inner_class_attrs.push(InnerClass {
                     inner_class: utilities_class,
                     outer_class,
@@ -1033,7 +1030,6 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     self.settings.part_short_class_name.as_str(),
                     part_idx
                 ))?;
-                nest_members.push(inner_class);
                 inner_class_attrs.push(InnerClass {
                     inner_class,
                     outer_class,
@@ -1041,9 +1037,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     access_flags: InnerClassAccessFlags::STATIC | InnerClassAccessFlags::PRIVATE,
                 });
             }
-            (NestMembers(nest_members), InnerClasses(inner_class_attrs))
+            InnerClasses(inner_class_attrs)
         };
-        self.class.add_attribute(nest_members)?;
         self.class.add_attribute(inner_classes)?;
 
         // Final results

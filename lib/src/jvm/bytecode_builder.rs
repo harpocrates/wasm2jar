@@ -105,7 +105,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
         let mut locals = OffsetVec::new();
         if method.name == UnqualifiedName::INIT {
             locals.push(VerificationType::UninitializedThis);
-        } else if !method.is_static {
+        } else if !method.is_static() {
             locals.push(VerificationType::Object(RefType::Object(method.class)));
         }
         for arg_type in &method.descriptor.parameters {

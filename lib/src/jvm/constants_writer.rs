@@ -42,7 +42,7 @@ impl<'g> ConstantsWriter<MethodRefConstantIndex> for MethodData<'g> {
         let method_utf8 = constants.get_utf8(self.name.as_str())?;
         let desc_utf8 = constants.get_utf8(&self.descriptor.render())?;
         let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
-        constants.get_method_ref(class_idx, name_and_type_idx, self.class.is_interface)
+        constants.get_method_ref(class_idx, name_and_type_idx, self.class.is_interface())
     }
 }
 
@@ -77,7 +77,7 @@ impl<'g> ConstantsWriter<ConstantIndex> for ConstantData<'g> {
             ConstantData::Double(double) => constants.get_double(*double),
             ConstantData::FieldGetterHandle(field) => {
                 let field_idx = field.constant_index(constants)?;
-                let handle = if field.is_static {
+                let handle = if field.is_static() {
                     HandleKind::GetStatic
                 } else {
                     HandleKind::GetField
@@ -86,7 +86,7 @@ impl<'g> ConstantsWriter<ConstantIndex> for ConstantData<'g> {
             }
             ConstantData::FieldSetterHandle(field) => {
                 let field_idx = field.constant_index(constants)?;
-                let handle = if field.is_static {
+                let handle = if field.is_static() {
                     HandleKind::PutStatic
                 } else {
                     HandleKind::PutField
@@ -95,9 +95,9 @@ impl<'g> ConstantsWriter<ConstantIndex> for ConstantData<'g> {
             }
             ConstantData::MethodHandle(method) => {
                 let method_idx = method.constant_index(constants)?;
-                let handle = if method.is_static {
+                let handle = if method.is_static() {
                     HandleKind::InvokeStatic
-                } else if method.class.is_interface {
+                } else if method.class.is_interface() {
                     HandleKind::InvokeInterface
                 } else {
                     HandleKind::InvokeVirtual

@@ -1,7 +1,8 @@
 use crate::jvm::{
     BaseType, BootstrapMethodData, BranchInstruction, BytecodeBuilder, ClassData, ConstantData,
     EqComparison, Error, FieldData, FieldType, Instruction, InvokeDynamicData, InvokeType,
-    MethodData, MethodDescriptor, OrdComparison, RefType, UnqualifiedName, Width,
+    MethodAccessFlags, MethodData, MethodDescriptor, OrdComparison, RefType, UnqualifiedName,
+    Width,
 };
 use std::borrow::Cow;
 use std::ops::Not;
@@ -458,8 +459,8 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
         let method = self.class_graph.add_method(MethodData {
             class: self.java.classes.lang.invoke.method_handle,
             name: UnqualifiedName::INVOKEEXACT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor,
-            is_static: false,
         });
         self.push_instruction(Instruction::Invoke(InvokeType::Virtual, method))
     }
@@ -469,7 +470,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
         field: &'g FieldData<'g>,
         access_mode: AccessMode,
     ) -> Result<(), Error> {
-        self.push_instruction(match (field.is_static, access_mode) {
+        self.push_instruction(match (field.is_static(), access_mode) {
             (true, AccessMode::Read) => Instruction::GetStatic(field),
             (true, AccessMode::Write) => Instruction::PutStatic(field),
             (false, AccessMode::Read) => Instruction::GetField(field),

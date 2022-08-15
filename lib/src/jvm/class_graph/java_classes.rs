@@ -1,4 +1,4 @@
-use super::{BinaryName, ClassData, ClassGraph};
+use super::{BinaryName, ClassAccessFlags, ClassData, ClassGraph, InnerClassAccessFlags, NestData};
 use elsa::FrozenVec;
 
 /// Classes inside `java.*`
@@ -74,45 +74,59 @@ impl<'g> LangClasses<'g> {
             name: BinaryName::OBJECT,
             superclass: None,
             interfaces: FrozenVec::new(),
-            is_interface: false,
+            access_flags: ClassAccessFlags::PUBLIC | ClassAccessFlags::SUPER,
             methods: FrozenVec::new(),
             fields: FrozenVec::new(),
+            nest: NestData::Host { members: FrozenVec::new() },
         });
 
-        let char_sequence =
-            class_graph.add_class(ClassData::new(BinaryName::CHARSEQUENCE, object, true));
-        let string = class_graph.add_class(ClassData::new(BinaryName::STRING, object, false));
-        let class = class_graph.add_class(ClassData::new(BinaryName::CLASS, object, false));
-        let number = class_graph.add_class(ClassData::new(BinaryName::NUMBER, object, false));
-        let integer = class_graph.add_class(ClassData::new(BinaryName::INTEGER, number, false));
-        let float = class_graph.add_class(ClassData::new(BinaryName::FLOAT, number, false));
-        let long = class_graph.add_class(ClassData::new(BinaryName::LONG, number, false));
-        let double = class_graph.add_class(ClassData::new(BinaryName::DOUBLE, number, false));
-        let void = class_graph.add_class(ClassData::new(BinaryName::VOID, object, false));
-        let boolean = class_graph.add_class(ClassData::new(BinaryName::BOOLEAN, object, false));
-        let math = class_graph.add_class(ClassData::new(BinaryName::MATH, object, false));
-        let system = class_graph.add_class(ClassData::new(BinaryName::SYSTEM, object, false));
+        let char_sequence = class_graph.add_class(ClassData::new(
+            BinaryName::CHARSEQUENCE,
+            object,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::INTERFACE,
+            None,
+        ));
+        let string =
+            class_graph.add_class(ClassData::new(BinaryName::STRING, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let class = class_graph.add_class(ClassData::new(BinaryName::CLASS, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let number = class_graph.add_class(ClassData::new(BinaryName::NUMBER, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
+        let integer =
+            class_graph.add_class(ClassData::new(BinaryName::INTEGER, number, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let float = class_graph.add_class(ClassData::new(BinaryName::FLOAT, number, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let long = class_graph.add_class(ClassData::new(BinaryName::LONG, number, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let double =
+            class_graph.add_class(ClassData::new(BinaryName::DOUBLE, number, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let void = class_graph.add_class(ClassData::new(BinaryName::VOID, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let boolean =
+            class_graph.add_class(ClassData::new(BinaryName::BOOLEAN, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let math = class_graph.add_class(ClassData::new(BinaryName::MATH, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let system =
+            class_graph.add_class(ClassData::new(BinaryName::SYSTEM, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
         let invoke = InvokeClasses::add_to_graph(class_graph, object);
-        let throwable = class_graph.add_class(ClassData::new(BinaryName::THROWABLE, object, false));
-        let error = class_graph.add_class(ClassData::new(BinaryName::ERROR, throwable, false));
+        let throwable =
+            class_graph.add_class(ClassData::new(BinaryName::THROWABLE, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
+        let error = class_graph.add_class(ClassData::new(BinaryName::ERROR, throwable, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
         let assertion_error =
-            class_graph.add_class(ClassData::new(BinaryName::ASSERTIONERROR, error, false));
+            class_graph.add_class(ClassData::new(BinaryName::ASSERTIONERROR, error, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
         let exception =
-            class_graph.add_class(ClassData::new(BinaryName::EXCEPTION, throwable, false));
+            class_graph.add_class(ClassData::new(BinaryName::EXCEPTION, throwable, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
         let runtime_exception = class_graph.add_class(ClassData::new(
             BinaryName::RUNTIMEEXCEPTION,
             exception,
-            false,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC,
+            None,
         ));
         let arithmetic_exception = class_graph.add_class(ClassData::new(
             BinaryName::ARITHMETICEXCEPTION,
             runtime_exception,
-            false,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC,
+            None,
         ));
         let illegal_argument_exception = class_graph.add_class(ClassData::new(
             BinaryName::ILLEGALARGUMENTEXCEPTION,
             runtime_exception,
-            false,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC,
+            None
         ));
 
         string.interfaces.push(char_sequence);
@@ -148,27 +162,43 @@ impl<'g> InvokeClasses<'g> {
         class_graph: &ClassGraph<'g>,
         object: &'g ClassData<'g>,
     ) -> InvokeClasses<'g> {
-        let method_type =
-            class_graph.add_class(ClassData::new(BinaryName::METHODTYPE, object, false));
-        let method_handle =
-            class_graph.add_class(ClassData::new(BinaryName::METHODHANDLE, object, false));
+        let method_type = class_graph.add_class(ClassData::new(
+            BinaryName::METHODTYPE,
+            object,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL,
+            None,
+        ));
+        let method_handle = class_graph.add_class(ClassData::new(
+            BinaryName::METHODHANDLE,
+            object,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL,
+            None,
+        ));
         let method_handles =
-            class_graph.add_class(ClassData::new(BinaryName::METHODHANDLES, object, false));
+            class_graph.add_class(ClassData::new(BinaryName::METHODHANDLES, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
         let method_handles_lookup = class_graph.add_class(ClassData::new(
             BinaryName::METHODHANDLES_LOOKUP,
             object,
-            false,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL,
+            Some((InnerClassAccessFlags::PUBLIC | InnerClassAccessFlags::STATIC, method_handles)),
         ));
-        let call_site = class_graph.add_class(ClassData::new(BinaryName::CALLSITE, object, false));
+        let call_site = class_graph.add_class(ClassData::new(
+            BinaryName::CALLSITE,
+            object,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::ABSTRACT,
+            None
+        ));
         let constant_call_site = class_graph.add_class(ClassData::new(
             BinaryName::CONSTANTCALLSITE,
             call_site,
-            false,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC,
+            None,
         ));
         let mutable_call_site = class_graph.add_class(ClassData::new(
             BinaryName::MUTABLECALLSITE,
             call_site,
-            false,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC,
+            None,
         ));
 
         InvokeClasses {
@@ -186,10 +216,14 @@ impl<'g> InvokeClasses<'g> {
 impl<'g> NioClasses<'g> {
     pub fn add_to_graph(class_graph: &ClassGraph<'g>, object: &'g ClassData<'g>) -> NioClasses<'g> {
         let byte_order =
-            class_graph.add_class(ClassData::new(BinaryName::BYTEORDER, object, false));
-        let buffer = class_graph.add_class(ClassData::new(BinaryName::BUFFER, object, false));
-        let byte_buffer =
-            class_graph.add_class(ClassData::new(BinaryName::BYTEBUFFER, buffer, false));
+            class_graph.add_class(ClassData::new(BinaryName::BYTEORDER, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
+        let buffer = class_graph.add_class(ClassData::new(BinaryName::BUFFER, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
+        let byte_buffer = class_graph.add_class(ClassData::new(
+            BinaryName::BYTEBUFFER,
+            buffer,
+            ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::ABSTRACT,
+            None,
+        ));
 
         NioClasses {
             buffer,
@@ -204,9 +238,9 @@ impl<'g> UtilClasses<'g> {
         class_graph: &ClassGraph<'g>,
         object: &'g ClassData<'g>,
     ) -> UtilClasses<'g> {
-        let arrays = class_graph.add_class(ClassData::new(BinaryName::ARRAYS, object, false));
-        let map = class_graph.add_class(ClassData::new(BinaryName::MAP, object, true));
-        let hash_map = class_graph.add_class(ClassData::new(BinaryName::HASHMAP, object, false));
+        let arrays = class_graph.add_class(ClassData::new(BinaryName::ARRAYS, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
+        let map = class_graph.add_class(ClassData::new(BinaryName::MAP, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::INTERFACE, None));
+        let hash_map = class_graph.add_class(ClassData::new(BinaryName::HASHMAP, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
 
         hash_map.interfaces.push(map);
 

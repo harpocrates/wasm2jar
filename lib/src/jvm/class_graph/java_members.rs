@@ -1,5 +1,6 @@
 use super::{
-    ClassData, ClassGraph, FieldData, FieldType, MethodData, MethodDescriptor, UnqualifiedName,
+    ClassData, ClassGraph, FieldAccessFlags, FieldData, FieldType, MethodAccessFlags, MethodData,
+    MethodDescriptor, UnqualifiedName,
 };
 
 use super::java_classes::JavaClasses;
@@ -393,29 +394,29 @@ impl<'g> ObjectMembers<'g> {
         let equals = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::EQUALS,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.object)],
                 return_type: Some(FieldType::boolean()),
             },
-            is_static: false,
         });
         let hash_code = class_graph.add_method(MethodData {
             class,
+            access_flags: MethodAccessFlags::PUBLIC,
             name: UnqualifiedName::HASHCODE,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::int()),
             },
-            is_static: false,
         });
         let init = class_graph.add_method(MethodData {
             class,
+            access_flags: MethodAccessFlags::PUBLIC,
             name: UnqualifiedName::INIT,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: None,
             },
-            is_static: false,
         });
         ObjectMembers {
             equals,
@@ -434,11 +435,11 @@ impl<'g> CharSequenceMembers<'g> {
         let length = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::LENGTH,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::int()),
             },
-            is_static: false,
         });
         CharSequenceMembers { length }
     }
@@ -453,11 +454,11 @@ impl<'g> StringMembers<'g> {
         let get_bytes = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::GETBYTES,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.string)],
                 return_type: Some(FieldType::array(FieldType::byte())),
             },
-            is_static: false,
         });
         StringMembers { get_bytes }
     }
@@ -475,11 +476,11 @@ impl<'g> NumberMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![],
                     return_type: Some(extracted_type),
                 },
-                is_static: false,
             })
         };
 
@@ -514,11 +515,11 @@ impl<'g> IntegerMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![FieldType::int()],
                     return_type: Some(output_type),
                 },
-                is_static: true,
             })
         };
         let value_of = add_static_unary(
@@ -535,11 +536,11 @@ impl<'g> IntegerMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![FieldType::int(), FieldType::int()],
                     return_type: Some(FieldType::int()),
                 },
-                is_static: true,
             })
         };
         let compare = add_static_binary(UnqualifiedName::COMPARE);
@@ -555,8 +556,8 @@ impl<'g> IntegerMembers<'g> {
             class_graph.add_field(FieldData {
                 class,
                 name,
+                access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
                 descriptor,
-                is_static: true,
             })
         };
         let max_value = add_static_field(UnqualifiedName::MAXVALUE, FieldType::int());
@@ -598,11 +599,11 @@ impl<'g> FloatMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![input],
                     return_type: Some(output),
                 },
-                is_static: true,
             })
         };
         let value_of = add_unary_operator(
@@ -625,11 +626,11 @@ impl<'g> FloatMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![FieldType::float(), FieldType::float()],
                     return_type: Some(FieldType::float()),
                 },
-                is_static: true,
             })
         };
         let max = add_binary_operator(UnqualifiedName::MAX);
@@ -640,8 +641,8 @@ impl<'g> FloatMembers<'g> {
                 class_graph.add_field(FieldData {
                     class,
                     name,
+                    access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
                     descriptor: field_ty,
-                    is_static: true,
                 })
             };
         let max_value = add_static_field(UnqualifiedName::MAXVALUE, FieldType::float());
@@ -685,11 +686,11 @@ impl<'g> LongMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![FieldType::long()],
                     return_type: Some(output_type),
                 },
-                is_static: true,
             })
         };
         let value_of = add_static_unary(
@@ -709,11 +710,11 @@ impl<'g> LongMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters,
                     return_type: Some(ret),
                 },
-                is_static: true,
             })
         };
         let compare = add_static_binary(
@@ -753,8 +754,8 @@ impl<'g> LongMembers<'g> {
             class_graph.add_field(FieldData {
                 class,
                 name,
+                access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
                 descriptor,
-                is_static: true,
             })
         };
         let max_value = add_static_field(UnqualifiedName::MAXVALUE, FieldType::long());
@@ -796,11 +797,11 @@ impl<'g> DoubleMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![input],
                     return_type: Some(output),
                 },
-                is_static: true,
             })
         };
         let value_of = add_unary_operator(
@@ -823,11 +824,11 @@ impl<'g> DoubleMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![FieldType::double(), FieldType::double()],
                     return_type: Some(FieldType::double()),
                 },
-                is_static: true,
             })
         };
         let max = add_binary_operator(UnqualifiedName::MAX);
@@ -838,8 +839,8 @@ impl<'g> DoubleMembers<'g> {
                 class_graph.add_field(FieldData {
                     class,
                     name,
+                    access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
                     descriptor: field_ty,
-                    is_static: true,
                 })
             };
         let max_value = add_static_field(UnqualifiedName::MAXVALUE, FieldType::double());
@@ -879,8 +880,8 @@ impl<'g> VoidMembers<'g> {
         let r#type = class_graph.add_field(FieldData {
             class,
             name: UnqualifiedName::UPPERCASE_TYPE,
+            access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
             descriptor: FieldType::object(classes.lang.class),
-            is_static: true,
         });
         VoidMembers { r#type }
     }
@@ -895,17 +896,17 @@ impl<'g> BooleanMembers<'g> {
         let value_of = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::VALUEOF,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::boolean()],
                 return_type: Some(FieldType::object(classes.lang.boolean)),
             },
-            is_static: true,
         });
         let r#type = class_graph.add_field(FieldData {
             class,
             name: UnqualifiedName::UPPERCASE_TYPE,
+            access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
             descriptor: FieldType::object(classes.lang.class),
-            is_static: true,
         });
         BooleanMembers { value_of, r#type }
     }
@@ -921,11 +922,11 @@ impl<'g> MathMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![FieldType::double()],
                     return_type: Some(FieldType::double()),
                 },
-                is_static: true,
             })
         };
         let ceil = add_double_transformer(UnqualifiedName::CEIL);
@@ -939,11 +940,11 @@ impl<'g> MathMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![operator_type.clone(), operator_type.clone()],
                     return_type: Some(operator_type),
                 },
-                is_static: true,
             })
         };
         let copy_sign_float = add_binary_operator(UnqualifiedName::COPYSIGN, FieldType::float());
@@ -956,11 +957,11 @@ impl<'g> MathMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![operator_type.clone()],
                     return_type: Some(operator_type),
                 },
-                is_static: true,
             })
         };
         let abs_float = add_unary_operator(UnqualifiedName::ABS, FieldType::float());
@@ -969,11 +970,11 @@ impl<'g> MathMembers<'g> {
         let to_int_exact = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::TOINTEXACT,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::long()],
                 return_type: Some(FieldType::int()),
             },
-            is_static: true,
         });
 
         MathMembers {
@@ -1000,6 +1001,7 @@ impl<'g> SystemMembers<'g> {
         let arraycopy = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::ARRAYCOPY,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.object),
@@ -1010,7 +1012,6 @@ impl<'g> SystemMembers<'g> {
                 ],
                 return_type: None,
             },
-            is_static: true,
         });
         SystemMembers { arraycopy }
     }
@@ -1047,51 +1048,52 @@ impl<'g> MethodTypeMembers<'g> {
         let parameter_count = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::PARAMETERCOUNT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::int()),
             },
-            is_static: false,
         });
         let parameter_type = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::PARAMETERTYPE,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::int()],
                 return_type: Some(FieldType::object(classes.lang.class)),
             },
-            is_static: false,
         });
         let parameter_array = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::PARAMETERARRAY,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::array(FieldType::object(classes.lang.class))),
             },
-            is_static: false,
         });
         let drop_parameter_types = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::DROPPARAMETERTYPES,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::int(), FieldType::int()],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_type)),
             },
-            is_static: false,
         });
         let return_type = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::RETURNTYPE,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::object(classes.lang.class)),
             },
-            is_static: false,
         });
         let method_type = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::METHODTYPE,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.class),
@@ -1099,7 +1101,6 @@ impl<'g> MethodTypeMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_type)),
             },
-            is_static: true,
         });
         MethodTypeMembers {
             parameter_count,
@@ -1121,29 +1122,29 @@ impl<'g> MethodHandleMembers<'g> {
         let r#type = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::TYPE,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_type)),
             },
-            is_static: false,
         });
         let as_type = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::ASTYPE,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.invoke.method_type)],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: false,
         });
         let change_return_type = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::CHANGERETURNTYPE,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.class)],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_type)),
             },
-            is_static: false,
         });
         MethodHandleMembers {
             r#type,
@@ -1162,6 +1163,7 @@ impl<'g> MethodHandlesMembers<'g> {
         let drop_arguments = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::DROPARGUMENTS,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.invoke.method_handle),
@@ -1170,11 +1172,11 @@ impl<'g> MethodHandlesMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let permute_arguments = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::PERMUTEARGUMENTS,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.invoke.method_handle),
@@ -1183,11 +1185,11 @@ impl<'g> MethodHandlesMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let collect_arguments = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::COLLECTARGUMENTS,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.invoke.method_handle),
@@ -1196,11 +1198,11 @@ impl<'g> MethodHandlesMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let insert_arguments = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INSERTARGUMENTS,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.invoke.method_handle),
@@ -1209,20 +1211,20 @@ impl<'g> MethodHandlesMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let exact_invoker = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::EXACTINVOKER,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.invoke.method_type)],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let filter_return_value = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::FILTERRETURNVALUE,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.invoke.method_handle),
@@ -1230,11 +1232,11 @@ impl<'g> MethodHandlesMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let guard_with_test = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::GUARDWITHTEST,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.invoke.method_handle),
@@ -1243,56 +1245,56 @@ impl<'g> MethodHandlesMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let array_constructor = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::ARRAYCONSTRUCTOR,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.class)],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let array_element_getter = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::ARRAYELEMENTGETTER,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.class)],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let array_element_setter = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::ARRAYELEMENTSETTER,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.class)],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let array_length = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::ARRAYLENGTH,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.class)],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let empty = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::EMPTY,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.invoke.method_type)],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
         let constant = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::CONSTANT,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.class),
@@ -1300,7 +1302,6 @@ impl<'g> MethodHandlesMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: true,
         });
 
         MethodHandlesMembers {
@@ -1330,38 +1331,38 @@ impl<'g> CallSiteMembers<'g> {
         let dynamic_invoker = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::DYNAMICINVOKER,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: false,
         });
         let get_target = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::GETTARGET,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
-            is_static: false,
         });
         let set_target = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::SETTARGET,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.invoke.method_handle)],
                 return_type: None,
             },
-            is_static: false,
         });
         let r#type = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::TYPE,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::object(classes.lang.invoke.method_type)),
             },
-            is_static: false,
         });
 
         CallSiteMembers {
@@ -1382,11 +1383,11 @@ impl<'g> ConstantCallSiteMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.invoke.method_handle)],
                 return_type: None,
             },
-            is_static: false,
         });
         ConstantCallSiteMembers { init }
     }
@@ -1401,22 +1402,22 @@ impl<'g> MutableCallSiteMembers<'g> {
         let sync_all = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::SYNCALL,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::array(FieldType::object(
                     classes.lang.invoke.mutable_call_site,
                 ))],
                 return_type: None,
             },
-            is_static: true,
         });
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.invoke.method_handle)],
                 return_type: None,
             },
-            is_static: false,
         });
         MutableCallSiteMembers { sync_all, init }
     }
@@ -1431,11 +1432,11 @@ impl<'g> ThrowableMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.string)],
                 return_type: None,
             },
-            is_static: false,
         });
         ThrowableMembers { init }
     }
@@ -1450,11 +1451,11 @@ impl<'g> ErrorMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.string)],
                 return_type: None,
             },
-            is_static: false,
         });
         ErrorMembers { init }
     }
@@ -1469,11 +1470,11 @@ impl<'g> AssertionErrorMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.string)],
                 return_type: None,
             },
-            is_static: false,
         });
         AssertionErrorMembers { init }
     }
@@ -1488,11 +1489,11 @@ impl<'g> ExceptionMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.string)],
                 return_type: None,
             },
-            is_static: false,
         });
         ExceptionMembers { init }
     }
@@ -1507,11 +1508,11 @@ impl<'g> RuntimeExceptionMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.string)],
                 return_type: None,
             },
-            is_static: false,
         });
         RuntimeExceptionMembers { init }
     }
@@ -1526,11 +1527,11 @@ impl<'g> ArithmeticExceptionMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.string)],
                 return_type: None,
             },
-            is_static: false,
         });
         ArithmeticExceptionMembers { init }
     }
@@ -1545,11 +1546,11 @@ impl<'g> IllegalArgumentExceptionMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.string)],
                 return_type: None,
             },
-            is_static: false,
         });
         IllegalArgumentExceptionMembers { init }
     }
@@ -1577,20 +1578,20 @@ impl<'g> BufferMembers<'g> {
         let position = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::POSITION,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::int()],
                 return_type: Some(FieldType::object(classes.nio.buffer)),
             },
-            is_static: false,
         });
         let capacity = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::CAPACITY,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::int()),
             },
-            is_static: false,
         });
         BufferMembers { position, capacity }
     }
@@ -1606,11 +1607,11 @@ impl<'g> ByteBufferMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
+                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![FieldType::int()],
                     return_type: Some(FieldType::object(classes.nio.byte_buffer)),
                 },
-                is_static: true,
             })
         };
         let allocate = add_allocate(UnqualifiedName::ALLOCATE);
@@ -1618,11 +1619,11 @@ impl<'g> ByteBufferMembers<'g> {
         let capacity = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::CAPACITY,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: Some(FieldType::int()),
             },
-            is_static: false,
         });
 
         let add_get =
@@ -1630,11 +1631,11 @@ impl<'g> ByteBufferMembers<'g> {
                 class_graph.add_method(MethodData {
                     class,
                     name,
+                    access_flags: MethodAccessFlags::PUBLIC,
                     descriptor: MethodDescriptor {
                         parameters: vec![FieldType::int()],
                         return_type: Some(typ),
                     },
-                    is_static: false,
                 })
             };
         let get_byte = add_get(UnqualifiedName::GET, FieldType::byte());
@@ -1649,11 +1650,11 @@ impl<'g> ByteBufferMembers<'g> {
                 class_graph.add_method(MethodData {
                     class,
                     name,
+                    access_flags: MethodAccessFlags::PUBLIC,
                     descriptor: MethodDescriptor {
                         parameters: vec![FieldType::int(), typ],
                         return_type: Some(FieldType::object(classes.nio.byte_buffer)),
                     },
-                    is_static: false,
                 })
             };
         let put_byte = add_put(UnqualifiedName::PUT, FieldType::byte());
@@ -1667,11 +1668,11 @@ impl<'g> ByteBufferMembers<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name: UnqualifiedName::PUT,
+                access_flags: MethodAccessFlags::PUBLIC,
                 descriptor: MethodDescriptor {
                     parameters: vec![typ],
                     return_type: Some(FieldType::object(classes.nio.byte_buffer)),
                 },
-                is_static: false,
             })
         };
         let put_bytebuffer = add_relative_put(FieldType::object(classes.nio.byte_buffer));
@@ -1681,20 +1682,20 @@ impl<'g> ByteBufferMembers<'g> {
         let position = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::POSITION,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::int()],
                 return_type: Some(FieldType::object(classes.nio.buffer)),
             },
-            is_static: false,
         });
         let order = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::ORDER,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.nio.byte_order)],
                 return_type: Some(FieldType::object(classes.nio.byte_buffer)),
             },
-            is_static: false,
         });
 
         ByteBufferMembers {
@@ -1732,8 +1733,8 @@ impl<'g> ByteOrderMembers<'g> {
             class_graph.add_field(FieldData {
                 class,
                 name,
+                access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
                 descriptor: FieldType::object(classes.nio.byte_order),
-                is_static: true,
             })
         };
         let big_endian = add_endian(UnqualifiedName::BIGENDIAN);
@@ -1770,6 +1771,7 @@ impl<'g> ArraysMembers<'g> {
         let copy_of = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::COPYOF,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::array(FieldType::object(classes.lang.object)),
@@ -1777,11 +1779,11 @@ impl<'g> ArraysMembers<'g> {
                 ],
                 return_type: Some(FieldType::array(FieldType::object(classes.lang.object))),
             },
-            is_static: true,
         });
         let fill = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::FILL,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::array(FieldType::object(classes.lang.object)),
@@ -1791,7 +1793,6 @@ impl<'g> ArraysMembers<'g> {
                 ],
                 return_type: None,
             },
-            is_static: true,
         });
         ArraysMembers { copy_of, fill }
     }
@@ -1803,15 +1804,16 @@ impl<'g> MapMembers<'g> {
         let get = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::GET,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![FieldType::object(classes.lang.object)],
                 return_type: Some(FieldType::object(classes.lang.object)),
             },
-            is_static: false,
         });
         let put = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::PUT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![
                     FieldType::object(classes.lang.object),
@@ -1819,7 +1821,6 @@ impl<'g> MapMembers<'g> {
                 ],
                 return_type: Some(FieldType::object(classes.lang.object)),
             },
-            is_static: false,
         });
         MapMembers { get, put }
     }
@@ -1834,11 +1835,11 @@ impl<'g> HashMapMembers<'g> {
         let init = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::INIT,
+            access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
                 parameters: vec![],
                 return_type: None,
             },
-            is_static: false,
         });
         HashMapMembers { init }
     }

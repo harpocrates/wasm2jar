@@ -1,6 +1,6 @@
 use super::{
-    BinaryName, FieldType, InvokeType, MethodDescriptor, Name, RefType, RenderDescriptor,
-    UnqualifiedName,
+    BinaryName, ClassAccessFlags, FieldAccessFlags, FieldType, InvokeType, MethodAccessFlags,
+    MethodDescriptor, Name, RefType, RenderDescriptor, UnqualifiedName, InnerClassAccessFlags,
 };
 use elsa::map::FrozenMap;
 use elsa::FrozenVec;
@@ -38,9 +38,10 @@ impl<'g> ClassGraphArenas<'g> {
 
 /// Tracks the relationships between classes/interfaces and the members on those classes
 ///
-/// When generating multiple classes, it is quite convenient to maintain one unified graph of all
-/// of the types/members in the generated code. Then, when a class needs to access some member, it
-/// can import the necessary segment of the class graph into its constant pool.
+/// Whenever you intend to interact/create a certain set of classes/members, the recommended
+/// approach is to register those onto the class graph as early as possible. This makes it possible
+/// to use references to the same classes/members throughout code generation, making it easier to
+/// have a single consistent view of what exists.
 pub struct ClassGraph<'g> {
     arenas: &'g ClassGraphArenas<'g>,
     classes: FrozenMap<&'g BinaryName, &'g ClassData<'g>>,
@@ -102,7 +103,7 @@ impl<'g> ClassGraph<'g> {
         dont_revisit.insert(&sub_type.name);
 
         // Optimization: if the super type is a class, then skip visiting interfaces
-        let super_is_class: bool = !super_type.is_interface;
+        let super_is_class: bool = !super_type.is_interface();
 
         while let Some(class_data) = supertypes_to_visit.pop() {
             if class_data.name == super_type.name {
@@ -155,9 +156,22 @@ impl<'g> ClassGraph<'g> {
     }
 
     /// Add a new class to the class graph
+    ///
+    /// TODO: add validation here (eg. not extending final class, etc.)
     pub fn add_class(&self, data: ClassData<'g>) -> &'g ClassData<'g> {
         let data = &*self.arenas.class_arena.alloc(data);
         self.classes.insert(&data.name, data);
+
+        // Register inner classes with their nest host
+        if let NestData::Member { .. } = data.nest {
+            let nest_host = data.nest_host();
+            if let NestData::Host { members } = &nest_host.nest {
+                members.push(data)
+            } else {
+                unreachable!("The nest host of {:?} (computed to be {:?}) thinks it is a nest member", data, nest_host)
+            }
+        }
+
         data
     }
 
@@ -177,7 +191,7 @@ impl<'g> ClassGraph<'g> {
         if let Some(m) = method.class.methods.iter().find(|m| {
             m.name == method.name
                 && m.descriptor == method.descriptor
-                && m.is_static == method.is_static
+                && m.is_static() == method.is_static()
         }) {
             m
         } else {
@@ -210,14 +224,39 @@ pub struct ClassData<'g> {
     /// Interfaces implemented (or super-interfaces)
     pub interfaces: FrozenVec<&'g ClassData<'g>>,
 
-    /// Is this an interface?
-    pub is_interface: bool,
+    /// Class access flags
+    pub access_flags: ClassAccessFlags,
 
     /// Methods
     pub methods: FrozenVec<&'g MethodData<'g>>,
 
     /// Fields
     pub fields: FrozenVec<&'g FieldData<'g>>,
+
+    /// Nesting information
+    pub nest: NestData<'g>
+}
+
+/// Nesting information for the class.
+///
+/// Every class must either be a host or be nested inside a host.
+pub enum NestData<'g> {
+    Host {
+        /// All members claiming membership in this nest.
+        ///
+        /// This includes all transitive inner classes.
+        members: FrozenVec<&'g ClassData<'g>>,
+    },
+    Member {
+        /// Inner class access flags with respect to the immediately enclosing class.
+        access_flags: InnerClassAccessFlags,
+
+        /// Immediately enclosing class.
+        ///
+        /// This is _not_ the nest host, though following the `enclosing_class` chain should
+        /// eventually lead to the nest host.
+        enclosing_class: &'g ClassData<'g>,
+    }
 }
 
 impl<'g> PartialEq for ClassData<'g> {
@@ -254,11 +293,11 @@ pub struct MethodData<'g> {
     /// Name of the method
     pub name: UnqualifiedName,
 
+    /// Method access flags
+    pub access_flags: MethodAccessFlags,
+
     /// Type of the method
     pub descriptor: MethodDescriptor<&'g ClassData<'g>>,
-
-    /// Is this a static method?
-    pub is_static: bool,
 }
 
 impl<'g> Debug for MethodData<'g> {
@@ -276,16 +315,21 @@ impl<'g> MethodData<'g> {
     /// With the exception of `invokespecial` vs. `invokevirtual`, there is usually only one valid
     /// way to invoke a method. This function finds it.
     pub fn infer_invoke_type(&self) -> InvokeType {
-        if self.is_static {
+        if self.is_static() {
             InvokeType::Static
         } else if self.name == UnqualifiedName::INIT || self.name == UnqualifiedName::CLINIT {
             InvokeType::Special
-        } else if self.class.is_interface {
+        } else if self.class.is_interface() {
             let n = self.descriptor.parameter_length(true) as u8;
             InvokeType::Interface(n)
         } else {
             InvokeType::Virtual
         }
+    }
+
+    /// Is this a static method?
+    pub fn is_static(&self) -> bool {
+        self.access_flags.contains(MethodAccessFlags::STATIC)
     }
 }
 
@@ -299,11 +343,18 @@ pub struct FieldData<'g> {
     /// Name of the field
     pub name: UnqualifiedName,
 
+    /// Field access flags
+    pub access_flags: FieldAccessFlags,
+
     /// Type of the field
     pub descriptor: FieldType<&'g ClassData<'g>>,
+}
 
+impl<'g> FieldData<'g> {
     /// Is this a static field?
-    pub is_static: bool,
+    pub fn is_static(&self) -> bool {
+        self.access_flags.contains(FieldAccessFlags::STATIC)
+    }
 }
 
 impl<'g> Debug for FieldData<'g> {
@@ -321,15 +372,37 @@ impl<'g> ClassData<'g> {
     pub fn new(
         name: BinaryName,
         superclass: &'g ClassData<'g>,
-        is_interface: bool,
+        access_flags: ClassAccessFlags,
+        outer_class: Option<(InnerClassAccessFlags, &'g ClassData<'g>)>,
     ) -> ClassData<'g> {
+        let nest = match outer_class {
+            None => NestData::Host { members: FrozenVec::new() },
+            Some((access_flags, enclosing_class)) => NestData::Member { access_flags, enclosing_class },
+        };
         ClassData {
             name,
             superclass: Some(superclass),
             interfaces: FrozenVec::new(),
-            is_interface,
+            access_flags,
             methods: FrozenVec::new(),
             fields: FrozenVec::new(),
+            nest,
+        }
+    }
+
+    /// Is this an interface?
+    pub fn is_interface(&self) -> bool {
+        self.access_flags.contains(ClassAccessFlags::INTERFACE)
+    }
+
+    /// Find the nest host of a class
+    pub fn nest_host(&'g self) -> &'g ClassData<'g> {
+        let mut host_candidate = self;
+        loop {
+            match host_candidate.nest {
+                NestData::Host { .. } => return host_candidate,
+                NestData::Member { enclosing_class, .. } => host_candidate = enclosing_class,
+            }
         }
     }
 }

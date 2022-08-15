@@ -932,7 +932,7 @@ fn interpret_instruction<'g>(
         }
 
         Invoke(invoke_type, method) => {
-            let is_interface = method.class.is_interface;
+            let is_interface = method.class.is_interface();
             let is_init = method.name == UnqualifiedName::INIT;
             let desc = &method.descriptor;
 

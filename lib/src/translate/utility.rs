@@ -370,6 +370,7 @@ pub struct UtilityClass<'g>(UtilityClassInner<'g>);
 impl<'g> UtilityClass<'g> {
     pub fn new(
         settings: &Settings,
+        wasm_module_class: &'g ClassData<'g>,
         class_graph: &'g ClassGraph<'g>,
         java: &'g JavaLibrary<'g>,
     ) -> Result<UtilityClass<'g>, Error> {
@@ -391,10 +392,10 @@ impl<'g> UtilityClass<'g> {
             .concat(&inner_class_short_name);
 
         let class = ClassBuilder::new(
-            ClassAccessFlags::SYNTHETIC,
+            ClassAccessFlags::SUPER | ClassAccessFlags::SYNTHETIC | ClassAccessFlags::FINAL,
             class_name,
             java.classes.lang.object,
-            false,
+            Some((InnerClassAccessFlags::STATIC, wasm_module_class)),
             vec![],
             class_graph,
             java,

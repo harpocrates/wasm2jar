@@ -9,9 +9,6 @@ pub struct ClassBuilder<'g> {
     /// Constants pool
     pub constants_pool: ConstantsPool,
 
-    /// Class access flags
-    access_flags: ClassAccessFlags,
-
     /// Class name constant
     this_class_index: ClassConstantIndex,
 
@@ -49,13 +46,13 @@ impl<'g> ClassBuilder<'g> {
         access_flags: ClassAccessFlags,
         this_class: BinaryName,
         super_class: &'g ClassData<'g>,
-        is_interface: bool,
+        outer_class: Option<(InnerClassAccessFlags, &'g ClassData<'g>)>,
         interfaces: Vec<&'g ClassData<'g>>,
         class_graph: &'g ClassGraph<'g>,
         java: &'g JavaLibrary<'g>,
     ) -> Result<ClassBuilder<'g>, Error> {
         // Make sure this class is in the class graph
-        let class = class_graph.add_class(ClassData::new(this_class, super_class, is_interface));
+        let class = class_graph.add_class(ClassData::new(this_class, super_class, access_flags, outer_class));
         for interface in &interfaces {
             class.interfaces.push(interface);
         }
@@ -77,7 +74,6 @@ impl<'g> ClassBuilder<'g> {
         Ok(ClassBuilder {
             version: Version::JAVA11,
             constants_pool,
-            access_flags,
             this_class_index,
             super_class_index,
             interfaces,
@@ -93,9 +89,19 @@ impl<'g> ClassBuilder<'g> {
 
     /// Consume the builder and return the file class file
     ///
+    /// This handles settings several attributes:
+    ///
+    ///   - `BootstrapMethods`
+    ///   - `NestHost`
+    ///   - `NestMembers` (note: you should make sure all members are registered on the class graph
+    ///     before calling this method)
+    ///   - TODO: `InnerClasses`
+    ///
     /// Only call this if all associated builders have been released
     pub fn result(self) -> Result<ClassFile, Error> {
         let constants_pool = &self.constants_pool;
+
+        // `BootstrapMethods` attribute
         let bootstrap_methods: Vec<BootstrapMethod> = self
             .bootstrap_methods
             .iter()
@@ -119,10 +125,31 @@ impl<'g> ClassBuilder<'g> {
             .collect::<Result<Vec<_>, ConstantPoolOverflow>>()?;
         self.add_attribute(BootstrapMethods(bootstrap_methods))?;
 
+        // `NestHost`/`NestMember` attributes
+        match &self.class.nest {
+            NestData::Host { members } if !members.is_empty() => {
+                let nest_members = members
+                    .iter()
+                    .map(|member| -> Result<ClassConstantIndex, Error> {
+                        let nest_member_name = constants_pool.get_utf8(member.name.as_str())?;
+                        let nest_member_class = constants_pool.get_class(nest_member_name)?;
+                        Ok(nest_member_class)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.add_attribute(NestMembers(nest_members))?;
+            },
+            NestData::Member { .. } => {
+                let nest_host_name = constants_pool.get_utf8(self.class.nest_host().name.as_str())?;
+                let nest_host_class = constants_pool.get_class(nest_host_name)?;
+                self.add_attribute(NestHost(nest_host_class))?;
+            },
+            _ => (),
+        }
+
         Ok(ClassFile {
             version: self.version,
             constants: self.constants_pool.into_offset_vec(),
-            access_flags: self.access_flags,
+            access_flags: self.class.access_flags,
             this_class: self.this_class_index,
             super_class: self.super_class_index,
             interfaces: self.interfaces,
@@ -179,7 +206,7 @@ impl<'g> ClassBuilder<'g> {
             class: self.class,
             name,
             descriptor,
-            is_static: access_flags.contains(FieldAccessFlags::STATIC),
+            access_flags,
         });
 
         Ok(field)
@@ -212,7 +239,7 @@ impl<'g> ClassBuilder<'g> {
             class: self.class,
             name,
             descriptor,
-            is_static: access_flags.contains(MethodAccessFlags::STATIC),
+            access_flags,
         });
 
         Ok(())
@@ -224,20 +251,18 @@ impl<'g> ClassBuilder<'g> {
         name: UnqualifiedName,
         descriptor: MethodDescriptor<&'g ClassData<'g>>,
     ) -> Result<MethodBuilder<'a, 'g>, Error> {
-        let is_static = access_flags.contains(MethodAccessFlags::STATIC);
         let method = self.class_graph.add_method(MethodData {
             class: self.class,
             name,
             descriptor,
-            is_static,
+            access_flags,
         });
-        self.implement_method(access_flags, method)
+        self.implement_method(method)
     }
 
     /// Start implementing a new method (that is already recorded in the class graph)
     pub fn implement_method<'a>(
         &'a self,
-        access_flags: MethodAccessFlags,
         method: &'g MethodData<'g>,
     ) -> Result<MethodBuilder<'a, 'g>, Error> {
         let code = BytecodeBuilder::new(
@@ -249,7 +274,6 @@ impl<'g> ClassBuilder<'g> {
         );
 
         Ok(MethodBuilder {
-            access_flags,
             code,
             methods: &self.methods,
             constants_pool: &self.constants_pool,
@@ -260,9 +284,6 @@ impl<'g> ClassBuilder<'g> {
 }
 
 pub struct MethodBuilder<'a, 'g> {
-    /// Access flags
-    access_flags: MethodAccessFlags,
-
     /// Code builder
     pub code: BytecodeBuilder<'a, 'g>,
 
@@ -300,7 +321,7 @@ impl<'a, 'g> MethodBuilder<'a, 'g> {
         let mut attributes = self.attributes;
         attributes.push(self.constants_pool.get_attribute(code)?);
         let method = Method {
-            access_flags: self.access_flags,
+            access_flags: self.method.access_flags,
             name_index,
             descriptor_index,
             attributes,
@@ -325,7 +346,7 @@ fn sample_class() -> Result<(), Error> {
         ClassAccessFlags::PUBLIC,
         BinaryName::from_string(String::from("me/alec/Point")).unwrap(),
         java.classes.lang.object,
-        false,
+        None,
         vec![],
         &class_graph,
         &java,

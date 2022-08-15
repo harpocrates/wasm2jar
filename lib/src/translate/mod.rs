@@ -138,7 +138,7 @@ pub struct Function<'a, 'g> {
     /// The boolean indicates whether we should _also_ generate a public (non-static) method on the
     /// WASM module object. This doesn't fit in a generalized export framework, but it is very
     /// convenient for functions.
-    pub export: Option<(ExportName<'a>, bool)>
+    pub export: Option<(ExportName<'a>, bool)>,
 }
 
 pub struct ImportName<'a> {
@@ -153,4 +153,3 @@ pub struct ExportName<'a> {
     /// Name off the exported entity
     pub name: &'a str,
 }
-

@@ -1,8 +1,31 @@
-use super::{
-    Attribute, ClassConstantIndex, ConstantIndex, InnerClassAccessFlags, Serialize,
-    Utf8ConstantIndex, VerificationType,
-};
 use byteorder::WriteBytesExt;
+use crate::jvm::{ClassConstantIndex, ConstantIndex, InnerClassAccessFlags, Utf8ConstantIndex, VerificationType};
+use crate::jvm::class_file::Serialize;
+
+/// Attributes (used in classes, fields, methods, and even on some attributes)
+///
+/// The representation is designed to be easily extended with custom attributes.
+/// While some attributes aren't essential, others are really important (eg. the
+/// code attribute for including the actual bytecode).
+///
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.7
+#[derive(Debug)]
+pub struct Attribute {
+    pub name_index: Utf8ConstantIndex,
+    pub info: Vec<u8>,
+}
+
+impl Serialize for Attribute {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.name_index.serialize(writer)?;
+
+        // Attribute info length is 4 bytes
+        (self.info.len() as u32).serialize(writer)?;
+        writer.write_all(&self.info)?;
+
+        Ok(())
+    }
+}
 
 /// Attributes are all stored in the same way (see `Attribute`), but internally
 /// they represent very different things. This trait is implemented by things

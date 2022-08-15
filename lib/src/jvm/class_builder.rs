@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::jvm::class_file::{Signature, Code, AttributeLike, NestHost, NestMembers, BootstrapMethods, BootstrapMethod, Version, Method, Field, Attribute, ClassFile};
 use elsa::FrozenVec;
 
 pub struct ClassBuilder<'g> {
@@ -337,6 +338,7 @@ impl<'a, 'g> MethodBuilder<'a, 'g> {
 fn sample_class() -> Result<(), Error> {
     use BranchInstruction::*;
     use Instruction::*;
+    use crate::jvm::class_file::Serialize;
 
     let class_graph_arenas = ClassGraphArenas::new();
     let class_graph = ClassGraph::new(&class_graph_arenas);

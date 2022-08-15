@@ -1,12 +1,13 @@
 use super::{
-    Attribute, AttributeLike, ConstantPoolOverflow, Error, Offset, OffsetResult, OffsetVec,
-    Serialize, Width,
+    ConstantPoolOverflow, Error,
 };
 use byteorder::WriteBytesExt;
 use elsa::map::FrozenMap;
 use elsa::vec::FrozenVec;
 use std::borrow::{Borrow, Cow};
 use std::result::Result;
+use crate::util::{Offset, OffsetResult, OffsetVec, Width};
+use crate::jvm::class_file::{Attribute, AttributeLike, Serialize};
 
 /// Class file constants pool builder
 ///

@@ -2,9 +2,10 @@ use super::{
     AccessMode, BootstrapUtilities, BranchCond, CodeBuilderExts, Error, Function, Global, Memory,
     Settings, Table, UtilityClass, UtilityMethod,
 };
+use crate::util::{OffsetVec, Width};
 use crate::jvm::{
     BaseType, BranchInstruction, BytecodeBuilder, ClassData, EqComparison, FieldType, Instruction,
-    MethodDescriptor, OffsetVec, OrdComparison, RefType, SynLabel, UnqualifiedName, Width,
+    MethodDescriptor, OrdComparison, RefType, SynLabel, UnqualifiedName,
 };
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,

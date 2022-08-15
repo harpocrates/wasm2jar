@@ -2,11 +2,12 @@ use super::{AccessMode, CodeBuilderExts, Error, Memory, Settings, Table, Utiliti
 use crate::jvm::{
     BaseType, BinaryName, BootstrapMethodData, BranchInstruction, BytecodeBuilder,
     ClassAccessFlags, ClassBuilder, ClassData, ClassGraph, CompareMode, ConstantData, FieldType,
-    InnerClass, InnerClassAccessFlags, InnerClasses, Instruction, JavaClasses, JavaLibrary,
+    InnerClassAccessFlags, Instruction, JavaClasses, JavaLibrary,
     MethodAccessFlags, MethodData, MethodDescriptor, Name, OrdComparison, RefType, ShiftType,
     UnqualifiedName,
 };
 use std::collections::HashMap;
+use crate::jvm::class_file::{InnerClasses, InnerClass};
 
 /// Potential utility methods.
 ///

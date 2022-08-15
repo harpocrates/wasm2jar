@@ -1,6 +1,7 @@
 use super::{
-    BinaryName, BranchInstruction, ClassConstantIndex, Constant, Frame, Offset, RefType, SynLabel,
+    BinaryName, BranchInstruction, ClassConstantIndex, Constant, Frame, RefType, SynLabel,
 };
+use crate::util::Offset;
 
 #[derive(Debug)]
 pub enum Error {

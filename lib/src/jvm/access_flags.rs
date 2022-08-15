@@ -1,7 +1,7 @@
-use super::Serialize;
 use bitflags::bitflags;
 use byteorder::WriteBytesExt;
 use std::io::Result;
+use crate::jvm::class_file::Serialize;
 
 bitflags! {
     /// Access flags on classes

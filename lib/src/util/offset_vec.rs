@@ -1,5 +1,3 @@
-use super::Serialize;
-use byteorder::WriteBytesExt;
 use std::fmt::{Debug, Error, Formatter};
 use std::iter::{DoubleEndedIterator, Enumerate, Extend, FromIterator};
 use std::ops::Sub;
@@ -143,18 +141,6 @@ impl<T: Sized + Width> OffsetVec<T> {
 
     pub fn iter<'a>(&'a self) -> OffsetVecIter<'a, T> {
         self.into_iter()
-    }
-}
-
-/// This is a lot like `Vec`, except the first thing serialized/deserialized is the maximum offset
-/// instead of the total number of elements.
-impl<A: Width + Serialize> Serialize for OffsetVec<A> {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        (self.offset_len().0 as u16).serialize(writer)?;
-        for (_, _, elem) in self {
-            elem.serialize(writer)?;
-        }
-        Ok(())
     }
 }
 

@@ -1,4 +1,5 @@
-use crate::jvm::{ClassData, FieldType, JavaClasses, MethodDescriptor, RefType, Width};
+use crate::jvm::{ClassData, FieldType, JavaClasses, MethodDescriptor, RefType};
+use crate::util::Width;
 use wasmparser::{ValType, WasmFuncType};
 
 /// Subset of WASM types that we know how to put on the WASM stack

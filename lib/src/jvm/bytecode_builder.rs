@@ -3,6 +3,8 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
+use crate::util::{OffsetVec, Width, Offset};
+use crate::jvm::class_file::{Code, StackMapTable, BytecodeArray, Serialize};
 
 use elsa::FrozenVec;
 

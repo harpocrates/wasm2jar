@@ -5,11 +5,12 @@ use super::{
 };
 use crate::jvm;
 use crate::jvm::{
-    BinaryName, BranchInstruction, BytecodeBuilder, ClassAccessFlags, ClassBuilder, ClassFile,
-    ClassGraph, ConstantData, FieldAccessFlags, FieldType, InnerClass, InnerClassAccessFlags,
-    InnerClasses, Instruction, JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name,
-    RefType, UnqualifiedName, Width, ClassData
+    BinaryName, BranchInstruction, BytecodeBuilder, ClassAccessFlags, ClassBuilder,
+    ClassGraph, ConstantData, FieldAccessFlags, FieldType, InnerClassAccessFlags,
+    Instruction, JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name,
+    RefType, UnqualifiedName, ClassData
 };
+use crate::util::Width;
 use crate::wasm::{ref_type_from_general, FunctionType, StackType, TableType};
 use std::iter;
 use wasmparser::types::Types;
@@ -19,6 +20,7 @@ use wasmparser::{
     Import, ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
     TableSectionReader, Type, TypeRef, TypeSectionReader, Validator,
 };
+use crate::jvm::class_file::{ClassFile, InnerClasses, InnerClass};
 
 /// Main entry point for translating a WASM module
 pub struct ModuleTranslator<'a, 'g> {

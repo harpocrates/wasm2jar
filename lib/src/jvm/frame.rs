@@ -1,5 +1,8 @@
 use super::*;
 use byteorder::WriteBytesExt;
+use super::class_file::Serialize;
+use crate::util::{OffsetVec, Width, Offset};
+use crate::jvm::class_file::StackMapFrame;
 
 // TODO: rename various "interpret" functions "verify"
 

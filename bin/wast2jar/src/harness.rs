@@ -347,7 +347,7 @@ impl<'a> TestHarness<'a> {
     fn visit_module(
         &mut self,
         module: QuoteWat<'a>,
-    ) -> Result<Vec<(jvm::BinaryName, jvm::ClassFile)>, TestError> {
+    ) -> Result<Vec<(jvm::BinaryName, jvm::class_file::ClassFile)>, TestError> {
         let id: Option<Id<'a>> = match &module {
             QuoteWat::Wat(Wat::Module(Module { id, .. })) => *id,
             QuoteWat::Wat(Wat::Component(Component { id, .. })) => *id,
@@ -370,7 +370,7 @@ impl<'a> TestHarness<'a> {
         let wasm_bytes: Vec<u8> = module.encode()?;
 
         let translation_result =
-            || -> Result<Vec<(jvm::BinaryName, jvm::ClassFile)>, translate::Error> {
+            || -> Result<Vec<(jvm::BinaryName, jvm::class_file::ClassFile)>, translate::Error> {
                 let class_graph_arenas = jvm::ClassGraphArenas::new();
                 let class_graph = jvm::ClassGraph::new(&class_graph_arenas);
                 let java = class_graph.insert_java_library_types();

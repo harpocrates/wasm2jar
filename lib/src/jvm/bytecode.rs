@@ -17,6 +17,8 @@ use byteorder::WriteBytesExt;
 use std::convert::TryFrom;
 use std::io::Result;
 use std::ops::Not;
+use crate::jvm::class_file::Serialize;
+use crate::util::{Width};
 
 /// Non-branching JVM bytecode instruction
 #[derive(Clone, Debug)]

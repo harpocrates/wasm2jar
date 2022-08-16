@@ -21,7 +21,6 @@ pub struct Frame<Cls, U> {
 
 pub type VerifierInstruction<'g> = Instruction<
     RefType<&'g ClassData<'g>>,
-    RefType<&'g ClassData<'g>>,
     ConstantData<'g>,
     &'g FieldData<'g>,
     &'g MethodData<'g>,
@@ -34,6 +33,24 @@ pub type VerifierFrame<'g> =
 type VType<'g> = VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)>;
 
 impl<'g> VerifierFrame<'g> {
+
+
+    pub fn generalize_top_stack_type(
+        &mut self,
+        general_type: RefType<&'g ClassData<'g>>,
+    ) -> Result<(), VerifierErrorKind> {
+
+        let general_type = VType::Object(general_type.clone());
+        let specific_type = pop_offset_vec(&mut self.stack)?;
+        let is_valid_weakening = VerificationType::is_assignable(&specific_type, &general_type);
+        if is_valid_weakening {
+            self.stack.push(general_type);
+            Ok(())
+        } else {
+            Err(VerifierErrorKind::InvalidType)
+        }
+    }
+
     /// Update the frame to reflect the effects of the given (non-branching) instruction
     ///
     ///   * `insn_offset_in_basic_block` - used in uninitialized verification types
@@ -532,17 +549,6 @@ fn interpret_instruction<'g>(
                 }
                 _ => return Err(VerifierErrorKind::InvalidIndex),
             };
-        }
-
-        AHint(general_type) => {
-            let general_type = VType::Object(general_type.clone());
-            let specific_type = pop_offset_vec(stack)?;
-            let is_valid_weakening = VerificationType::is_assignable(&specific_type, &general_type);
-            if is_valid_weakening {
-                stack.push(general_type);
-            } else {
-                return Err(VerifierErrorKind::InvalidType);
-            }
         }
 
         IAStore => {

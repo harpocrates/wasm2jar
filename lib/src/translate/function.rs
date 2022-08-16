@@ -1215,7 +1215,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             self.jvm_code.push_instruction(Instruction::Pop)?;
         }
         if let Some(ref_ty) = ref_ty_hint.clone() {
-            self.jvm_code.push_instruction(Instruction::AHint(ref_ty))?;
+            self.jvm_code.generalize_top_stack_type(ref_ty)?;
         }
         self.jvm_code
             .push_branch_instruction(BranchInstruction::Goto(end_block))?;
@@ -1231,7 +1231,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             self.jvm_code.push_instruction(Instruction::Pop2)?;
         }
         if let Some(ref_ty) = ref_ty_hint {
-            self.jvm_code.push_instruction(Instruction::AHint(ref_ty))?;
+            self.jvm_code.generalize_top_stack_type(ref_ty)?;
         }
 
         self.jvm_code.place_label(end_block)?;

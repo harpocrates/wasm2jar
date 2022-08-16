@@ -152,8 +152,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
                 self.push_instruction(Instruction::DStore(offset))?;
             }
             FieldType::Ref(ref_type) => {
-                self.push_instruction(Instruction::AConstNull)?;
-                self.push_instruction(Instruction::AHint(ref_type))?;
+                self.const_null(ref_type)?;
                 self.push_instruction(Instruction::AStore(offset))?;
             }
         };
@@ -163,7 +162,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     /// Push a null of a specific value to the stack
     fn const_null(&mut self, ref_type: RefType<&'g ClassData<'g>>) -> Result<(), Error> {
         self.push_instruction(Instruction::AConstNull)?;
-        self.push_instruction(Instruction::AHint(ref_type))?;
+        self.generalize_top_stack_type(ref_type)?;
         Ok(())
     }
 

@@ -366,7 +366,6 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
             let constants = self.constants_pool;
             let bootstrap_methods = self.bootstrap_methods;
             let insn = insn.map(
-                |_class_hint| Ok(()),
                 |class| -> Result<ClassConstantIndex, Error> {
                     Ok(class.constant_index(constants)?)
                 },
@@ -514,6 +513,28 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
         self.current_block
             .as_ref()
             .map(|current_block| &current_block.latest_frame)
+    }
+
+    /// Generalize the type of the top value on the stack.
+    ///
+    /// If the top-most local is not a reference type or the specied type is not more general, this
+    /// will result in a verifier error. Otherwise, it will set the top of the stack to the
+    /// specified more general type.
+    pub fn generalize_top_stack_type(
+        &mut self,
+        general_type: RefType<&'g ClassData<'g>>,
+    ) -> Result<(), Error> {
+        if let Some(current_block) = self.current_block.as_mut() {
+            current_block
+                .latest_frame
+                .generalize_top_stack_type(general_type)
+                .map_err(|kind| Error::VerifierError {
+                    instruction: format!("Hinting at more general type: {:?}", general_type),
+                    kind,
+                })
+        } else {
+            Ok(())
+        }
     }
 }
 

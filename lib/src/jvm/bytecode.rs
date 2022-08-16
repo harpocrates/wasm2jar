@@ -22,7 +22,7 @@ use crate::util::{Width};
 
 /// Non-branching JVM bytecode instruction
 #[derive(Clone, Debug)]
-pub enum Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod> {
+pub enum Instruction<Class, Constant, Field, Method, IndyMethod> {
     Nop,
     AConstNull,
     IConstM1,
@@ -66,7 +66,6 @@ pub enum Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod> {
     FKill(u16),
     DKill(u16),
     AKill(u16),
-    AHint(ClassHint), // hint for the verifier to infer a more general type
     IAStore,
     LAStore,
     FAStore,
@@ -150,7 +149,6 @@ pub enum Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod> {
 }
 
 pub type SerializableInstruction = Instruction<
-    (),
     ClassConstantIndex,
     ConstantIndex,
     FieldRefConstantIndex,
@@ -158,19 +156,18 @@ pub type SerializableInstruction = Instruction<
     InvokeDynamicConstantIndex,
 >;
 
-impl<ClassHint, Class, Constant, Field, Method, IndyMethod>
-    Instruction<ClassHint, Class, Constant, Field, Method, IndyMethod>
+impl<Class, Constant, Field, Method, IndyMethod>
+    Instruction<Class, Constant, Field, Method, IndyMethod>
 {
-    pub fn map<ClassHint2, Class2, Constant2, Field2, Method2, IndyMethod2, E>(
+    pub fn map<Class2, Constant2, Field2, Method2, IndyMethod2, E>(
         &self,
-        map_class_hint: impl Fn(&ClassHint) -> std::result::Result<ClassHint2, E>,
         map_class: impl Fn(&Class) -> std::result::Result<Class2, E>,
         map_constant: impl Fn(&Constant) -> std::result::Result<Constant2, E>,
         map_field: impl Fn(&Field) -> std::result::Result<Field2, E>,
         map_method: impl Fn(&Method) -> std::result::Result<Method2, E>,
         map_indy_method: impl Fn(&IndyMethod) -> std::result::Result<IndyMethod2, E>,
     ) -> std::result::Result<
-        Instruction<ClassHint2, Class2, Constant2, Field2, Method2, IndyMethod2>,
+        Instruction<Class2, Constant2, Field2, Method2, IndyMethod2>,
         E,
     > {
         use Instruction::*;
@@ -218,7 +215,6 @@ impl<ClassHint, Class, Constant, Field, Method, IndyMethod>
             FKill(idx) => FKill(*idx),
             DKill(idx) => FKill(*idx),
             AKill(idx) => AKill(*idx),
-            AHint(hint) => AHint(map_class_hint(hint)?),
             IAStore => IAStore,
             LAStore => LAStore,
             FAStore => FAStore,
@@ -303,8 +299,8 @@ impl<ClassHint, Class, Constant, Field, Method, IndyMethod>
     }
 }
 
-impl<ClassHint, Class, Field, Method, IndyMethod> Width
-    for Instruction<ClassHint, Class, ConstantIndex, Field, Method, IndyMethod>
+impl<Class, Field, Method, IndyMethod> Width
+    for Instruction<Class, ConstantIndex, Field, Method, IndyMethod>
 {
     fn width(&self) -> usize {
         match self {
@@ -313,7 +309,6 @@ impl<ClassHint, Class, Field, Method, IndyMethod> Width
           | Instruction::FKill(_)
           | Instruction::DKill(_)
           | Instruction::AKill(_)
-          | Instruction::AHint(_)
           => 0,
 
           Instruction::Nop
@@ -564,7 +559,7 @@ impl Serialize for SerializableInstruction {
             | Instruction::FKill(_)
             | Instruction::DKill(_)
             | Instruction::AKill(_)
-            | Instruction::AHint(_) => (),
+            => (),
             Instruction::IAStore => 0x4fu8.serialize(writer)?,
             Instruction::LAStore => 0x50u8.serialize(writer)?,
             Instruction::FAStore => 0x51u8.serialize(writer)?,

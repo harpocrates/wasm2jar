@@ -1,0 +1,26 @@
+IDEA:
+
+Keep a richer structure for `ClassBuilder` until `result` is called
+
+ - Only use `ConstantPool` in `result`
+ - Construct using a reference to `ClassData`
+
+crate::jvm::model
+
+  - types representing unserialized model of classes (no constant pool stuff, understood semantics)
+     - for code in particular, this means keeping `VerifierInstruction` around for longer (eg in `model::BasicBlock`)
+       - this might make it easier to add in a pass for replacing forward jumps with wide jumps
+  - serialize that using a constant pool
+
+Code model goal:
+
+  * `BasicBlock` contains:
+
+     - `Vec<VerifierInstruction<'g>>` (offset_vec doesn't make sense here since we don't yet know what the constant index values are, so we also don't know eg. when to use `ldc` or `ldc_w`). This also means we can't calibrate `lookupswitch` and `lookuptable` padding yet
+     - `VerfierFrame<'g>
+
+  * When serializing:
+
+     - Do a pass to convert verifier instructions into an `OffsetVec<SerializableInstruction>`, resolving `ldc` vs `ldc_w` and adding padding for `lookupswitch` and `lookuptable`
+     - Do a second pass (really fixpoint loop) over those blocks to insert extra `goto_w` blocks for wide instructions
+     

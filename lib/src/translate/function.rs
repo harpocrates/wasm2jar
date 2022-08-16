@@ -5,8 +5,9 @@ use super::{
 use crate::util::{OffsetVec, Width};
 use crate::jvm::{
     BaseType, BranchInstruction, BytecodeBuilder, ClassData, EqComparison, FieldType, Instruction,
-    MethodDescriptor, OrdComparison, RefType, SynLabel, UnqualifiedName,
+    MethodDescriptor, OrdComparison, RefType, UnqualifiedName,
 };
+use crate::jvm::model::SynLabel;
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
 };

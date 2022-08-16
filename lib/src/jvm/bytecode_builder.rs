@@ -2,9 +2,9 @@ use super::*;
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt;
 use crate::util::{OffsetVec, Width, Offset};
 use crate::jvm::class_file::{Code, StackMapTable, BytecodeArray, Serialize};
+use crate::jvm::model::{SynLabel, BasicBlock};
 
 use elsa::FrozenVec;
 
@@ -53,27 +53,18 @@ Notes:
 /// above, or there has already been a jump to the label). This is also important for the sake of
 /// always being able to find the initial frame of the block.
 pub struct BytecodeBuilder<'a, 'g> {
-    /// Basic blocks in the code
-    blocks: HashMap<SynLabel, BasicBlock<'g, SynLabel, SynLabel, SynLabel>>,
-
-    /// Order of basic blocks in the code (elements are unique and exactly match keys of `blocks`)
-    block_order: Vec<SynLabel>,
+    /// Method code under construction
+    code: crate::jvm::model::Code<'g>,
 
     /// Labels which have been referenced in blocks so far, but not placed yet (keys do not overlap
     /// with keys of `block`)
     unplaced_labels: HashMap<SynLabel, VerifierFrame<'g>>,
 
-    /// Offset of the end of the last block in `blocks`
+    /// Offset of the end of the last block in `code.blocks`
     blocks_end_offset: Offset,
 
     /// Block currently under construction (label is not in `blocks` _or_ `unplaced_labels`)
     current_block: Option<CurrentBlock<'g>>,
-
-    /// Maximum size of locals seen so far
-    max_locals: Offset,
-
-    /// Maximum size of stack seen so far
-    max_stack: Offset,
 
     /// Next label
     next_label: SynLabel,
@@ -120,14 +111,18 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
             stack: OffsetVec::new(),
         };
 
-        BytecodeBuilder {
+        let code = crate::jvm::model::Code {
+            max_locals,
+            max_stack: Offset(0),
             blocks: HashMap::new(),
             block_order: vec![],
+        };
+
+        BytecodeBuilder {
+            code,
             unplaced_labels: HashMap::new(),
             blocks_end_offset: Offset(0),
             current_block: Some(CurrentBlock::new(SynLabel::START, entry_frame)),
-            max_stack: Offset(0),
-            max_locals,
             next_label: SynLabel::START.next(),
             class_graph,
             java,
@@ -155,19 +150,19 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
         }
 
         // Convert max locals and stack
-        let max_locals: u16 = match u16::try_from(self.max_locals.0) {
+        let max_locals: u16 = match u16::try_from(self.code.max_locals.0) {
             Ok(max_locals) => max_locals,
-            Err(_) => return Err(Error::MethodCodeMaxStackOverflow(self.max_locals)),
+            Err(_) => return Err(Error::MethodCodeMaxStackOverflow(self.code.max_locals)),
         };
-        let max_stack: u16 = match u16::try_from(self.max_stack.0) {
+        let max_stack: u16 = match u16::try_from(self.code.max_stack.0) {
             Ok(max_stack) => max_stack,
-            Err(_) => return Err(Error::MethodCodeMaxStackOverflow(self.max_stack)),
+            Err(_) => return Err(Error::MethodCodeMaxStackOverflow(self.code.max_stack)),
         };
 
         // Extract a mapping of label to offset and labels used (our next iteration is destructive)
         let mut jump_targets: HashSet<SynLabel> = HashSet::new();
         let mut label_offsets: HashMap<SynLabel, Offset> = HashMap::new();
-        for (block_label, basic_block) in &self.blocks {
+        for (block_label, basic_block) in &self.code.blocks {
             label_offsets.insert(*block_label, basic_block.offset_from_start);
             for jump_target in basic_block.branch_end.jump_targets().targets() {
                 jump_targets.insert(*jump_target);
@@ -178,20 +173,20 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
 
         // Loop through the blocks in placement order to accumulate code and frames
         let mut code_array: BytecodeArray = BytecodeArray(vec![]);
-        let implicit_frame: Frame<ClassConstantIndex, u16> = self.blocks[&SynLabel::START]
+        let implicit_frame: Frame<ClassConstantIndex, u16> = self.code.blocks[&SynLabel::START]
             .frame
             .into_serializable(&self.constants_pool, Offset(0))?;
         let mut frames: Vec<(Offset, Frame<ClassConstantIndex, u16>)> = vec![];
         let mut fallthrough_label: Option<SynLabel> = None;
 
-        for block_label in &self.block_order {
+        for block_label in &self.code.block_order {
             if let Some(fallthrough_label) = fallthrough_label.take() {
                 assert_eq!(
                     fallthrough_label, *block_label,
                     "fallthrough does not match next block"
                 );
             }
-            let basic_block = self.blocks.remove(block_label).expect("missing block");
+            let basic_block = self.code.blocks.remove(block_label).expect("missing block");
 
             // If this block is ever jumped to, construct a stack map frame for it
             if jump_targets.contains(&block_label) {
@@ -274,7 +269,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
     /// jumped to
     pub fn lookup_frame(&self, label: SynLabel) -> Option<&VerifierFrame<'g>> {
         // The block is already placed
-        if let Some(basic_block) = self.blocks.get(&label) {
+        if let Some(basic_block) = self.code.blocks.get(&label) {
             return Some(&basic_block.frame);
         }
 
@@ -365,7 +360,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
                 })?;
             current_block
                 .latest_frame
-                .update_maximums(&mut self.max_locals, &mut self.max_stack);
+                .update_maximums(&mut self.code.max_locals, &mut self.code.max_stack);
 
             // Resolve field, method, etc. references into constant pool indices
             let constants = self.constants_pool;
@@ -419,7 +414,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
                 })?;
             current_block
                 .latest_frame
-                .update_maximums(&mut self.max_locals, &mut self.max_stack);
+                .update_maximums(&mut self.code.max_locals, &mut self.code.max_stack);
 
             // Check that the jump target (if there is one) has a compatible frame
             for jump_label in insn.jump_targets().targets() {
@@ -438,9 +433,9 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
 
             // Update all the local state in the builder
             self.blocks_end_offset.0 += basic_block.width();
-            self.block_order.push(block_label);
+            self.code.block_order.push(block_label);
             self.current_block = next_curr_block_opt;
-            if let Some(_) = self.blocks.insert(block_label, basic_block) {
+            if let Some(_) = self.code.blocks.insert(block_label, basic_block) {
                 return Err(Error::DuplicateLabel(block_label));
             }
         }
@@ -483,9 +478,9 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
             // Update all the local state in the builder
             let _ = self.unplaced_labels.remove(&label);
             self.blocks_end_offset.0 += basic_block.width();
-            self.block_order.push(block_label);
+            self.code.block_order.push(block_label);
             self.current_block = next_curr_block_opt;
-            if let Some(_) = self.blocks.insert(block_label, basic_block) {
+            if let Some(_) = self.code.blocks.insert(block_label, basic_block) {
                 return Err(Error::DuplicateLabel(block_label));
             }
         } else {
@@ -555,7 +550,7 @@ impl<'g> CurrentBlock<'g> {
     ) -> Result<
         (
             SynLabel,
-            BasicBlock<'g, SynLabel, SynLabel, SynLabel>,
+            BasicBlock<'g>,
             Option<CurrentBlock<'g>>,
         ),
         Error,
@@ -630,47 +625,3 @@ impl<'g> CurrentBlock<'g> {
     }
 }
 
-/// A JVM method code body is made up of a linear sequence of basic blocks.
-///
-/// We also store some extra information that ultimately allows us to compute things like: the
-/// maximum height of the locals, the maximum height of the stack, and the stack map frames.
-#[derive(Debug)]
-pub struct BasicBlock<'g, Lbl, LblWide, LblFall> {
-    /// Offset of the start of the basic block from the start of the method
-    pub offset_from_start: Offset,
-
-    /// Frame at the start of the block
-    pub frame: VerifierFrame<'g>,
-
-    /// Straight-line instructions in the block
-    pub instructions: OffsetVec<SerializableInstruction>,
-
-    /// Branch instruction to close the block
-    pub branch_end: BranchInstruction<Lbl, LblWide, LblFall>,
-}
-
-impl<'g, Lbl, LblWide, LblFall> Width for BasicBlock<'g, Lbl, LblWide, LblFall> {
-    fn width(&self) -> usize {
-        self.instructions.offset_len().0 + self.branch_end.width()
-    }
-}
-
-/// Opaque label
-#[derive(Copy, Clone, Hash, Eq, PartialEq)]
-pub struct SynLabel(usize);
-
-impl SynLabel {
-    /// Label for the first block in the method
-    pub const START: SynLabel = SynLabel(0);
-
-    /// Get the next fresh label
-    pub fn next(&self) -> SynLabel {
-        SynLabel(self.0 + 1)
-    }
-}
-
-impl fmt::Debug for SynLabel {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_fmt(format_args!("l{}", self.0))
-    }
-}

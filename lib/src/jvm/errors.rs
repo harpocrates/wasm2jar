@@ -1,7 +1,8 @@
 use super::{
-    BinaryName, BranchInstruction, ClassConstantIndex, Constant, Frame, RefType, SynLabel,
+    BinaryName, BranchInstruction, ClassConstantIndex, Constant, Frame, RefType,
 };
 use crate::util::Offset;
+use crate::jvm::model::SynLabel;
 
 #[derive(Debug)]
 pub enum Error {

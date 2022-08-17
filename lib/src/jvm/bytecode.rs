@@ -61,11 +61,6 @@ pub enum Instruction<Class, Constant, Field, Method, IndyMethod> {
     FStore(u16),
     DStore(u16),
     AStore(u16),
-    IKill(u16), // imaginary instruction to signal a local is no longer to be used
-    LKill(u16),
-    FKill(u16),
-    DKill(u16),
-    AKill(u16),
     IAStore,
     LAStore,
     FAStore,
@@ -210,11 +205,6 @@ impl<Class, Constant, Field, Method, IndyMethod>
             FStore(idx) => FStore(*idx),
             DStore(idx) => DStore(*idx),
             AStore(idx) => AStore(*idx),
-            IKill(idx) => IKill(*idx),
-            LKill(idx) => LKill(*idx),
-            FKill(idx) => FKill(*idx),
-            DKill(idx) => FKill(*idx),
-            AKill(idx) => AKill(*idx),
             IAStore => IAStore,
             LAStore => LAStore,
             FAStore => FAStore,
@@ -304,13 +294,6 @@ impl<Class, Field, Method, IndyMethod> Width
 {
     fn width(&self) -> usize {
         match self {
-          Instruction::IKill(_)
-          | Instruction::LKill(_)
-          | Instruction::FKill(_)
-          | Instruction::DKill(_)
-          | Instruction::AKill(_)
-          => 0,
-
           Instruction::Nop
           | Instruction::AConstNull
           | Instruction::IConstM1
@@ -554,12 +537,6 @@ impl Serialize for SerializableInstruction {
             Instruction::FStore(idx) => serialize_load_or_store(*idx, 0x43, 0x38, writer)?,
             Instruction::DStore(idx) => serialize_load_or_store(*idx, 0x47, 0x39, writer)?,
             Instruction::AStore(idx) => serialize_load_or_store(*idx, 0x4B, 0x3A, writer)?,
-            Instruction::IKill(_)
-            | Instruction::LKill(_)
-            | Instruction::FKill(_)
-            | Instruction::DKill(_)
-            | Instruction::AKill(_)
-            => (),
             Instruction::IAStore => 0x4fu8.serialize(writer)?,
             Instruction::LAStore => 0x50u8.serialize(writer)?,
             Instruction::FAStore => 0x51u8.serialize(writer)?,

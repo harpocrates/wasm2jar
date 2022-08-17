@@ -811,7 +811,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
                     // Kill the local variable, drop the array
                     jvm_code.push_instruction(Instruction::Pop)?;
-                    jvm_code.push_instruction(Instruction::IKill(offset_var))?;
+                    jvm_code.kill_top_local(offset_var, Some(FieldType::int()))?;
                 } else {
                     todo!()
                 }

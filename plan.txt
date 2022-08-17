@@ -18,6 +18,7 @@ Code model goal:
 
      - `Vec<VerifierInstruction<'g>>` (offset_vec doesn't make sense here since we don't yet know what the constant index values are, so we also don't know eg. when to use `ldc` or `ldc_w`). This also means we can't calibrate `lookupswitch` and `lookuptable` padding yet
      - `VerfierFrame<'g>
+     - uninitialized verification types store a (SynLabel, usize) offset to the basic block + instruction in that block containing the `new`
 
   * When serializing:
 

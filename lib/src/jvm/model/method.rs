@@ -1,5 +1,6 @@
-use crate::jvm::{MethodData, BranchInstruction, SerializableInstruction, ClassData, VerifierFrame};
+use crate::jvm::{MethodData, BranchInstruction, SerializableInstruction, ClassData};
 use crate::util::{Offset, OffsetVec, Width};
+use crate::jvm::verifier::VerifierFrame;
 use std::collections::HashMap;
 use std::fmt;
 

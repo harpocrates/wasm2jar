@@ -35,13 +35,6 @@ pub trait CodeBuilderExts<'a, 'g> {
         field_type: &FieldType<&'g ClassData<'g>>,
     ) -> Result<(), Error>;
 
-    /// Kill a local variable
-    fn kill_local(
-        &mut self,
-        offset: u16,
-        field_type: FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error>;
-
     /// Return from the function
     fn return_(
         &mut self,
@@ -213,28 +206,6 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
             FieldType::Base(BaseType::Long) => Instruction::LStore(offset),
             FieldType::Base(BaseType::Double) => Instruction::DStore(offset),
             FieldType::Ref(_) => Instruction::AStore(offset),
-        };
-        self.push_instruction(insn)
-    }
-
-    /// Kill a local variable
-    fn kill_local(
-        &mut self,
-        offset: u16,
-        field_type: FieldType<&'g ClassData<'g>>,
-    ) -> Result<(), Error> {
-        let insn = match field_type {
-            FieldType::Base(
-                BaseType::Int
-                | BaseType::Char
-                | BaseType::Short
-                | BaseType::Byte
-                | BaseType::Boolean,
-            ) => Instruction::IKill(offset),
-            FieldType::Base(BaseType::Float) => Instruction::FKill(offset),
-            FieldType::Base(BaseType::Long) => Instruction::LKill(offset),
-            FieldType::Base(BaseType::Double) => Instruction::DKill(offset),
-            FieldType::Ref(_) => Instruction::AKill(offset),
         };
         self.push_instruction(insn)
     }

@@ -1,10 +1,8 @@
 use super::*;
-use byteorder::WriteBytesExt;
-use super::class_file::Serialize;
 use crate::util::{OffsetVec, Width, Offset};
 use crate::jvm::class_file::StackMapFrame;
-
-// TODO: rename various "interpret" functions "verify"
+use crate::jvm::descriptors::RenderDescriptor;
+use crate::jvm::{ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassData, ClassGraph, FieldType, VerifierErrorKind, BinaryName, MethodData, FieldData, InvokeDynamicData, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
 
 /// A frame represents the state of the stack and local variables at any location in the bytecode
 ///
@@ -34,7 +32,7 @@ type VType<'g> = VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g Class
 
 impl<'g> VerifierFrame<'g> {
 
-
+    /// Generalize a type at the top of the stack
     pub fn generalize_top_stack_type(
         &mut self,
         general_type: RefType<&'g ClassData<'g>>,
@@ -51,20 +49,40 @@ impl<'g> VerifierFrame<'g> {
         }
     }
 
+    /// Kill a local variable (at the top of the local stack)
+    pub fn kill_top_local(
+        &mut self,
+        offset: u16,
+        local_type_assertion: Option<FieldType<&'g ClassData<'g>>>,
+    ) -> Result<(), VerifierErrorKind> {
+        let killed_local = match self.locals.pop() {
+            Some((Offset(last), _, vtype)) if last == offset as usize => vtype,
+            _ => return Err(VerifierErrorKind::InvalidIndex),
+        };
+
+        if let Some(local_type) = local_type_assertion {
+            if !VerificationType::is_assignable(&killed_local, &VType::from(local_type)) {
+                return Err(VerifierErrorKind::InvalidType);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Update the frame to reflect the effects of the given (non-branching) instruction
     ///
     ///   * `insn_offset_in_basic_block` - used in uninitialized verification types
     ///   * `class_graph` - used to check whether types are assignable
     ///   * `this_class` - used to determine the type of `UninitializedThis` after `<init>`
     ///
-    pub fn interpret_instruction(
+    pub fn verify_instruction(
         &mut self,
         insn: &VerifierInstruction<'g>,
         insn_offset_in_block: Offset,
         java: &JavaClasses<'g>,
         this_class: &RefType<&'g ClassData<'g>>,
     ) -> Result<(), VerifierErrorKind> {
-        interpret_instruction(self, java, this_class, insn, insn_offset_in_block)
+        verify_instruction(self, java, this_class, insn, insn_offset_in_block)
     }
 
     /// Update the frame to reflect the effects of the given branching instruction
@@ -72,12 +90,12 @@ impl<'g> VerifierFrame<'g> {
     ///   * `class_graph` - used to check whether types are assignable
     ///   * `this_method_return_type` - used to check typecheck return instructions
     ///
-    pub fn interpret_branch_instruction<Lbl, LblWide, LblNext>(
+    pub fn verify_branch_instruction<Lbl, LblWide, LblNext>(
         &mut self,
         insn: &BranchInstruction<Lbl, LblWide, LblNext>,
         this_method_return_type: &Option<FieldType<&'g ClassData<'g>>>,
     ) -> Result<(), VerifierErrorKind> {
-        interpret_branch_instruction(self, this_method_return_type, insn)
+        verify_branch_instruction(self, this_method_return_type, insn)
     }
 
     /// Update the maximum locals and stack
@@ -199,167 +217,8 @@ impl Frame<ClassConstantIndex, u16> {
     }
 }
 
-/// These types are from [this hierarchy][0]
-///
-/// [0]: https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.10.1.2
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-pub enum VerificationType<Cls, U> {
-    Integer,
-    Float,
-    Double,
-    Long,
-    Null,
 
-    /// In the constructor, the `this` parameter starts with this type then turns into an object
-    /// type after `<init>` is called
-    UninitializedThis,
-
-    /// Object type
-    Object(Cls),
-
-    /// State of an object after `new` has been called by `<init>` has not been called
-    ///
-    ///   - while we are building up the CFG, we use `(RefType, Offset)` for `U`, tracking the
-    ///     type of the uninitialized object (which we get from the `new` instruction) and the
-    ///     offset of the `new` instruction in that basic block.
-    ///   - when serializing into a classfile, we use `u16` for `U`, corresponding to the offset of
-    ///     the `new` instruction from the start of the method body
-    Uninitialized(U),
-}
-
-impl<Cls, U> VerificationType<Cls, U> {
-    /// Is this type is a reference type?
-    pub fn is_reference(&self) -> bool {
-        match self {
-            VerificationType::Integer
-            | VerificationType::Float
-            | VerificationType::Double
-            | VerificationType::Long => false,
-
-            VerificationType::Null
-            | VerificationType::UninitializedThis
-            | VerificationType::Object(_)
-            | VerificationType::Uninitialized(_) => true,
-        }
-    }
-}
-
-impl<C, U> From<FieldType<C>> for VerificationType<RefType<C>, U> {
-    fn from(field_type: FieldType<C>) -> Self {
-        match field_type {
-            FieldType::Base(BaseType::Int)
-            | FieldType::Base(BaseType::Char)
-            | FieldType::Base(BaseType::Short)
-            | FieldType::Base(BaseType::Byte)
-            | FieldType::Base(BaseType::Boolean) => VerificationType::Integer,
-            FieldType::Base(BaseType::Float) => VerificationType::Float,
-            FieldType::Base(BaseType::Long) => VerificationType::Long,
-            FieldType::Base(BaseType::Double) => VerificationType::Double,
-            FieldType::Ref(ref_type) => VerificationType::Object(ref_type),
-        }
-    }
-}
-
-impl Serialize for VerificationType<ClassConstantIndex, u16> {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        match self {
-            VerificationType::Integer => 1u8.serialize(writer)?,
-            VerificationType::Float => 2u8.serialize(writer)?,
-            VerificationType::Double => 3u8.serialize(writer)?,
-            VerificationType::Long => 4u8.serialize(writer)?,
-            VerificationType::Null => 5u8.serialize(writer)?,
-            VerificationType::UninitializedThis => 6u8.serialize(writer)?,
-            VerificationType::Object(cls) => {
-                7u8.serialize(writer)?;
-                cls.serialize(writer)?;
-            }
-            VerificationType::Uninitialized(off) => {
-                8u8.serialize(writer)?;
-                off.serialize(writer)?;
-            }
-        };
-        Ok(())
-    }
-}
-
-impl<Cls, A> Width for VerificationType<Cls, A> {
-    fn width(&self) -> usize {
-        match self {
-            VerificationType::Double | VerificationType::Long => 2,
-            _ => 1,
-        }
-    }
-}
-
-impl<'g, U> VerificationType<RefType<&'g ClassData<'g>>, U> {
-    /// Check if one verification type is assignable to another
-    ///
-    /// TODO: there is no handling of uninitialized yet. This just means that we might get false
-    /// verification failures.
-    pub fn is_assignable<'a>(sub_type: &'a Self, super_type: &'a Self) -> bool
-    where
-        'g: 'a,
-    {
-        match (sub_type, super_type) {
-            (Self::Integer, Self::Integer) => true,
-            (Self::Float, Self::Float) => true,
-            (Self::Long, Self::Long) => true,
-            (Self::Double, Self::Double) => true,
-            (Self::Null, Self::Null) => true,
-            (Self::Null, Self::Object(_)) => true,
-            (Self::Object(t1), Self::Object(t2)) => ClassGraph::is_java_assignable(t1, t2),
-            _ => false,
-        }
-    }
-}
-
-impl<'g> VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)> {
-    /// Resolve the type into its serializable form
-    fn into_serializable(
-        &self,
-        constants_pool: &ConstantsPool,
-        block_offset: Offset,
-    ) -> Result<VerificationType<ClassConstantIndex, u16>, ConstantPoolOverflow> {
-        match self {
-            VerificationType::Integer => Ok(VerificationType::Integer),
-            VerificationType::Float => Ok(VerificationType::Float),
-            VerificationType::Long => Ok(VerificationType::Long),
-            VerificationType::Double => Ok(VerificationType::Double),
-            VerificationType::Null => Ok(VerificationType::Null),
-            VerificationType::UninitializedThis => Ok(VerificationType::UninitializedThis),
-            VerificationType::Object(ref_type) => {
-                let class_index = ref_type.constant_index(constants_pool)?;
-                Ok(VerificationType::Object(class_index))
-            }
-            VerificationType::Uninitialized((_, Offset(offset_in_block))) => Ok(
-                VerificationType::Uninitialized((block_offset.0 + offset_in_block) as u16),
-            ),
-        }
-    }
-}
-
-impl<C, U> VerificationType<C, U> {
-    pub fn map<C2, U2>(
-        &self,
-        map_class: impl Fn(&C) -> C2,
-        map_uninitialized: impl Fn(&U) -> U2,
-    ) -> VerificationType<C2, U2> {
-        match self {
-            VerificationType::Integer => VerificationType::Integer,
-            VerificationType::Float => VerificationType::Float,
-            VerificationType::Long => VerificationType::Long,
-            VerificationType::Double => VerificationType::Double,
-            VerificationType::Null => VerificationType::Null,
-            VerificationType::UninitializedThis => VerificationType::UninitializedThis,
-            VerificationType::Object(cls) => VerificationType::Object(map_class(cls)),
-            VerificationType::Uninitialized(uninit) => {
-                VerificationType::Uninitialized(map_uninitialized(uninit))
-            }
-        }
-    }
-}
-
-fn interpret_instruction<'g>(
+fn verify_instruction<'g>(
     frame: &mut VerifierFrame<'g>,
     java: &JavaClasses<'g>,
     this_class: &RefType<&'g ClassData<'g>>,
@@ -514,41 +373,6 @@ fn interpret_instruction<'g>(
         AStore(offset) => {
             let popped_type = pop_offset_vec(stack)?;
             update_local_type(locals, *offset, popped_type)?;
-        }
-
-        IKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, Integer)) if last == *offset as usize => locals.pop(),
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-        FKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, Float)) if last == *offset as usize => locals.pop(),
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-        LKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, Long)) if last == *offset as usize => locals.pop(),
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-        DKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, Double)) if last == *offset as usize => locals.pop(),
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
-        }
-        AKill(offset) => {
-            match locals.iter().last() {
-                Some((Offset(last), _, local_ty))
-                    if last == *offset as usize && local_ty.is_reference() =>
-                {
-                    locals.pop()
-                }
-                _ => return Err(VerifierErrorKind::InvalidIndex),
-            };
         }
 
         IAStore => {
@@ -1082,7 +906,7 @@ fn interpret_instruction<'g>(
     Ok(())
 }
 
-fn interpret_branch_instruction<'g, Lbl, LblWide, LblNext>(
+fn verify_branch_instruction<'g, Lbl, LblWide, LblNext>(
     frame: &mut VerifierFrame<'g>,
     this_method_return_type: &Option<FieldType<&'g ClassData<'g>>>,
     insn: &BranchInstruction<Lbl, LblWide, LblNext>,

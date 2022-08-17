@@ -5,7 +5,7 @@ use std::convert::TryFrom;
 use crate::util::{OffsetVec, Width, Offset};
 use crate::jvm::class_file::{Code, StackMapTable, BytecodeArray, Serialize};
 use crate::jvm::model::{SynLabel, BasicBlock};
-
+use crate::jvm::verifier::*;
 use elsa::FrozenVec;
 
 /*
@@ -348,7 +348,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
         if let Some(current_block) = self.current_block.as_mut() {
             current_block
                 .latest_frame
-                .interpret_instruction(
+                .verify_instruction(
                     &insn,
                     current_block.instructions.offset_len(),
                     &self.java.classes,
@@ -406,7 +406,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
         if let Some(mut current_block) = self.current_block.take() {
             current_block
                 .latest_frame
-                .interpret_branch_instruction(&insn, &self.method.descriptor.return_type)
+                .verify_branch_instruction(&insn, &self.method.descriptor.return_type)
                 .map_err(|kind| Error::VerifierBranchingError {
                     instruction: insn.clone(),
                     kind,
@@ -454,7 +454,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
             let fall_through_insn = BranchInstruction::FallThrough(label);
             current_block
                 .latest_frame
-                .interpret_branch_instruction(
+                .verify_branch_instruction(
                     &fall_through_insn,
                     &self.method.descriptor.return_type,
                 )
@@ -536,6 +536,26 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
             Ok(())
         }
     }
+
+    /// Kill a local variable
+    pub fn kill_top_local(
+        &mut self,
+        offset: u16,
+        local_type_assertion: Option<FieldType<&'g ClassData<'g>>>,
+    ) -> Result<(), Error> {
+        if let Some(current_block) = self.current_block.as_mut() {
+            current_block
+                .latest_frame
+                .kill_top_local(offset, local_type_assertion)
+                .map_err(|kind| Error::VerifierError {
+                    instruction: format!("Kill local (at offset {}): {:?}", offset, local_type_assertion),
+                    kind,
+                })
+        } else {
+            Ok(())
+        }
+    }
+
 }
 
 /// Just like `BasicBlock`, but not closed off yet

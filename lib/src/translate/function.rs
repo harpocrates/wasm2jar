@@ -1083,7 +1083,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             for _ in 0..branch_values.len() {
                 let (local_idx, field_type) = self.jvm_locals.pop_local()?;
                 self.jvm_code.get_local(local_idx, &field_type)?;
-                self.jvm_code.kill_local(local_idx, field_type)?;
+                self.jvm_code.kill_top_local(local_idx, Some(field_type))?;
             }
         }
 
@@ -1372,12 +1372,9 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         let _ = self.jvm_locals.pop_local()?;
         let _ = self.jvm_locals.pop_local()?;
         let _ = self.jvm_locals.pop_local()?;
-        self.jvm_code
-            .push_instruction(Instruction::AKill(tmp_offset))?;
-        self.jvm_code
-            .push_instruction(Instruction::IKill(idx_offset))?;
-        self.jvm_code
-            .push_instruction(Instruction::AKill(arr_offset))?;
+        self.jvm_code.kill_top_local(tmp_offset, None)?;
+        self.jvm_code.kill_top_local(idx_offset, Some(FieldType::int()))?;
+        self.jvm_code.kill_top_local(arr_offset, None)?;
 
         Ok(())
     }
@@ -1454,10 +1451,8 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         // Kill the locals
         let _ = self.jvm_locals.pop_local()?;
         let _ = self.jvm_locals.pop_local()?;
-        self.jvm_code
-            .push_instruction(Instruction::IKill(idx_offset))?;
-        self.jvm_code
-            .push_instruction(Instruction::AKill(arr_offset))?;
+        self.jvm_code.kill_top_local(idx_offset, Some(FieldType::int()))?;
+        self.jvm_code.kill_top_local(arr_offset, None)?;
 
         Ok(())
     }
@@ -1520,7 +1515,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             todo!()
         }
 
-        self.jvm_code.kill_local(temp_index, global_field_type)?;
+        self.jvm_code.kill_top_local(temp_index, Some(global_field_type))?;
         self.jvm_locals.pop_local()?;
 
         Ok(())
@@ -1697,7 +1692,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             self.jvm_code.push_instruction(Instruction::Swap)?;
             self.jvm_code.get_local(off, &FieldType::Base(ty))?;
             let (off, ty) = self.jvm_locals.pop_local()?;
-            self.jvm_code.kill_local(off, ty)?;
+            self.jvm_code.kill_top_local(off, Some(ty))?;
         }
 
         // Call the store function

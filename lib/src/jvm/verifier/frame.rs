@@ -1,7 +1,9 @@
 use super::*;
 use crate::util::{OffsetVec, Width, Offset};
+use crate::jvm::model::SynLabel;
 use crate::jvm::class_file::StackMapFrame;
 use crate::jvm::descriptors::RenderDescriptor;
+use std::collections::HashMap;
 use crate::jvm::{ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassData, ClassGraph, FieldType, VerifierErrorKind, BinaryName, MethodData, FieldData, InvokeDynamicData, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
 
 /// A frame represents the state of the stack and local variables at any location in the bytecode
@@ -25,10 +27,9 @@ pub type VerifierInstruction<'g> = Instruction<
     InvokeDynamicData<'g>,
 >;
 
-pub type VerifierFrame<'g> =
-    Frame<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)>;
+pub type VerifierFrame<'g> = Frame<RefType<&'g ClassData<'g>>, UninitializedRefType<'g>>;
 
-type VType<'g> = VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)>;
+type VType<'g> = VerificationType<RefType<&'g ClassData<'g>>, UninitializedRefType<'g>>;
 
 impl<'g> VerifierFrame<'g> {
 
@@ -78,11 +79,12 @@ impl<'g> VerifierFrame<'g> {
     pub fn verify_instruction(
         &mut self,
         insn: &VerifierInstruction<'g>,
-        insn_offset_in_block: Offset,
+        insn_offset_in_block: &Offset,
+        current_block: &SynLabel,
         java: &JavaClasses<'g>,
         this_class: &RefType<&'g ClassData<'g>>,
     ) -> Result<(), VerifierErrorKind> {
-        verify_instruction(self, java, this_class, insn, insn_offset_in_block)
+        verify_instruction(self, java, this_class, insn, insn_offset_in_block, current_block)
     }
 
     /// Update the frame to reflect the effects of the given branching instruction
@@ -108,18 +110,18 @@ impl<'g> VerifierFrame<'g> {
     pub fn into_serializable(
         &self,
         constants_pool: &ConstantsPool,
-        block_offset: Offset,
+        block_offsets: &HashMap<SynLabel, Offset>,
     ) -> Result<Frame<ClassConstantIndex, u16>, ConstantPoolOverflow> {
         Ok(Frame {
             stack: self
                 .stack
                 .iter()
-                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offset))
+                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offsets))
                 .collect::<Result<_, _>>()?,
             locals: self
                 .locals
                 .iter()
-                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offset))
+                .map(|(_, _, t)| t.into_serializable(constants_pool, block_offsets))
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -129,7 +131,10 @@ impl<'g> VerifierFrame<'g> {
         let update_vtype = |vty: &VType<'g>| {
             vty.map(
                 |ref_type| ref_type.map(|cls| cls.name.clone()),
-                |(ref_type, off)| (ref_type.map(|cls| cls.name.clone()), *off),
+                |uninit_ref_type| {
+                    let ref_type = uninit_ref_type.verification_type.map(|cls| cls.name.clone());
+                    (ref_type, uninit_ref_type.offset_in_block)
+                }
             )
         };
         Frame {
@@ -223,7 +228,8 @@ fn verify_instruction<'g>(
     java: &JavaClasses<'g>,
     this_class: &RefType<&'g ClassData<'g>>,
     insn: &VerifierInstruction<'g>,
-    insn_offset_in_basic_block: Offset,
+    insn_offset_in_basic_block: &Offset,
+    current_block: &SynLabel,
 ) -> Result<(), VerifierErrorKind> {
     use Instruction::*;
     use VerificationType::*;
@@ -795,11 +801,12 @@ fn verify_instruction<'g>(
                         replace_all(locals, &UninitializedThis, || Object(this_class.clone()));
                     }
 
-                    Uninitialized((reftype, off)) => {
-                        replace_all(stack, &Uninitialized((reftype.clone(), off)), || {
+                    uninitialized @ Uninitialized(ref initialized_ref_type) => {
+                        let reftype = initialized_ref_type.verification_type;
+                        replace_all(stack, &uninitialized, || {
                             Object(reftype.clone())
                         });
-                        replace_all(locals, &Uninitialized((reftype.clone(), off)), || {
+                        replace_all(locals, &uninitialized, || {
                             Object(reftype.clone())
                         });
                     }
@@ -865,7 +872,12 @@ fn verify_instruction<'g>(
 
         New(ref_type) => {
             if let RefType::Object(_) = ref_type {
-                stack.push(Uninitialized((*ref_type, insn_offset_in_basic_block)));
+                let uninitialized_ref_type = UninitializedRefType {
+                    verification_type: *ref_type,
+                    offset_in_block: *insn_offset_in_basic_block,
+                    block: *current_block,
+                };
+                stack.push(Uninitialized(uninitialized_ref_type));
             } else {
                 todo!("error - arrays cannot be constructed with `new`")
             }

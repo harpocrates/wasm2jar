@@ -3,6 +3,8 @@ use crate::jvm::class_file::Serialize;
 use crate::util::{Width, Offset};
 use crate::jvm::constants_writer::ConstantsWriter;
 use crate::jvm::{BaseType, ConstantsPool, ClassConstantIndex, RefType, ClassData, ClassGraph, FieldType, ConstantPoolOverflow};
+use std::collections::HashMap;
+use crate::jvm::model::SynLabel;
 
 /// These types are from [this hierarchy][0]
 ///
@@ -118,12 +120,12 @@ impl<'g, U> VerificationType<RefType<&'g ClassData<'g>>, U> {
     }
 }
 
-impl<'g> VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>>, Offset)> {
+impl<'g> VerificationType<RefType<&'g ClassData<'g>>, UninitializedRefType<'g>> {
     /// Resolve the type into its serializable form
     pub fn into_serializable(
         &self,
         constants_pool: &ConstantsPool,
-        block_offset: Offset,
+        block_offsets: &HashMap<SynLabel, Offset>,
     ) -> Result<VerificationType<ClassConstantIndex, u16>, ConstantPoolOverflow> {
         match self {
             VerificationType::Integer => Ok(VerificationType::Integer),
@@ -136,9 +138,12 @@ impl<'g> VerificationType<RefType<&'g ClassData<'g>>, (RefType<&'g ClassData<'g>
                 let class_index = ref_type.constant_index(constants_pool)?;
                 Ok(VerificationType::Object(class_index))
             }
-            VerificationType::Uninitialized((_, Offset(offset_in_block))) => Ok(
-                VerificationType::Uninitialized((block_offset.0 + offset_in_block) as u16),
-            ),
+            VerificationType::Uninitialized(uninitialized_ref_type) => {
+                let absolute_block_offset = block_offsets[&uninitialized_ref_type.block];
+                let offset_in_block = uninitialized_ref_type.offset_in_block.0;
+                let absolute_offset = absolute_block_offset.0 + offset_in_block;
+                Ok(VerificationType::Uninitialized(absolute_offset as u16))
+            }
         }
     }
 }
@@ -162,4 +167,28 @@ impl<C, U> VerificationType<C, U> {
             }
         }
     }
+}
+
+
+/// During code generation, after a `new` instruction, the top of the stack will contain an
+/// uninitialized value. Although ultimately the stack map frame will contain only an absolute
+/// offset into the code array where that `new` instruction is located, that's not something that
+/// is convenient to produce or query while producing code.
+///
+///   - we don't yet know what the offset of the `new` instruction will really be (it could even
+///     wiggle around a bit thanks to needing to widen some jumps)
+///
+///   - we want to store information about the type that will be there _once_ it is initialized
+///     (eg. so we can effectively verify the `<init>` call)
+///
+#[derive(PartialEq, Eq, Clone, Debug, Copy)]
+pub struct UninitializedRefType<'g> {
+    /// Once the type is initialized, what will it be?
+    pub verification_type: RefType<&'g ClassData<'g>>,
+
+    /// Offset of the `new` instruction from the start of the basic block containing it
+    pub offset_in_block: Offset,
+
+    /// Label of the basic block containing the `new` instruction
+    pub block: SynLabel,
 }

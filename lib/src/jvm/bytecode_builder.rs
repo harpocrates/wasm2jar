@@ -175,7 +175,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
         let mut code_array: BytecodeArray = BytecodeArray(vec![]);
         let implicit_frame: Frame<ClassConstantIndex, u16> = self.code.blocks[&SynLabel::START]
             .frame
-            .into_serializable(&self.constants_pool, Offset(0))?;
+            .into_serializable(&self.constants_pool, &label_offsets)?;
         let mut frames: Vec<(Offset, Frame<ClassConstantIndex, u16>)> = vec![];
         let mut fallthrough_label: Option<SynLabel> = None;
 
@@ -194,7 +194,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
                     basic_block.offset_from_start,
                     basic_block
                         .frame
-                        .into_serializable(&self.constants_pool, basic_block.offset_from_start)?,
+                        .into_serializable(&self.constants_pool, &label_offsets)?,
                 ));
             }
 
@@ -350,7 +350,8 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
                 .latest_frame
                 .verify_instruction(
                     &insn,
-                    current_block.instructions.offset_len(),
+                    &current_block.instructions.offset_len(),
+                    &current_block.label,
                     &self.java.classes,
                     &RefType::Object(self.method.class),
                 )

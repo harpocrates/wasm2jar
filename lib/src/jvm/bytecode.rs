@@ -829,6 +829,17 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
         }
     }
 
+    /// If the instruction requires padding, set that padding. Otherwise, passes through the
+    /// instruction unchanged.
+    pub fn set_padding(&mut self, padding: u8) {
+        let pad_to = padding;
+        match self {
+            BranchInstruction::TableSwitch { ref mut padding, .. } => *padding = pad_to,
+            BranchInstruction::LookupSwitch { ref mut padding, .. } => *padding = pad_to,
+            other => (),
+        }
+    }
+
     pub fn map_labels<Lbl2, LblWide2, LblNext2>(
         &self,
         map_label: impl FnOnce(&Lbl) -> Lbl2,

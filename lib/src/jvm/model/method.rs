@@ -76,12 +76,17 @@ impl<Frame, Insn: Width, BrInsn: Width> Width for BasicBlock<Frame, Insn, BrInsn
 
 impl<'g, Frame> BasicBlock<Frame, VerifierInstruction<'g>, BranchInstruction<SynLabel, SynLabel, SynLabel>> {
 
+    /// Serialize the instructions inside a block
+    ///
+    /// This is the point at which instructions referencing the constant pool get fully resolved
+    /// into offsets to actual constants. Consequently, this is also the first time that the
+    /// actual width of the basic block is understood.
     pub fn serialize_instructions(
-        &self,
+        self,
         constants: &ConstantsPool,
         bootstrap_methods: &mut HashMap<BootstrapMethodId<'g>, u16>,
         offset_from_start: Offset,
-    ) -> Result<BasicBlock<Frame, SerializableInstruction, BranchInstruction<SynLabel, SynLabel, SynLabel>>, ConstantPoolOverflow> {
+    ) -> Result<BasicBlock<Frame, SerializableInstruction, BranchInstruction<SynLabel, SynLabel, ()>>, ConstantPoolOverflow> {
 
         // Serialize the instructions
         let instructions = self.instructions
@@ -104,10 +109,18 @@ impl<'g, Frame> BasicBlock<Frame, VerifierInstruction<'g>, BranchInstruction<Syn
                     },
                 )
             })
-            .collect::<Result<OffsetVec<SerializableInstruction>, ConstantPoolOverflow>>();
+            .collect::<Result<OffsetVec<SerializableInstruction>, ConstantPoolOverflow>>()?;
 
-        unimplemented!()
+        // Ensure the branch instruction has the right padding
+        let mut branch_end = self.branch_end.map_labels(|lbl| *lbl, |lbl| *lbl, |_lbl| ());
+        let branch_off = offset_from_start.0 + instructions.offset_len().0;
+        let padding = match (branch_off % 4) as u8 {
+            0 => 0,
+            x => 4 - x,
+        };
+        branch_end.set_padding(padding);
 
+        Ok(BasicBlock { offset_from_start, frame: self.frame, instructions, branch_end })
     }
 
 }

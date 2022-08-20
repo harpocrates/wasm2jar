@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use crate::util::{OffsetVec, Width, Offset};
 use crate::jvm::class_file::{Code, StackMapTable, BytecodeArray, Serialize};
-use crate::jvm::model::{SynLabel, BasicBlock};
+use crate::jvm::model::{SynLabel, BasicBlock, SerializableBasicBlock};
 use crate::jvm::verifier::*;
 use elsa::FrozenVec;
 
@@ -82,7 +82,7 @@ pub struct BytecodeBuilder<'a, 'g> {
     pub bootstrap_methods: &'a FrozenVec<Box<BootstrapMethodData<'g>>>,
 
     /// Reference to method data in the class graph
-    pub method: &'g MethodData<'g>,
+    pub method: MethodId<'g>,
 }
 
 impl<'a, 'g> BytecodeBuilder<'a, 'g> {
@@ -92,7 +92,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
         java: &'g JavaLibrary<'g>,
         constants_pool: &'a ConstantsPool,
         bootstrap_methods: &'a FrozenVec<Box<BootstrapMethodData<'g>>>,
-        method: &'g MethodData<'g>,
+        method: MethodId<'g>,
     ) -> Self {
         // The initial local variables are just the parameters (including maybe "this")
         let mut locals = OffsetVec::new();
@@ -382,9 +382,9 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
                 |indy_method| -> Result<InvokeDynamicConstantIndex, Error> {
                     let bootstrap_method = bootstrap_methods
                         .iter()
-                        .position(|bm| bm == indy_method.bootstrap)
+                        .position(|bm| bm == indy_method.bootstrap.0)
                         .unwrap_or_else(|| {
-                            bootstrap_methods.push(Box::new(indy_method.bootstrap.clone()));
+                            bootstrap_methods.push(Box::new(indy_method.bootstrap.0.clone()));
                             bootstrap_methods.len() - 1
                         });
                     let method_utf8 = constants.get_utf8(indy_method.name.as_str())?;
@@ -523,7 +523,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
     /// specified more general type.
     pub fn generalize_top_stack_type(
         &mut self,
-        general_type: RefType<&'g ClassData<'g>>,
+        general_type: RefType<ClassId<'g>>,
     ) -> Result<(), Error> {
         if let Some(current_block) = self.current_block.as_mut() {
             current_block
@@ -542,7 +542,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
     pub fn kill_top_local(
         &mut self,
         offset: u16,
-        local_type_assertion: Option<FieldType<&'g ClassData<'g>>>,
+        local_type_assertion: Option<FieldType<ClassId<'g>>>,
     ) -> Result<(), Error> {
         if let Some(current_block) = self.current_block.as_mut() {
             current_block
@@ -592,7 +592,7 @@ impl<'g> CurrentBlock<'g> {
     ) -> Result<
         (
             SynLabel,
-            BasicBlock<'g>,
+            SerializableBasicBlock<'g>,
             Option<CurrentBlock<'g>>,
         ),
         Error,

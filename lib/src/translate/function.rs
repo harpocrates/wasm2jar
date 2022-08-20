@@ -5,7 +5,7 @@ use super::{
 use crate::util::{OffsetVec, Width};
 use crate::jvm::{
     BaseType, BranchInstruction, BytecodeBuilder, ClassData, EqComparison, FieldType, Instruction,
-    MethodDescriptor, OrdComparison, RefType, UnqualifiedName,
+    MethodDescriptor, OrdComparison, RefType, UnqualifiedName, ClassId,
 };
 use crate::jvm::model::SynLabel;
 use crate::wasm::{
@@ -38,7 +38,7 @@ pub struct FunctionTranslator<'a, 'b, 'c, 'g> {
     jvm_code: &'b mut BytecodeBuilder<'c, 'g>,
 
     /// Main module class
-    class: &'g ClassData<'g>,
+    class: ClassId<'g>,
 
     /// Functions
     wasm_functions: &'b [Function<'a, 'g>],
@@ -78,7 +78,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         utilities: &'b mut UtilityClass<'g>,
         bootstrap_utilities: &'b mut BootstrapUtilities<'g>,
         jvm_code: &'b mut BytecodeBuilder<'c, 'g>,
-        class: &'g ClassData<'g>,
+        class: ClassId<'g>,
         wasm_functions: &'b [Function<'a, 'g>],
         wasm_tables: &'b [Table<'g>],
         wasm_memories: &'b [Memory<'g>],
@@ -1600,7 +1600,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         &mut self,
         table_idx: u32,
         method_name: UnqualifiedName,
-        mut method_type: MethodDescriptor<&'g ClassData<'g>>,
+        mut method_type: MethodDescriptor<ClassId<'g>>,
     ) -> Result<(), Error> {
         let table = &self.wasm_tables[table_idx as usize];
 
@@ -1750,7 +1750,7 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         &mut self,
         memory_idx: u32,
         method_name: UnqualifiedName,
-        mut method_type: MethodDescriptor<&'g ClassData<'g>>,
+        mut method_type: MethodDescriptor<ClassId<'g>>,
     ) -> Result<(), Error> {
         let memory = &self.wasm_memories[memory_idx as usize];
 
@@ -1786,7 +1786,7 @@ struct LocalsLayout<'g> {
     ///   * a reference to the module class
     ///   * a stack of additional tempporary locals
     ///
-    jvm_locals: OffsetVec<FieldType<&'g ClassData<'g>>>,
+    jvm_locals: OffsetVec<FieldType<ClassId<'g>>>,
 
     /// Index into `jvm_locals` for getting the "this" argument
     jvm_module_idx: usize,
@@ -1794,8 +1794,8 @@ struct LocalsLayout<'g> {
 
 impl<'g> LocalsLayout<'g> {
     fn new(
-        method_arguments: impl Iterator<Item = FieldType<&'g ClassData<'g>>>,
-        module_typ: RefType<&'g ClassData<'g>>,
+        method_arguments: impl Iterator<Item = FieldType<ClassId<'g>>>,
+        module_typ: RefType<ClassId<'g>>,
     ) -> Self {
         let mut jvm_locals = OffsetVec::from_iter(method_arguments);
         let jvm_module_idx = jvm_locals.len();
@@ -1807,7 +1807,7 @@ impl<'g> LocalsLayout<'g> {
     }
 
     /// Lookup the JVM local and index associated with the "this" argument
-    fn lookup_this(&self) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
+    fn lookup_this(&self) -> Result<(u16, FieldType<ClassId<'g>>), Error> {
         let (off, field_type) = self
             .jvm_locals
             .get_index(self.jvm_module_idx)
@@ -1822,7 +1822,7 @@ impl<'g> LocalsLayout<'g> {
     fn lookup_local(
         &self,
         mut local_idx: u32,
-    ) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
+    ) -> Result<(u16, FieldType<ClassId<'g>>), Error> {
         if local_idx as usize >= self.jvm_module_idx {
             local_idx += 1;
         }
@@ -1834,7 +1834,7 @@ impl<'g> LocalsLayout<'g> {
     }
 
     /// Push a new local onto our "stack" of locals
-    fn push_local(&mut self, field_type: FieldType<&'g ClassData<'g>>) -> Result<u16, Error> {
+    fn push_local(&mut self, field_type: FieldType<ClassId<'g>>) -> Result<u16, Error> {
         let next_local_idx =
             u16::try_from(self.jvm_locals.offset_len().0).map_err(|_| Error::LocalsOverflow)?;
         self.jvm_locals.push(field_type);
@@ -1842,7 +1842,7 @@ impl<'g> LocalsLayout<'g> {
     }
 
     /// Pop a local from our "stack" of locals
-    fn pop_local(&mut self) -> Result<(u16, FieldType<&'g ClassData<'g>>), Error> {
+    fn pop_local(&mut self) -> Result<(u16, FieldType<ClassId<'g>>), Error> {
         self.jvm_locals
             .pop()
             .map(|(offset, _, field_type)| (offset.0 as u16, field_type))

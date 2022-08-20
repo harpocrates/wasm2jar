@@ -1,9 +1,20 @@
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
+use std::borrow::Borrow;
+use stable_deref_trait::{CloneStableDeref, StableDeref};
 
 /// Wrapper type whose "identity" for equality and hashing is determined from the reference itself
 /// (ie. the pointer) and not from the underlying data.
 #[derive(Debug)]
-pub struct RefId<'a, T>(pub &'a T);
+pub struct RefId<'a, T: ?Sized>(pub &'a T);
+
+impl<'a, T> Clone for RefId<'a, T> {
+    fn clone(&self) -> Self {
+        RefId(self.0)
+    }
+}
+
+impl<'a, T> Copy for RefId<'a, T> { }
 
 impl<'a, T> Hash for RefId<'a, T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -19,3 +30,27 @@ impl<'a, 'b, T> PartialEq<RefId<'b, T>> for RefId<'a, T> {
 
 impl<'a, T> Eq for RefId<'a, T> {}
 
+impl<'a, T: ?Sized> Deref for RefId<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<'a, T: ?Sized> Borrow<T> for RefId<'a, T> {
+    fn borrow(&self) -> &T {
+        &*self.0
+    }
+}
+/*
+impl<'a, T: ?Sized, U: ?Sized> AsRef<U> for RefId<'a, T>
+where
+    T: AsRef<U>,
+{
+    fn as_ref(&self) -> &U {
+        <T as AsRef<U>>::as_ref(&*self)
+    }
+}
+*/
+unsafe impl<'a, T: ?Sized> StableDeref for RefId<'a, T> {}

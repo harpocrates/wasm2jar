@@ -4,7 +4,7 @@ use crate::jvm::{
     ClassAccessFlags, ClassBuilder, ClassData, ClassGraph, CompareMode, ConstantData, FieldType,
     InnerClassAccessFlags, Instruction, JavaClasses, JavaLibrary,
     MethodAccessFlags, MethodData, MethodDescriptor, Name, OrdComparison, RefType, ShiftType,
-    UnqualifiedName,
+    UnqualifiedName, ClassId, MethodId, BootstrapMethodId,
 };
 use std::collections::HashMap;
 use crate::jvm::class_file::{InnerClasses, InnerClass};
@@ -175,7 +175,7 @@ impl UtilityMethod {
     }
 
     /// Get the method descriptor
-    pub fn descriptor<'g>(&self, java: &JavaClasses<'g>) -> MethodDescriptor<&'g ClassData<'g>> {
+    pub fn descriptor<'g>(&self, java: &JavaClasses<'g>) -> MethodDescriptor<ClassId<'g>> {
         match self {
             UtilityMethod::I32DivS => MethodDescriptor {
                 parameters: vec![FieldType::int(), FieldType::int()],
@@ -362,7 +362,7 @@ enum UtilityClassInner<'g> {
         class: ClassBuilder<'g>,
 
         /// Set of the utility methods that have already been generated
-        methods: HashMap<UtilityMethod, &'g MethodData<'g>>,
+        methods: HashMap<UtilityMethod, MethodId<'g>>,
     },
 }
 
@@ -371,7 +371,7 @@ pub struct UtilityClass<'g>(UtilityClassInner<'g>);
 impl<'g> UtilityClass<'g> {
     pub fn new(
         settings: &Settings,
-        wasm_module_class: &'g ClassData<'g>,
+        wasm_module_class: ClassId<'g>,
         class_graph: &'g ClassGraph<'g>,
         java: &'g JavaLibrary<'g>,
     ) -> Result<UtilityClass<'g>, Error> {
@@ -458,13 +458,13 @@ impl<'g> UtilityClass<'g> {
         &mut self,
         method: UtilityMethod,
         java: &JavaClasses<'g>,
-    ) -> Result<&'g MethodData<'g>, Error> {
+    ) -> Result<MethodId<'g>, Error> {
         // Nothing for external utility classes or if the method is already generated
         match &mut self.0 {
             UtilityClassInner::External(_) => todo!(),
             UtilityClassInner::Internal { methods, .. } => {
                 if let Some(method_data) = methods.get(&method) {
-                    return Ok(method_data);
+                    return Ok(*method_data);
                 }
             }
         }
@@ -1561,10 +1561,10 @@ impl<'g> UtilityClass<'g> {
     /// some dragons. The output is sensible, but the "how" is not obvious.
     fn generate_bootstrap_table<'a>(
         code: &mut BytecodeBuilder<'a, 'g>,
-        next_size: &'g MethodData<'g>,
-        copy_resized_array: &'g MethodData<'g>,
-        int_is_negative_one: &'g MethodData<'g>,
-        fill_array_range: &'g MethodData<'g>,
+        next_size: MethodId<'g>,
+        copy_resized_array: MethodId<'g>,
+        int_is_negative_one: MethodId<'g>,
+        fill_array_range: MethodId<'g>,
     ) -> Result<(), Error> {
         let call_indirect_case = code.fresh_label();
         let table_get_case = code.fresh_label();
@@ -2044,9 +2044,9 @@ impl<'g> UtilityClass<'g> {
     // TODO: avoid allocating a new table for `table.grow 0`
     fn generate_grow_table_case<'a>(
         code: &mut BytecodeBuilder<'a, 'g>,
-        copy_resized_array: &'g MethodData<'g>,
-        int_is_negative_one: &'g MethodData<'g>,
-        next_size: &'g MethodData<'g>,
+        copy_resized_array: MethodId<'g>,
+        int_is_negative_one: MethodId<'g>,
+        next_size: MethodId<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
@@ -2361,7 +2361,7 @@ impl<'g> UtilityClass<'g> {
     // (I LTableElem; I)V
     fn generate_fill_table_case<'a>(
         code: &mut BytecodeBuilder<'a, 'g>,
-        fill_array_range: &'g MethodData<'g>,
+        fill_array_range: MethodId<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
@@ -2456,12 +2456,12 @@ impl<'g> UtilityClass<'g> {
     /// Generate the bootstrap method used for memory operators
     fn generate_bootstrap_memory<'a>(
         code: &mut BytecodeBuilder<'a, 'g>,
-        copy_resized_byte_buffer: &'g MethodData<'g>,
-        pages_to_bytes: &'g MethodData<'g>,
-        bytes_to_pages: &'g MethodData<'g>,
-        int_is_negative_one: &'g MethodData<'g>,
-        next_size: &'g MethodData<'g>,
-        fill_byte_buffer_range: &'g MethodData<'g>,
+        copy_resized_byte_buffer: MethodId<'g>,
+        pages_to_bytes: MethodId<'g>,
+        bytes_to_pages: MethodId<'g>,
+        int_is_negative_one: MethodId<'g>,
+        next_size: MethodId<'g>,
+        fill_byte_buffer_range: MethodId<'g>,
     ) -> Result<(), Error> {
         let memory_size_case = code.fresh_label();
         let memory_grow_case = code.fresh_label();
@@ -2528,7 +2528,7 @@ impl<'g> UtilityClass<'g> {
 
     fn generate_size_memory_case<'a>(
         code: &mut BytecodeBuilder<'a, 'g>,
-        bytes_to_pages: &'g MethodData<'g>,
+        bytes_to_pages: MethodId<'g>,
     ) -> Result<(), Error> {
         let getter_argument = 3;
 
@@ -2572,11 +2572,11 @@ impl<'g> UtilityClass<'g> {
     // TODO: avoid allocating a new memory for `memory.grow 0`
     fn generate_grow_memory_case<'a>(
         code: &mut BytecodeBuilder<'a, 'g>,
-        copy_resized_byte_buffer: &'g MethodData<'g>,
-        pages_to_bytes: &'g MethodData<'g>,
-        bytes_to_pages: &'g MethodData<'g>,
-        int_is_negative_one: &'g MethodData<'g>,
-        next_size: &'g MethodData<'g>,
+        copy_resized_byte_buffer: MethodId<'g>,
+        pages_to_bytes: MethodId<'g>,
+        bytes_to_pages: MethodId<'g>,
+        int_is_negative_one: MethodId<'g>,
+        next_size: MethodId<'g>,
     ) -> Result<(), Error> {
         let requested_type_argument = 2; // MethodType
         let getter_argument = 3; // MethodHandle
@@ -2892,7 +2892,7 @@ impl<'g> UtilityClass<'g> {
 
     fn generate_fill_memory_case<'a>(
         code: &mut BytecodeBuilder<'a, 'g>,
-        fill_byte_buffer_range: &'g MethodData<'g>,
+        fill_byte_buffer_range: MethodId<'g>,
     ) -> Result<(), Error> {
         let getter_argument = 3; // MethodHandle
 
@@ -2939,10 +2939,10 @@ impl<'g> UtilityClass<'g> {
 /// Tracks utility bootstrap methods inside a given class
 pub struct BootstrapUtilities<'g> {
     /// Mapping from the table index to a bootstrap method index
-    table_bootstrap_methods: HashMap<u32, &'g BootstrapMethodData<'g>>,
+    table_bootstrap_methods: HashMap<u32, BootstrapMethodId<'g>>,
 
     /// Mapping from the memory index to a bootstrap method index
-    memory_bootstrap_methods: HashMap<u32, &'g BootstrapMethodData<'g>>,
+    memory_bootstrap_methods: HashMap<u32, BootstrapMethodId<'g>>,
 }
 impl<'g> BootstrapUtilities<'g> {
     pub fn new() -> Self {
@@ -2963,7 +2963,7 @@ impl<'g> BootstrapUtilities<'g> {
         class_graph: &ClassGraph<'g>,
         utilities: &mut UtilityClass<'g>,
         java: &JavaClasses<'g>,
-    ) -> Result<&'g BootstrapMethodData<'g>, Error> {
+    ) -> Result<BootstrapMethodId<'g>, Error> {
         if let Some(bootstrap) = self.table_bootstrap_methods.get(&table_index) {
             return Ok(*bootstrap);
         }
@@ -3003,7 +3003,7 @@ impl<'g> BootstrapUtilities<'g> {
         class_graph: &ClassGraph<'g>,
         utilities: &mut UtilityClass<'g>,
         java: &JavaClasses<'g>,
-    ) -> Result<&'g BootstrapMethodData<'g>, Error> {
+    ) -> Result<BootstrapMethodId<'g>, Error> {
         if let Some(bootstrap) = self.memory_bootstrap_methods.get(&memory_index) {
             return Ok(*bootstrap);
         }

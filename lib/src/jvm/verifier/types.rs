@@ -2,7 +2,7 @@ use byteorder::WriteBytesExt;
 use crate::jvm::class_file::Serialize;
 use crate::util::{Width, Offset};
 use crate::jvm::constants_writer::ConstantsWriter;
-use crate::jvm::{BaseType, ConstantsPool, ClassConstantIndex, RefType, ClassData, ClassGraph, FieldType, ConstantPoolOverflow};
+use crate::jvm::{ClassId, BaseType, ConstantsPool, ClassConstantIndex, RefType, ClassData, ClassGraph, FieldType, ConstantPoolOverflow};
 use std::collections::HashMap;
 use crate::jvm::model::SynLabel;
 
@@ -98,7 +98,7 @@ impl<Cls, A> Width for VerificationType<Cls, A> {
     }
 }
 
-impl<'g, U> VerificationType<RefType<&'g ClassData<'g>>, U> {
+impl<'g, U> VerificationType<RefType<ClassId<'g>>, U> {
     /// Check if one verification type is assignable to another
     ///
     /// TODO: there is no handling of uninitialized yet. This just means that we might get false
@@ -120,7 +120,7 @@ impl<'g, U> VerificationType<RefType<&'g ClassData<'g>>, U> {
     }
 }
 
-impl<'g> VerificationType<RefType<&'g ClassData<'g>>, UninitializedRefType<'g>> {
+impl<'g> VerificationType<RefType<ClassId<'g>>, UninitializedRefType<'g>> {
     /// Resolve the type into its serializable form
     pub fn into_serializable(
         &self,
@@ -184,7 +184,7 @@ impl<C, U> VerificationType<C, U> {
 #[derive(PartialEq, Eq, Clone, Debug, Copy)]
 pub struct UninitializedRefType<'g> {
     /// Once the type is initialized, what will it be?
-    pub verification_type: RefType<&'g ClassData<'g>>,
+    pub verification_type: RefType<ClassId<'g>>,
 
     /// Offset of the `new` instruction from the start of the basic block containing it
     pub offset_in_block: Offset,

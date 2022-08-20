@@ -1,6 +1,6 @@
 use super::{
     ClassData, ClassGraph, FieldAccessFlags, FieldData, FieldType, MethodAccessFlags, MethodData,
-    MethodDescriptor, UnqualifiedName,
+    MethodDescriptor, UnqualifiedName, ClassId, FieldId, MethodId,
 };
 
 use super::java_classes::JavaClasses;
@@ -38,123 +38,123 @@ pub struct LangMembers<'g> {
 
 /// Members of `java.lang.Object`
 pub struct ObjectMembers<'g> {
-    pub equals: &'g MethodData<'g>,
-    pub hash_code: &'g MethodData<'g>,
-    pub init: &'g MethodData<'g>,
+    pub equals: MethodId<'g>,
+    pub hash_code: MethodId<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.CharSequence`
 pub struct CharSequenceMembers<'g> {
-    pub length: &'g MethodData<'g>,
+    pub length: MethodId<'g>,
 }
 
 /// Members of `java.lang.String`
 pub struct StringMembers<'g> {
-    pub get_bytes: &'g MethodData<'g>,
+    pub get_bytes: MethodId<'g>,
 }
 
 /// Members of `java.lang.Number`
 pub struct NumberMembers<'g> {
-    pub byte_value: &'g MethodData<'g>,
-    pub double_value: &'g MethodData<'g>,
-    pub float_value: &'g MethodData<'g>,
-    pub int_value: &'g MethodData<'g>,
-    pub long_value: &'g MethodData<'g>,
-    pub short_value: &'g MethodData<'g>,
+    pub byte_value: MethodId<'g>,
+    pub double_value: MethodId<'g>,
+    pub float_value: MethodId<'g>,
+    pub int_value: MethodId<'g>,
+    pub long_value: MethodId<'g>,
+    pub short_value: MethodId<'g>,
 }
 
 /// Members of `java.lang.Integer`
 pub struct IntegerMembers<'g> {
-    pub value_of: &'g MethodData<'g>,
-    pub bit_count: &'g MethodData<'g>,
-    pub number_of_leading_zeros: &'g MethodData<'g>,
-    pub number_of_trailing_zeros: &'g MethodData<'g>,
-    pub compare: &'g MethodData<'g>,
-    pub compare_unsigned: &'g MethodData<'g>,
-    pub divide_unsigned: &'g MethodData<'g>,
-    pub remainder_unsigned: &'g MethodData<'g>,
-    pub rotate_left: &'g MethodData<'g>,
-    pub rotate_right: &'g MethodData<'g>,
-    pub max_value: &'g FieldData<'g>,
-    pub min_value: &'g FieldData<'g>,
-    pub r#type: &'g FieldData<'g>,
+    pub value_of: MethodId<'g>,
+    pub bit_count: MethodId<'g>,
+    pub number_of_leading_zeros: MethodId<'g>,
+    pub number_of_trailing_zeros: MethodId<'g>,
+    pub compare: MethodId<'g>,
+    pub compare_unsigned: MethodId<'g>,
+    pub divide_unsigned: MethodId<'g>,
+    pub remainder_unsigned: MethodId<'g>,
+    pub rotate_left: MethodId<'g>,
+    pub rotate_right: MethodId<'g>,
+    pub max_value: FieldId<'g>,
+    pub min_value: FieldId<'g>,
+    pub r#type: FieldId<'g>,
 }
 
 /// Members of `java.lang.Integer`
 pub struct FloatMembers<'g> {
-    pub value_of: &'g MethodData<'g>,
-    pub float_to_raw_int_bits: &'g MethodData<'g>,
-    pub int_bits_to_float: &'g MethodData<'g>,
-    pub max: &'g MethodData<'g>,
-    pub min: &'g MethodData<'g>,
-    pub max_value: &'g FieldData<'g>,
-    pub min_value: &'g FieldData<'g>,
-    pub nan: &'g FieldData<'g>,
-    pub negative_infinity: &'g FieldData<'g>,
-    pub positive_infinity: &'g FieldData<'g>,
-    pub r#type: &'g FieldData<'g>,
+    pub value_of: MethodId<'g>,
+    pub float_to_raw_int_bits: MethodId<'g>,
+    pub int_bits_to_float: MethodId<'g>,
+    pub max: MethodId<'g>,
+    pub min: MethodId<'g>,
+    pub max_value: FieldId<'g>,
+    pub min_value: FieldId<'g>,
+    pub nan: FieldId<'g>,
+    pub negative_infinity: FieldId<'g>,
+    pub positive_infinity: FieldId<'g>,
+    pub r#type: FieldId<'g>,
 }
 
 /// Members of `java.lang.Long`
 pub struct LongMembers<'g> {
-    pub value_of: &'g MethodData<'g>,
-    pub bit_count: &'g MethodData<'g>,
-    pub number_of_leading_zeros: &'g MethodData<'g>,
-    pub number_of_trailing_zeros: &'g MethodData<'g>,
-    pub compare: &'g MethodData<'g>,
-    pub compare_unsigned: &'g MethodData<'g>,
-    pub divide_unsigned: &'g MethodData<'g>,
-    pub remainder_unsigned: &'g MethodData<'g>,
-    pub rotate_left: &'g MethodData<'g>,
-    pub rotate_right: &'g MethodData<'g>,
-    pub max_value: &'g FieldData<'g>,
-    pub min_value: &'g FieldData<'g>,
-    pub r#type: &'g FieldData<'g>,
+    pub value_of: MethodId<'g>,
+    pub bit_count: MethodId<'g>,
+    pub number_of_leading_zeros: MethodId<'g>,
+    pub number_of_trailing_zeros: MethodId<'g>,
+    pub compare: MethodId<'g>,
+    pub compare_unsigned: MethodId<'g>,
+    pub divide_unsigned: MethodId<'g>,
+    pub remainder_unsigned: MethodId<'g>,
+    pub rotate_left: MethodId<'g>,
+    pub rotate_right: MethodId<'g>,
+    pub max_value: FieldId<'g>,
+    pub min_value: FieldId<'g>,
+    pub r#type: FieldId<'g>,
 }
 
 /// Members of `java.lang.Integer`
 pub struct DoubleMembers<'g> {
-    pub value_of: &'g MethodData<'g>,
-    pub double_to_raw_long_bits: &'g MethodData<'g>,
-    pub long_bits_to_double: &'g MethodData<'g>,
-    pub max: &'g MethodData<'g>,
-    pub min: &'g MethodData<'g>,
-    pub max_value: &'g FieldData<'g>,
-    pub min_value: &'g FieldData<'g>,
-    pub nan: &'g FieldData<'g>,
-    pub negative_infinity: &'g FieldData<'g>,
-    pub positive_infinity: &'g FieldData<'g>,
-    pub r#type: &'g FieldData<'g>,
+    pub value_of: MethodId<'g>,
+    pub double_to_raw_long_bits: MethodId<'g>,
+    pub long_bits_to_double: MethodId<'g>,
+    pub max: MethodId<'g>,
+    pub min: MethodId<'g>,
+    pub max_value: FieldId<'g>,
+    pub min_value: FieldId<'g>,
+    pub nan: FieldId<'g>,
+    pub negative_infinity: FieldId<'g>,
+    pub positive_infinity: FieldId<'g>,
+    pub r#type: FieldId<'g>,
 }
 
 /// Members of `java.lang.Void`
 pub struct VoidMembers<'g> {
-    pub r#type: &'g FieldData<'g>,
+    pub r#type: FieldId<'g>,
 }
 
 /// Members of `java.lang.Boolean`
 pub struct BooleanMembers<'g> {
-    pub value_of: &'g MethodData<'g>,
-    pub r#type: &'g FieldData<'g>,
+    pub value_of: MethodId<'g>,
+    pub r#type: FieldId<'g>,
 }
 
 /// Members of `java.lang.Math`
 pub struct MathMembers<'g> {
-    pub ceil: &'g MethodData<'g>,
-    pub floor: &'g MethodData<'g>,
-    pub sqrt: &'g MethodData<'g>,
-    pub rint: &'g MethodData<'g>,
-    pub copy_sign_float: &'g MethodData<'g>,
-    pub copy_sign_double: &'g MethodData<'g>,
-    pub abs_float: &'g MethodData<'g>,
-    pub abs_double: &'g MethodData<'g>,
-    pub to_int_exact: &'g MethodData<'g>,
-    pub add_exact: &'g MethodData<'g>,
+    pub ceil: MethodId<'g>,
+    pub floor: MethodId<'g>,
+    pub sqrt: MethodId<'g>,
+    pub rint: MethodId<'g>,
+    pub copy_sign_float: MethodId<'g>,
+    pub copy_sign_double: MethodId<'g>,
+    pub abs_float: MethodId<'g>,
+    pub abs_double: MethodId<'g>,
+    pub to_int_exact: MethodId<'g>,
+    pub add_exact: MethodId<'g>,
 }
 
 /// Members of `java.lang.System`
 pub struct SystemMembers<'g> {
-    pub arraycopy: &'g MethodData<'g>,
+    pub arraycopy: MethodId<'g>,
 }
 
 /// Members of classes inside `java.lang.invoke`
@@ -169,90 +169,90 @@ pub struct InvokeMembers<'g> {
 
 /// Members of `java.lang.invoke.MethodType`
 pub struct MethodTypeMembers<'g> {
-    pub parameter_count: &'g MethodData<'g>,
-    pub parameter_type: &'g MethodData<'g>,
-    pub parameter_array: &'g MethodData<'g>,
-    pub drop_parameter_types: &'g MethodData<'g>,
-    pub return_type: &'g MethodData<'g>,
-    pub method_type: &'g MethodData<'g>,
+    pub parameter_count: MethodId<'g>,
+    pub parameter_type: MethodId<'g>,
+    pub parameter_array: MethodId<'g>,
+    pub drop_parameter_types: MethodId<'g>,
+    pub return_type: MethodId<'g>,
+    pub method_type: MethodId<'g>,
 }
 
 /// Members of `java.lang.invoke.MethodHandle`
 pub struct MethodHandleMembers<'g> {
-    pub r#type: &'g MethodData<'g>,
-    pub as_type: &'g MethodData<'g>,
-    pub change_return_type: &'g MethodData<'g>,
+    pub r#type: MethodId<'g>,
+    pub as_type: MethodId<'g>,
+    pub change_return_type: MethodId<'g>,
 }
 
 /// Members of `java.lang.invoke.MethodHandles`
 pub struct MethodHandlesMembers<'g> {
-    pub drop_arguments: &'g MethodData<'g>,
-    pub permute_arguments: &'g MethodData<'g>,
-    pub collect_arguments: &'g MethodData<'g>,
-    pub insert_arguments: &'g MethodData<'g>,
-    pub exact_invoker: &'g MethodData<'g>,
-    pub filter_return_value: &'g MethodData<'g>,
-    pub guard_with_test: &'g MethodData<'g>,
-    pub array_constructor: &'g MethodData<'g>,
-    pub array_element_getter: &'g MethodData<'g>,
-    pub array_element_setter: &'g MethodData<'g>,
-    pub array_length: &'g MethodData<'g>,
-    pub empty: &'g MethodData<'g>,
-    pub constant: &'g MethodData<'g>,
+    pub drop_arguments: MethodId<'g>,
+    pub permute_arguments: MethodId<'g>,
+    pub collect_arguments: MethodId<'g>,
+    pub insert_arguments: MethodId<'g>,
+    pub exact_invoker: MethodId<'g>,
+    pub filter_return_value: MethodId<'g>,
+    pub guard_with_test: MethodId<'g>,
+    pub array_constructor: MethodId<'g>,
+    pub array_element_getter: MethodId<'g>,
+    pub array_element_setter: MethodId<'g>,
+    pub array_length: MethodId<'g>,
+    pub empty: MethodId<'g>,
+    pub constant: MethodId<'g>,
 }
 
 /// Members of `java.lang.invoke.CallSite`
 pub struct CallSiteMembers<'g> {
-    pub dynamic_invoker: &'g MethodData<'g>,
-    pub get_target: &'g MethodData<'g>,
-    pub set_target: &'g MethodData<'g>,
-    pub r#type: &'g MethodData<'g>,
+    pub dynamic_invoker: MethodId<'g>,
+    pub get_target: MethodId<'g>,
+    pub set_target: MethodId<'g>,
+    pub r#type: MethodId<'g>,
 }
 
 /// Members of `java.lang.invoke.ConstantCallSite`
 pub struct ConstantCallSiteMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.invoke.MutableCallSite`
 pub struct MutableCallSiteMembers<'g> {
-    pub sync_all: &'g MethodData<'g>,
-    pub init: &'g MethodData<'g>,
+    pub sync_all: MethodId<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.Throwable`
 pub struct ThrowableMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.Error`
 pub struct ErrorMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.AssertionError`
 pub struct AssertionErrorMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.Exception`
 pub struct ExceptionMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.RuntimeException`
 pub struct RuntimeExceptionMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.ArithmeticException`
 pub struct ArithmeticExceptionMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of `java.lang.IllegalArgumentException`
 pub struct IllegalArgumentExceptionMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 /// Members of classes inside `java.nio.*`
@@ -264,38 +264,38 @@ pub struct NioMembers<'g> {
 
 /// Members of `java.nio.Buffer`
 pub struct BufferMembers<'g> {
-    pub position: &'g MethodData<'g>,
-    pub capacity: &'g MethodData<'g>,
+    pub position: MethodId<'g>,
+    pub capacity: MethodId<'g>,
 }
 
 /// Members of `java.nio.ByteBuffer`
 pub struct ByteBufferMembers<'g> {
-    pub allocate: &'g MethodData<'g>,
-    pub allocate_direct: &'g MethodData<'g>,
-    pub capacity: &'g MethodData<'g>,
-    pub get_byte: &'g MethodData<'g>,
-    pub put_byte: &'g MethodData<'g>,
-    pub get_short: &'g MethodData<'g>,
-    pub put_short: &'g MethodData<'g>,
-    pub get_int: &'g MethodData<'g>,
-    pub put_int: &'g MethodData<'g>,
-    pub get_float: &'g MethodData<'g>,
-    pub put_float: &'g MethodData<'g>,
-    pub get_long: &'g MethodData<'g>,
-    pub put_long: &'g MethodData<'g>,
-    pub get_double: &'g MethodData<'g>,
-    pub put_double: &'g MethodData<'g>,
-    pub put_bytebuffer: &'g MethodData<'g>,
-    pub put_bytearray: &'g MethodData<'g>,
-    pub put_byte_relative: &'g MethodData<'g>,
-    pub position: &'g MethodData<'g>,
-    pub order: &'g MethodData<'g>,
+    pub allocate: MethodId<'g>,
+    pub allocate_direct: MethodId<'g>,
+    pub capacity: MethodId<'g>,
+    pub get_byte: MethodId<'g>,
+    pub put_byte: MethodId<'g>,
+    pub get_short: MethodId<'g>,
+    pub put_short: MethodId<'g>,
+    pub get_int: MethodId<'g>,
+    pub put_int: MethodId<'g>,
+    pub get_float: MethodId<'g>,
+    pub put_float: MethodId<'g>,
+    pub get_long: MethodId<'g>,
+    pub put_long: MethodId<'g>,
+    pub get_double: MethodId<'g>,
+    pub put_double: MethodId<'g>,
+    pub put_bytebuffer: MethodId<'g>,
+    pub put_bytearray: MethodId<'g>,
+    pub put_byte_relative: MethodId<'g>,
+    pub position: MethodId<'g>,
+    pub order: MethodId<'g>,
 }
 
 /// Members of `java.nio.ByteOrder`
 pub struct ByteOrderMembers<'g> {
-    pub big_endian: &'g FieldData<'g>,
-    pub little_endian: &'g FieldData<'g>,
+    pub big_endian: FieldId<'g>,
+    pub little_endian: FieldId<'g>,
 }
 
 /// Members of classes inside `java.util.*`
@@ -307,19 +307,19 @@ pub struct UtilMembers<'g> {
 
 /// Members of `java.util.Arrays`
 pub struct ArraysMembers<'g> {
-    pub copy_of: &'g MethodData<'g>,
-    pub fill: &'g MethodData<'g>,
+    pub copy_of: MethodId<'g>,
+    pub fill: MethodId<'g>,
 }
 
 /// Members of `java.util.Map`
 pub struct MapMembers<'g> {
-    pub get: &'g MethodData<'g>,
-    pub put: &'g MethodData<'g>,
+    pub get: MethodId<'g>,
+    pub put: MethodId<'g>,
 }
 
 /// Members of `java.util.HashMap`
 pub struct HashMapMembers<'g> {
-    pub init: &'g MethodData<'g>,
+    pub init: MethodId<'g>,
 }
 
 impl<'g> JavaMembers<'g> {
@@ -471,8 +471,8 @@ impl<'g> NumberMembers<'g> {
     ) -> NumberMembers<'g> {
         let class = classes.lang.number;
         let add_extractor = |name: UnqualifiedName,
-                             extracted_type: FieldType<&'g ClassData<'g>>|
-         -> &'g MethodData<'g> {
+                             extracted_type: FieldType<ClassId<'g>>|
+         -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -510,8 +510,8 @@ impl<'g> IntegerMembers<'g> {
         let class = classes.lang.integer;
 
         let add_static_unary = |name: UnqualifiedName,
-                                output_type: FieldType<&'g ClassData<'g>>|
-         -> &'g MethodData<'g> {
+                                output_type: FieldType<ClassId<'g>>|
+         -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -532,7 +532,7 @@ impl<'g> IntegerMembers<'g> {
         let number_of_trailing_zeros =
             add_static_unary(UnqualifiedName::NUMBEROFTRAILINGZEROS, FieldType::int());
 
-        let add_static_binary = |name: UnqualifiedName| -> &'g MethodData<'g> {
+        let add_static_binary = |name: UnqualifiedName| -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -551,8 +551,8 @@ impl<'g> IntegerMembers<'g> {
         let rotate_right = add_static_binary(UnqualifiedName::ROTATERIGHT);
 
         let add_static_field = |name: UnqualifiedName,
-                                descriptor: FieldType<&'g ClassData<'g>>|
-         -> &'g FieldData<'g> {
+                                descriptor: FieldType<ClassId<'g>>|
+         -> FieldId<'g> {
             class_graph.add_field(FieldData {
                 class,
                 name,
@@ -593,9 +593,9 @@ impl<'g> FloatMembers<'g> {
         let class = classes.lang.float;
 
         let add_unary_operator = |name: UnqualifiedName,
-                                  input: FieldType<&'g ClassData<'g>>,
-                                  output: FieldType<&'g ClassData<'g>>|
-         -> &'g MethodData<'g> {
+                                  input: FieldType<ClassId<'g>>,
+                                  output: FieldType<ClassId<'g>>|
+         -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -622,7 +622,7 @@ impl<'g> FloatMembers<'g> {
             FieldType::float(),
         );
 
-        let add_binary_operator = |name: UnqualifiedName| -> &'g MethodData<'g> {
+        let add_binary_operator = |name: UnqualifiedName| -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -637,7 +637,7 @@ impl<'g> FloatMembers<'g> {
         let min = add_binary_operator(UnqualifiedName::MIN);
 
         let add_static_field =
-            |name: UnqualifiedName, field_ty: FieldType<&'g ClassData<'g>>| -> &'g FieldData<'g> {
+            |name: UnqualifiedName, field_ty: FieldType<ClassId<'g>>| -> FieldId<'g> {
                 class_graph.add_field(FieldData {
                     class,
                     name,
@@ -681,8 +681,8 @@ impl<'g> LongMembers<'g> {
         let class = classes.lang.long;
 
         let add_static_unary = |name: UnqualifiedName,
-                                output_type: FieldType<&'g ClassData<'g>>|
-         -> &'g MethodData<'g> {
+                                output_type: FieldType<ClassId<'g>>|
+         -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -704,9 +704,9 @@ impl<'g> LongMembers<'g> {
             add_static_unary(UnqualifiedName::NUMBEROFTRAILINGZEROS, FieldType::int());
 
         let add_static_binary = |name: UnqualifiedName,
-                                 parameters: Vec<FieldType<&'g ClassData<'g>>>,
-                                 ret: FieldType<&'g ClassData<'g>>|
-         -> &'g MethodData<'g> {
+                                 parameters: Vec<FieldType<ClassId<'g>>>,
+                                 ret: FieldType<ClassId<'g>>|
+         -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -749,8 +749,8 @@ impl<'g> LongMembers<'g> {
         );
 
         let add_static_field = |name: UnqualifiedName,
-                                descriptor: FieldType<&'g ClassData<'g>>|
-         -> &'g FieldData<'g> {
+                                descriptor: FieldType<ClassId<'g>>|
+         -> FieldId<'g> {
             class_graph.add_field(FieldData {
                 class,
                 name,
@@ -791,9 +791,9 @@ impl<'g> DoubleMembers<'g> {
         let class = classes.lang.double;
 
         let add_unary_operator = |name: UnqualifiedName,
-                                  input: FieldType<&'g ClassData<'g>>,
-                                  output: FieldType<&'g ClassData<'g>>|
-         -> &'g MethodData<'g> {
+                                  input: FieldType<ClassId<'g>>,
+                                  output: FieldType<ClassId<'g>>|
+         -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -820,7 +820,7 @@ impl<'g> DoubleMembers<'g> {
             FieldType::double(),
         );
 
-        let add_binary_operator = |name: UnqualifiedName| -> &'g MethodData<'g> {
+        let add_binary_operator = |name: UnqualifiedName| -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -835,7 +835,7 @@ impl<'g> DoubleMembers<'g> {
         let min = add_binary_operator(UnqualifiedName::MIN);
 
         let add_static_field =
-            |name: UnqualifiedName, field_ty: FieldType<&'g ClassData<'g>>| -> &'g FieldData<'g> {
+            |name: UnqualifiedName, field_ty: FieldType<ClassId<'g>>| -> FieldId<'g> {
                 class_graph.add_field(FieldData {
                     class,
                     name,
@@ -918,7 +918,7 @@ impl<'g> MathMembers<'g> {
         classes: &JavaClasses<'g>,
     ) -> MathMembers<'g> {
         let class = classes.lang.math;
-        let add_double_transformer = |name: UnqualifiedName| -> &'g MethodData<'g> {
+        let add_double_transformer = |name: UnqualifiedName| -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -935,8 +935,8 @@ impl<'g> MathMembers<'g> {
         let rint = add_double_transformer(UnqualifiedName::RINT);
 
         let add_binary_operator = |name: UnqualifiedName,
-                                   operator_type: FieldType<&'g ClassData<'g>>|
-         -> &'g MethodData<'g> {
+                                   operator_type: FieldType<ClassId<'g>>|
+         -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -952,8 +952,8 @@ impl<'g> MathMembers<'g> {
         let add_exact = add_binary_operator(UnqualifiedName::ADDEXACT, FieldType::int());
 
         let add_unary_operator = |name: UnqualifiedName,
-                                  operator_type: FieldType<&'g ClassData<'g>>|
-         -> &'g MethodData<'g> {
+                                  operator_type: FieldType<ClassId<'g>>|
+         -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -1603,7 +1603,7 @@ impl<'g> ByteBufferMembers<'g> {
         classes: &JavaClasses<'g>,
     ) -> ByteBufferMembers<'g> {
         let class = classes.nio.byte_buffer;
-        let add_allocate = |name: UnqualifiedName| -> &'g MethodData<'g> {
+        let add_allocate = |name: UnqualifiedName| -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name,
@@ -1627,7 +1627,7 @@ impl<'g> ByteBufferMembers<'g> {
         });
 
         let add_get =
-            |name: UnqualifiedName, typ: FieldType<&'g ClassData<'g>>| -> &'g MethodData<'g> {
+            |name: UnqualifiedName, typ: FieldType<ClassId<'g>>| -> MethodId<'g> {
                 class_graph.add_method(MethodData {
                     class,
                     name,
@@ -1646,7 +1646,7 @@ impl<'g> ByteBufferMembers<'g> {
         let get_double = add_get(UnqualifiedName::GETDOUBLE, FieldType::double());
 
         let add_put =
-            |name: UnqualifiedName, typ: FieldType<&'g ClassData<'g>>| -> &'g MethodData<'g> {
+            |name: UnqualifiedName, typ: FieldType<ClassId<'g>>| -> MethodId<'g> {
                 class_graph.add_method(MethodData {
                     class,
                     name,
@@ -1664,7 +1664,7 @@ impl<'g> ByteBufferMembers<'g> {
         let put_long = add_put(UnqualifiedName::PUTLONG, FieldType::long());
         let put_double = add_put(UnqualifiedName::PUTDOUBLE, FieldType::double());
 
-        let add_relative_put = |typ: FieldType<&'g ClassData<'g>>| -> &'g MethodData<'g> {
+        let add_relative_put = |typ: FieldType<ClassId<'g>>| -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
                 name: UnqualifiedName::PUT,
@@ -1729,7 +1729,7 @@ impl<'g> ByteOrderMembers<'g> {
         classes: &JavaClasses<'g>,
     ) -> ByteOrderMembers<'g> {
         let class = classes.nio.byte_order;
-        let add_endian = |name: UnqualifiedName| -> &'g FieldData<'g> {
+        let add_endian = |name: UnqualifiedName| -> FieldId<'g> {
             class_graph.add_field(FieldData {
                 class,
                 name,

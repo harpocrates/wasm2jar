@@ -1,4 +1,4 @@
-use super::{BinaryName, ClassAccessFlags, ClassData, ClassGraph, InnerClassAccessFlags, NestData};
+use super::{BinaryName, ClassAccessFlags, ClassData, ClassId, ClassGraph, InnerClassAccessFlags, NestData};
 use elsa::FrozenVec;
 
 /// Classes inside `java.*`
@@ -10,52 +10,52 @@ pub struct JavaClasses<'g> {
 
 /// Classes inside `java.lang.*`
 pub struct LangClasses<'g> {
-    pub object: &'g ClassData<'g>,
-    pub char_sequence: &'g ClassData<'g>,
-    pub string: &'g ClassData<'g>,
-    pub class: &'g ClassData<'g>,
-    pub number: &'g ClassData<'g>,
-    pub integer: &'g ClassData<'g>,
-    pub float: &'g ClassData<'g>,
-    pub long: &'g ClassData<'g>,
-    pub double: &'g ClassData<'g>,
-    pub void: &'g ClassData<'g>,
-    pub boolean: &'g ClassData<'g>,
-    pub math: &'g ClassData<'g>,
-    pub system: &'g ClassData<'g>,
+    pub object: ClassId<'g>,
+    pub char_sequence: ClassId<'g>,
+    pub string: ClassId<'g>,
+    pub class: ClassId<'g>,
+    pub number: ClassId<'g>,
+    pub integer: ClassId<'g>,
+    pub float: ClassId<'g>,
+    pub long: ClassId<'g>,
+    pub double: ClassId<'g>,
+    pub void: ClassId<'g>,
+    pub boolean: ClassId<'g>,
+    pub math: ClassId<'g>,
+    pub system: ClassId<'g>,
     pub invoke: InvokeClasses<'g>,
-    pub throwable: &'g ClassData<'g>,
-    pub error: &'g ClassData<'g>,
-    pub assertion_error: &'g ClassData<'g>,
-    pub exception: &'g ClassData<'g>,
-    pub runtime_exception: &'g ClassData<'g>,
-    pub arithmetic_exception: &'g ClassData<'g>,
-    pub illegal_argument_exception: &'g ClassData<'g>,
+    pub throwable: ClassId<'g>,
+    pub error: ClassId<'g>,
+    pub assertion_error: ClassId<'g>,
+    pub exception: ClassId<'g>,
+    pub runtime_exception: ClassId<'g>,
+    pub arithmetic_exception: ClassId<'g>,
+    pub illegal_argument_exception: ClassId<'g>,
 }
 
 /// Classes inside `java.lang.invoke.*`
 pub struct InvokeClasses<'g> {
-    pub method_type: &'g ClassData<'g>,
-    pub method_handle: &'g ClassData<'g>,
-    pub method_handles: &'g ClassData<'g>,
-    pub method_handles_lookup: &'g ClassData<'g>,
-    pub call_site: &'g ClassData<'g>,
-    pub constant_call_site: &'g ClassData<'g>,
-    pub mutable_call_site: &'g ClassData<'g>,
+    pub method_type: ClassId<'g>,
+    pub method_handle: ClassId<'g>,
+    pub method_handles: ClassId<'g>,
+    pub method_handles_lookup: ClassId<'g>,
+    pub call_site: ClassId<'g>,
+    pub constant_call_site: ClassId<'g>,
+    pub mutable_call_site: ClassId<'g>,
 }
 
 /// Classes inside `java.nio.*`
 pub struct NioClasses<'g> {
-    pub buffer: &'g ClassData<'g>,
-    pub byte_buffer: &'g ClassData<'g>,
-    pub byte_order: &'g ClassData<'g>,
+    pub buffer: ClassId<'g>,
+    pub byte_buffer: ClassId<'g>,
+    pub byte_order: ClassId<'g>,
 }
 
 /// Classes inside `java.util.*`
 pub struct UtilClasses<'g> {
-    pub arrays: &'g ClassData<'g>,
-    pub map: &'g ClassData<'g>,
-    pub hash_map: &'g ClassData<'g>,
+    pub arrays: ClassId<'g>,
+    pub map: ClassId<'g>,
+    pub hash_map: ClassId<'g>,
 }
 
 impl<'g> JavaClasses<'g> {
@@ -160,7 +160,7 @@ impl<'g> LangClasses<'g> {
 impl<'g> InvokeClasses<'g> {
     pub fn add_to_graph(
         class_graph: &ClassGraph<'g>,
-        object: &'g ClassData<'g>,
+        object: ClassId<'g>,
     ) -> InvokeClasses<'g> {
         let method_type = class_graph.add_class(ClassData::new(
             BinaryName::METHODTYPE,
@@ -214,7 +214,7 @@ impl<'g> InvokeClasses<'g> {
 }
 
 impl<'g> NioClasses<'g> {
-    pub fn add_to_graph(class_graph: &ClassGraph<'g>, object: &'g ClassData<'g>) -> NioClasses<'g> {
+    pub fn add_to_graph(class_graph: &ClassGraph<'g>, object: ClassId<'g>) -> NioClasses<'g> {
         let byte_order =
             class_graph.add_class(ClassData::new(BinaryName::BYTEORDER, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::FINAL, None));
         let buffer = class_graph.add_class(ClassData::new(BinaryName::BUFFER, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
@@ -236,7 +236,7 @@ impl<'g> NioClasses<'g> {
 impl<'g> UtilClasses<'g> {
     pub fn add_to_graph(
         class_graph: &ClassGraph<'g>,
-        object: &'g ClassData<'g>,
+        object: ClassId<'g>,
     ) -> UtilClasses<'g> {
         let arrays = class_graph.add_class(ClassData::new(BinaryName::ARRAYS, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC, None));
         let map = class_graph.add_class(ClassData::new(BinaryName::MAP, object, ClassAccessFlags::SUPER | ClassAccessFlags::PUBLIC | ClassAccessFlags::INTERFACE, None));

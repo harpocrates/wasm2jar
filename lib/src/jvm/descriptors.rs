@@ -1,5 +1,5 @@
 use super::{BinaryName, Name};
-use crate::util::Width;
+use crate::util::{Width, RefId};
 use std::io::{Error, ErrorKind, Result};
 use std::iter::Peekable;
 use std::str::Chars;
@@ -15,6 +15,12 @@ pub trait RenderDescriptor {
 
     /// Write the descriptor to a string
     fn render_to(&self, write_to: &mut String);
+}
+
+impl<'g, T: RenderDescriptor> RenderDescriptor for RefId<'g, T> {
+    fn render_to(&self, write_to: &mut String) {
+        self.0.render_to(write_to)
+    }
 }
 
 pub trait ParseDescriptor: Sized {

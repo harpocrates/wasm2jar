@@ -5,7 +5,7 @@ use crate::jvm::model::SynLabel;
 use crate::jvm::class_file::StackMapFrame;
 use crate::jvm::descriptors::RenderDescriptor;
 use std::collections::HashMap;
-use crate::jvm::{ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassData, ClassGraph, FieldType, VerifierErrorKind, BinaryName, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
+use crate::jvm::{ClassId, ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassData, ClassGraph, FieldType, VerifierErrorKind, BinaryName, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
 
 /// A frame represents the state of the stack and local variables at any location in the bytecode
 ///
@@ -20,16 +20,16 @@ pub struct Frame<Cls, U> {
     pub stack: OffsetVec<VerificationType<Cls, U>>,
 }
 
-pub type VerifierFrame<'g> = Frame<RefType<&'g ClassData<'g>>, UninitializedRefType<'g>>;
+pub type VerifierFrame<'g> = Frame<RefType<ClassId<'g>>, UninitializedRefType<'g>>;
 
-type VType<'g> = VerificationType<RefType<&'g ClassData<'g>>, UninitializedRefType<'g>>;
+type VType<'g> = VerificationType<RefType<ClassId<'g>>, UninitializedRefType<'g>>;
 
 impl<'g> VerifierFrame<'g> {
 
     /// Generalize a type at the top of the stack
     pub fn generalize_top_stack_type(
         &mut self,
-        general_type: RefType<&'g ClassData<'g>>,
+        general_type: RefType<ClassId<'g>>,
     ) -> Result<(), VerifierErrorKind> {
 
         let general_type = VType::Object(general_type.clone());
@@ -47,7 +47,7 @@ impl<'g> VerifierFrame<'g> {
     pub fn kill_top_local(
         &mut self,
         offset: u16,
-        local_type_assertion: Option<FieldType<&'g ClassData<'g>>>,
+        local_type_assertion: Option<FieldType<ClassId<'g>>>,
     ) -> Result<(), VerifierErrorKind> {
         let killed_local = match self.locals.pop() {
             Some((Offset(last), _, vtype)) if last == offset as usize => vtype,
@@ -75,7 +75,7 @@ impl<'g> VerifierFrame<'g> {
         insn_offset_in_block: &Offset,
         current_block: &SynLabel,
         java: &JavaClasses<'g>,
-        this_class: &RefType<&'g ClassData<'g>>,
+        this_class: &RefType<ClassId<'g>>,
     ) -> Result<(), VerifierErrorKind> {
         verify_instruction(self, java, this_class, insn, insn_offset_in_block, current_block)
     }
@@ -88,7 +88,7 @@ impl<'g> VerifierFrame<'g> {
     pub fn verify_branch_instruction<Lbl, LblWide, LblNext>(
         &mut self,
         insn: &BranchInstruction<Lbl, LblWide, LblNext>,
-        this_method_return_type: &Option<FieldType<&'g ClassData<'g>>>,
+        this_method_return_type: &Option<FieldType<ClassId<'g>>>,
     ) -> Result<(), VerifierErrorKind> {
         verify_branch_instruction(self, this_method_return_type, insn)
     }
@@ -219,7 +219,7 @@ impl Frame<ClassConstantIndex, u16> {
 fn verify_instruction<'g>(
     frame: &mut VerifierFrame<'g>,
     java: &JavaClasses<'g>,
-    this_class: &RefType<&'g ClassData<'g>>,
+    this_class: &RefType<ClassId<'g>>,
     insn: &VerifierInstruction<'g>,
     insn_offset_in_basic_block: &Offset,
     current_block: &SynLabel,
@@ -913,7 +913,7 @@ fn verify_instruction<'g>(
 
 fn verify_branch_instruction<'g, Lbl, LblWide, LblNext>(
     frame: &mut VerifierFrame<'g>,
-    this_method_return_type: &Option<FieldType<&'g ClassData<'g>>>,
+    this_method_return_type: &Option<FieldType<ClassId<'g>>>,
     insn: &BranchInstruction<Lbl, LblWide, LblNext>,
 ) -> Result<(), VerifierErrorKind> {
     use BranchInstruction::*;

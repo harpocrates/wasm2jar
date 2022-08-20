@@ -156,11 +156,11 @@ impl<Class, Constant, Field, Method, IndyMethod>
 {
     pub fn map<Class2, Constant2, Field2, Method2, IndyMethod2, E>(
         &self,
-        map_class: impl Fn(&Class) -> std::result::Result<Class2, E>,
-        map_constant: impl Fn(&Constant) -> std::result::Result<Constant2, E>,
-        map_field: impl Fn(&Field) -> std::result::Result<Field2, E>,
-        map_method: impl Fn(&Method) -> std::result::Result<Method2, E>,
-        map_indy_method: impl Fn(&IndyMethod) -> std::result::Result<IndyMethod2, E>,
+        map_class: impl FnOnce(&Class) -> std::result::Result<Class2, E>,
+        map_constant: impl FnOnce(&Constant) -> std::result::Result<Constant2, E>,
+        map_field: impl FnOnce(&Field) -> std::result::Result<Field2, E>,
+        map_method: impl FnOnce(&Method) -> std::result::Result<Method2, E>,
+        map_indy_method: impl FnOnce(&IndyMethod) -> std::result::Result<IndyMethod2, E>,
     ) -> std::result::Result<
         Instruction<Class2, Constant2, Field2, Method2, IndyMethod2>,
         E,
@@ -290,10 +290,10 @@ impl<Class, Constant, Field, Method, IndyMethod>
 }
 
 pub type VerifierInstruction<'g> = Instruction<
-    RefType<&'g ClassData<'g>>,
+    RefType<ClassId<'g>>,
     ConstantData<'g>,
-    &'g FieldData<'g>,
-    &'g MethodData<'g>,
+    FieldId<'g>,
+    MethodId<'g>,
     InvokeDynamicData<'g>,
 >;
 

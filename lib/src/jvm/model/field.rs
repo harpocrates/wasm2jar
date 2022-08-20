@@ -1,9 +1,9 @@
-use crate::jvm::{FieldData, ConstantData};
+use crate::jvm::{FieldId, ConstantData};
 
 /// In-memory representation of a field
 pub struct Field<'g> {
     /// The current field
-    pub field: &'g FieldData<'g>,
+    pub field: FieldId<'g>,
 
     /// Generic method signature
     ///

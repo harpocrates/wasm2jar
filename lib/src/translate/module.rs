@@ -8,7 +8,7 @@ use crate::jvm::{
     BinaryName, BranchInstruction, BytecodeBuilder, ClassAccessFlags, ClassBuilder,
     ClassGraph, ConstantData, FieldAccessFlags, FieldType, InnerClassAccessFlags,
     Instruction, JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name,
-    RefType, UnqualifiedName, ClassData
+    RefType, UnqualifiedName, ClassData, ClassId, MethodId, FieldId,
 };
 use crate::util::Width;
 use crate::wasm::{ref_type_from_general, FunctionType, StackType, TableType};
@@ -127,7 +127,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     /// Construct a new inner class part
     fn new_part(
         settings: &Settings,
-        wasm_module_class: &'g ClassData<'g>,
+        wasm_module_class: ClassId<'g>,
         class_graph: &'g ClassGraph<'g>,
         java: &'g JavaLibrary<'g>,
         part_idx: usize,
@@ -881,7 +881,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 )))?;
 
                 // Assign it to the right field
-                jvm_code.access_field(import_field, AccessMode::Write)?;
+                jvm_code.access_field(*import_field, AccessMode::Write)?;
             } else {
                 break;
             }

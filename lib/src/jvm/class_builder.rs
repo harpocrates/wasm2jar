@@ -35,7 +35,7 @@ pub struct ClassBuilder<'g> {
     pub java: &'g JavaLibrary<'g>,
 
     /// Reference to class data in the class graph
-    pub class: &'g ClassData<'g>,
+    pub class: ClassId<'g>,
 
     /// Bootstrap methods
     pub bootstrap_methods: FrozenVec<Box<BootstrapMethodData<'g>>>,
@@ -46,16 +46,16 @@ impl<'g> ClassBuilder<'g> {
     pub fn new(
         access_flags: ClassAccessFlags,
         this_class: BinaryName,
-        super_class: &'g ClassData<'g>,
-        outer_class: Option<(InnerClassAccessFlags, &'g ClassData<'g>)>,
-        interfaces: Vec<&'g ClassData<'g>>,
+        super_class: ClassId<'g>,
+        outer_class: Option<(InnerClassAccessFlags, ClassId<'g>)>,
+        interfaces: Vec<ClassId<'g>>,
         class_graph: &'g ClassGraph<'g>,
         java: &'g JavaLibrary<'g>,
     ) -> Result<ClassBuilder<'g>, Error> {
         // Make sure this class is in the class graph
         let class = class_graph.add_class(ClassData::new(this_class, super_class, access_flags, outer_class));
         for interface in &interfaces {
-            class.interfaces.push(interface);
+            class.interfaces.push(*interface);
         }
 
         // Construct a fresh constant pool
@@ -172,8 +172,8 @@ impl<'g> ClassBuilder<'g> {
         &self,
         access_flags: FieldAccessFlags,
         name: UnqualifiedName,
-        descriptor: FieldType<&'g ClassData<'g>>,
-    ) -> Result<&'g FieldData<'g>, Error> {
+        descriptor: FieldType<ClassId<'g>>,
+    ) -> Result<FieldId<'g>, Error> {
         self.add_field_with_signature(access_flags, name, descriptor, None)
     }
 
@@ -182,9 +182,9 @@ impl<'g> ClassBuilder<'g> {
         &self,
         access_flags: FieldAccessFlags,
         name: UnqualifiedName,
-        descriptor: FieldType<&'g ClassData<'g>>,
+        descriptor: FieldType<ClassId<'g>>,
         signature: Option<String>,
-    ) -> Result<&'g FieldData<'g>, Error> {
+    ) -> Result<FieldId<'g>, Error> {
         let name_index = self.constants_pool.get_utf8(name.as_str())?;
         let descriptor_index = self.constants_pool.get_utf8(&descriptor.render())?;
         let mut attributes: Vec<Attribute> = vec![];
@@ -218,7 +218,7 @@ impl<'g> ClassBuilder<'g> {
         &self,
         access_flags: MethodAccessFlags,
         name: UnqualifiedName,
-        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+        descriptor: MethodDescriptor<ClassId<'g>>,
         code: Option<Code>,
     ) -> Result<(), Error> {
         let name_index = self.constants_pool.get_utf8(name.as_str())?;
@@ -250,7 +250,7 @@ impl<'g> ClassBuilder<'g> {
         &'a self,
         access_flags: MethodAccessFlags,
         name: UnqualifiedName,
-        descriptor: MethodDescriptor<&'g ClassData<'g>>,
+        descriptor: MethodDescriptor<ClassId<'g>>,
     ) -> Result<MethodBuilder<'a, 'g>, Error> {
         let method = self.class_graph.add_method(MethodData {
             class: self.class,
@@ -264,7 +264,7 @@ impl<'g> ClassBuilder<'g> {
     /// Start implementing a new method (that is already recorded in the class graph)
     pub fn implement_method<'a>(
         &'a self,
-        method: &'g MethodData<'g>,
+        method: MethodId<'g>,
     ) -> Result<MethodBuilder<'a, 'g>, Error> {
         let code = BytecodeBuilder::new(
             self.class_graph,
@@ -295,7 +295,7 @@ pub struct MethodBuilder<'a, 'g> {
     constants_pool: &'a ConstantsPool,
 
     /// The current method
-    pub method: &'g MethodData<'g>,
+    pub method: MethodId<'g>,
 
     /// Method attributes
     ///

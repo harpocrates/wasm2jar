@@ -20,7 +20,7 @@ impl<'g> ConstantsWriter<ClassConstantIndex> for ClassData<'g> {
 /// When making a `CONSTANT_Class_info`, reference types are almost always objects. However,
 /// there are a handful of places where an array type needs to be fit in (eg. for a `checkcast`
 /// to an array type). See section 4.4.1 for more.
-impl<'g> ConstantsWriter<ClassConstantIndex> for RefType<&'g ClassData<'g>> {
+impl<'g> ConstantsWriter<ClassConstantIndex> for RefType<ClassId<'g>> {
     fn constant_index(
         &self,
         constants: &ConstantsPool,

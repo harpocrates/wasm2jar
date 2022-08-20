@@ -1,10 +1,11 @@
 use super::*;
 use crate::util::{OffsetVec, Width, Offset};
+use crate::jvm::VerifierInstruction;
 use crate::jvm::model::SynLabel;
 use crate::jvm::class_file::StackMapFrame;
 use crate::jvm::descriptors::RenderDescriptor;
 use std::collections::HashMap;
-use crate::jvm::{ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassData, ClassGraph, FieldType, VerifierErrorKind, BinaryName, MethodData, FieldData, InvokeDynamicData, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
+use crate::jvm::{ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassData, ClassGraph, FieldType, VerifierErrorKind, BinaryName, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
 
 /// A frame represents the state of the stack and local variables at any location in the bytecode
 ///
@@ -18,14 +19,6 @@ pub struct Frame<Cls, U> {
     /// Stack in the frame
     pub stack: OffsetVec<VerificationType<Cls, U>>,
 }
-
-pub type VerifierInstruction<'g> = Instruction<
-    RefType<&'g ClassData<'g>>,
-    ConstantData<'g>,
-    &'g FieldData<'g>,
-    &'g MethodData<'g>,
-    InvokeDynamicData<'g>,
->;
 
 pub type VerifierFrame<'g> = Frame<RefType<&'g ClassData<'g>>, UninitializedRefType<'g>>;
 

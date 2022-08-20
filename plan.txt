@@ -25,3 +25,11 @@ Code model goal:
      - Do a pass to convert verifier instructions into an `OffsetVec<SerializableInstruction>`, resolving `ldc` vs `ldc_w` and adding padding for `lookupswitch` and `lookuptable`
      - Do a second pass (really fixpoint loop) over those blocks to insert extra `goto_w` blocks for wide instructions
      
+
+  * Execution
+
+    1. remove `offset_from_start` from a basic block (recompute it when laying out blocks at the end)
+    2. 
+        - switch `OffsetVec` to `Vec` in basic block
+        - don't add 
+

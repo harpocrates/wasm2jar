@@ -289,6 +289,19 @@ impl<Class, Constant, Field, Method, IndyMethod>
     }
 }
 
+pub type VerifierInstruction<'g> = Instruction<
+    RefType<&'g ClassData<'g>>,
+    ConstantData<'g>,
+    &'g FieldData<'g>,
+    &'g MethodData<'g>,
+    InvokeDynamicData<'g>,
+>;
+
+// Dummy impl mostly so that `VerifierInstructions` can still be used in a basic block
+impl<'g> Width for VerifierInstruction<'g> {
+    fn width(&self) -> usize { 1 }
+}
+
 impl<Class, Field, Method, IndyMethod> Width
     for Instruction<Class, ConstantIndex, Field, Method, IndyMethod>
 {

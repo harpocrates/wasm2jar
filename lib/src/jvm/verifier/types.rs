@@ -26,7 +26,7 @@ pub enum VerificationType<Cls, U> {
 
     /// State of an object after `new` has been called by `<init>` has not been called
     ///
-    ///   - while we are building up the CFG, we use `(RefType, Offset)` for `U`, tracking the
+    ///   - while we are building up the CFG, we use `UninitializedRefType` for `U`, tracking the
     ///     type of the uninitialized object (which we get from the `new` instruction) and the
     ///     offset of the `new` instruction in that basic block.
     ///   - when serializing into a classfile, we use `u16` for `U`, corresponding to the offset of

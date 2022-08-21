@@ -1,7 +1,7 @@
 use crate::util::Width;
 use crate::jvm::{
-    BaseType, BootstrapMethodData, BranchInstruction, BytecodeBuilder, ClassData, ConstantData,
-    EqComparison, Error, FieldData, FieldType, Instruction, InvokeDynamicData, InvokeType,
+    BaseType, BranchInstruction, BytecodeBuilder, ConstantData,
+    EqComparison, Error, FieldType, Instruction, InvokeDynamicData, InvokeType,
     MethodAccessFlags, MethodData, MethodDescriptor, OrdComparison, RefType, UnqualifiedName,
     ClassId, FieldId, MethodId, BootstrapMethodId,
 };

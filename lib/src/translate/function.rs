@@ -4,7 +4,7 @@ use super::{
 };
 use crate::util::{OffsetVec, Width};
 use crate::jvm::{
-    BaseType, BranchInstruction, BytecodeBuilder, ClassData, EqComparison, FieldType, Instruction,
+    BaseType, BranchInstruction, BytecodeBuilder, EqComparison, FieldType, Instruction,
     MethodDescriptor, OrdComparison, RefType, UnqualifiedName, ClassId,
 };
 use crate::jvm::model::SynLabel;

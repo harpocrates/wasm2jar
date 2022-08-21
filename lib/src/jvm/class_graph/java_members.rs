@@ -1,5 +1,5 @@
 use super::{
-    ClassData, ClassGraph, FieldAccessFlags, FieldData, FieldType, MethodAccessFlags, MethodData,
+    ClassGraph, FieldAccessFlags, FieldData, FieldType, MethodAccessFlags, MethodData,
     MethodDescriptor, UnqualifiedName, ClassId, FieldId, MethodId,
 };
 

@@ -1,4 +1,4 @@
-use crate::jvm::{ClassData, ClassId, FieldType, JavaClasses, MethodDescriptor, RefType};
+use crate::jvm::{ClassId, FieldType, JavaClasses, MethodDescriptor, RefType};
 use crate::util::Width;
 use wasmparser::{ValType, WasmFuncType};
 

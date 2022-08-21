@@ -11,6 +11,7 @@ mod constants_writer;
 mod descriptors;
 mod errors;
 mod names;
+pub mod jump_encoding;
 
 pub use access_flags::*;
 pub use bytecode::*;

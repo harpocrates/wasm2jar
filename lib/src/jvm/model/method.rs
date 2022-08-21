@@ -1,13 +1,15 @@
-use crate::jvm::{MethodData, BranchInstruction, SerializableInstruction, ClassData};
-use crate::util::{Offset, OffsetVec, Width};
+use crate::jvm::{BranchInstruction, SerializableInstruction};
+use crate::util::{RefId, Offset, OffsetVec, Width};
 use crate::jvm::verifier::VerifierFrame;
 use std::collections::HashMap;
 use std::fmt;
-use crate::jvm::{MethodId, ClassId, BootstrapMethodId, VerifierInstruction, BootstrapMethodData, ConstantsPool, ConstantPoolOverflow};
+use std::cell::Cell;
+use crate::jvm::{Instruction, JumpTargets, MethodId, ClassId, BootstrapMethodId, VerifierInstruction, ConstantsPool, ConstantPoolOverflow};
 use crate::jvm::descriptors::RenderDescriptor;
 use crate::jvm::names::Name;
 use crate::jvm::constants_writer::ConstantsWriter;
-
+use std::rc::Rc;
+use std::collections::HashSet;
 
 /// In-memory representation of a method
 pub struct Method<'g> {
@@ -53,7 +55,7 @@ pub type VerifierBasicBlock<'g> = BasicBlock<VerifierFrame<'g>, VerifierInstruct
 ///
 /// We also store some extra information that ultimately allows us to compute things like: the
 /// maximum height of the locals, the maximum height of the stack, and the stack map frames.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct BasicBlock<Frame, Insn, BrInsn> {
     /// Offset of the start of the basic block from the start of the method
     pub offset_from_start: Offset,
@@ -139,8 +141,25 @@ impl SynLabel {
     }
 }
 
+#[derive(Clone)]
+pub struct SynLabelGenerator(SynLabel);
+
+impl SynLabelGenerator {
+
+    pub fn new(start: SynLabel) -> SynLabelGenerator {
+        SynLabelGenerator(start)
+    }
+
+    pub fn fresh_label(&mut self) -> SynLabel {
+        let to_return = self.0.clone();
+        self.0 = self.0.next();
+        to_return
+    }
+}
+
 impl fmt::Debug for SynLabel {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_fmt(format_args!("l{}", self.0))
     }
 }
+

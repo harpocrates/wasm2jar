@@ -5,7 +5,7 @@ use crate::jvm::model::SynLabel;
 use crate::jvm::class_file::StackMapFrame;
 use crate::jvm::descriptors::RenderDescriptor;
 use std::collections::HashMap;
-use crate::jvm::{ClassId, ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassData, ClassGraph, FieldType, VerifierErrorKind, BinaryName, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
+use crate::jvm::{ClassId, ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassGraph, FieldType, VerifierErrorKind, BinaryName, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
 
 /// A frame represents the state of the stack and local variables at any location in the bytecode
 ///

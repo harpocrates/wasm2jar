@@ -8,7 +8,7 @@ use crate::jvm::{
     BinaryName, BranchInstruction, BytecodeBuilder, ClassAccessFlags, ClassBuilder,
     ClassGraph, ConstantData, FieldAccessFlags, FieldType, InnerClassAccessFlags,
     Instruction, JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name,
-    RefType, UnqualifiedName, ClassData, ClassId, MethodId, FieldId,
+    RefType, UnqualifiedName, ClassId,
 };
 use crate::util::Width;
 use crate::wasm::{ref_type_from_general, FunctionType, StackType, TableType};

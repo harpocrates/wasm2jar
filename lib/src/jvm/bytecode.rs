@@ -21,7 +21,7 @@ use crate::jvm::class_file::Serialize;
 use crate::util::{Width};
 
 /// Non-branching JVM bytecode instruction
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Instruction<Class, Constant, Field, Method, IndyMethod> {
     Nop,
     AConstNull,
@@ -723,7 +723,7 @@ impl Serialize for SerializableInstruction {
 /// offsets into the code array, wide jump targets will become signed 32-bit offsets into the code
 /// array, and fallthrough targets will be replaced with unit (since they are implicit from the
 /// order of the blocks in the code array).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BranchInstruction<Lbl, LblWide, LblNext> {
     If(OrdComparison, Lbl, LblNext), // covers `ifeq`, `ifne`, `iflt`, `ifge`, `ifgt`, `ifle`
     IfICmp(OrdComparison, Lbl, LblNext), // covers `if_icmpeq`, `if_icmpne`, `if_icmplt`, ... `if_icmple`
@@ -836,7 +836,7 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
         match self {
             BranchInstruction::TableSwitch { ref mut padding, .. } => *padding = pad_to,
             BranchInstruction::LookupSwitch { ref mut padding, .. } => *padding = pad_to,
-            other => (),
+            _no_padding_used => (),
         }
     }
 

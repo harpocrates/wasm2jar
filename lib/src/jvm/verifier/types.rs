@@ -2,7 +2,7 @@ use byteorder::WriteBytesExt;
 use crate::jvm::class_file::Serialize;
 use crate::util::{Width, Offset};
 use crate::jvm::constants_writer::ConstantsWriter;
-use crate::jvm::{ClassId, BaseType, ConstantsPool, ClassConstantIndex, RefType, ClassData, ClassGraph, FieldType, ConstantPoolOverflow};
+use crate::jvm::{ClassId, BaseType, ConstantsPool, ClassConstantIndex, RefType, ClassGraph, FieldType, ConstantPoolOverflow};
 use std::collections::HashMap;
 use crate::jvm::model::SynLabel;
 

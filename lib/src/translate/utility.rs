@@ -1,9 +1,9 @@
 use super::{AccessMode, CodeBuilderExts, Error, Memory, Settings, Table, UtilitiesStrategy};
 use crate::jvm::{
     BaseType, BinaryName, BootstrapMethodData, BranchInstruction, BytecodeBuilder,
-    ClassAccessFlags, ClassBuilder, ClassData, ClassGraph, CompareMode, ConstantData, FieldType,
+    ClassAccessFlags, ClassBuilder, ClassGraph, CompareMode, ConstantData, FieldType,
     InnerClassAccessFlags, Instruction, JavaClasses, JavaLibrary,
-    MethodAccessFlags, MethodData, MethodDescriptor, Name, OrdComparison, RefType, ShiftType,
+    MethodAccessFlags, MethodDescriptor, Name, OrdComparison, RefType, ShiftType,
     UnqualifiedName, ClassId, MethodId, BootstrapMethodId,
 };
 use std::collections::HashMap;

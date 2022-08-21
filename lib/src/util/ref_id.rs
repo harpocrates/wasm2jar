@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::borrow::Borrow;
-use stable_deref_trait::{CloneStableDeref, StableDeref};
+use stable_deref_trait::StableDeref;
 
 /// Wrapper type whose "identity" for equality and hashing is determined from the reference itself
 /// (ie. the pointer) and not from the underlying data.

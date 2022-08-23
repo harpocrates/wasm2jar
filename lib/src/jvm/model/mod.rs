@@ -1,5 +1,5 @@
-mod method;
 mod field;
+mod method;
 
-pub use method::*;
 pub use field::*;
+pub use method::*;

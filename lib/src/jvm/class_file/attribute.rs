@@ -1,7 +1,7 @@
-use byteorder::WriteBytesExt;
-use crate::jvm::{ClassConstantIndex, ConstantIndex, InnerClassAccessFlags, Utf8ConstantIndex};
 use crate::jvm::class_file::Serialize;
 use crate::jvm::verifier::VerificationType;
+use crate::jvm::{ClassConstantIndex, ConstantIndex, InnerClassAccessFlags, Utf8ConstantIndex};
+use byteorder::WriteBytesExt;
 
 /// Attributes (used in classes, fields, methods, and even on some attributes)
 ///

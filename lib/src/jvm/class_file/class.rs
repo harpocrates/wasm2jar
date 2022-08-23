@@ -1,9 +1,9 @@
+use crate::jvm::class_file::{Attribute, Field, Method, Serialize, Version};
+use crate::jvm::{ClassAccessFlags, ClassConstantIndex, Constant};
+use crate::util::OffsetVec;
+use byteorder::WriteBytesExt;
 use std::fs;
 use std::path::Path;
-use byteorder::WriteBytesExt;
-use crate::jvm::{ClassAccessFlags, Constant, ClassConstantIndex};
-use crate::jvm::class_file::{Attribute, Serialize, Method, Field, Version};
-use crate::util::OffsetVec;
 
 /// Representation of the [`class` file format of the JVM][0]
 ///
@@ -56,6 +56,3 @@ impl Serialize for ClassFile {
         Ok(())
     }
 }
-
-
-

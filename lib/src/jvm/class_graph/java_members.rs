@@ -1,6 +1,6 @@
 use super::{
-    ClassGraph, FieldAccessFlags, FieldData, FieldType, MethodAccessFlags, MethodData,
-    MethodDescriptor, UnqualifiedName, ClassId, FieldId, MethodId,
+    ClassGraph, ClassId, FieldAccessFlags, FieldData, FieldId, FieldType, MethodAccessFlags,
+    MethodData, MethodDescriptor, MethodId, UnqualifiedName,
 };
 
 use super::java_classes::JavaClasses;
@@ -470,19 +470,18 @@ impl<'g> NumberMembers<'g> {
         classes: &JavaClasses<'g>,
     ) -> NumberMembers<'g> {
         let class = classes.lang.number;
-        let add_extractor = |name: UnqualifiedName,
-                             extracted_type: FieldType<ClassId<'g>>|
-         -> MethodId<'g> {
-            class_graph.add_method(MethodData {
-                class,
-                name,
-                access_flags: MethodAccessFlags::PUBLIC,
-                descriptor: MethodDescriptor {
-                    parameters: vec![],
-                    return_type: Some(extracted_type),
-                },
-            })
-        };
+        let add_extractor =
+            |name: UnqualifiedName, extracted_type: FieldType<ClassId<'g>>| -> MethodId<'g> {
+                class_graph.add_method(MethodData {
+                    class,
+                    name,
+                    access_flags: MethodAccessFlags::PUBLIC,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![],
+                        return_type: Some(extracted_type),
+                    },
+                })
+            };
 
         let byte_value = add_extractor(UnqualifiedName::BYTEVALUE, FieldType::byte());
         let double_value = add_extractor(UnqualifiedName::DOUBLEVALUE, FieldType::double());
@@ -509,19 +508,18 @@ impl<'g> IntegerMembers<'g> {
     ) -> IntegerMembers<'g> {
         let class = classes.lang.integer;
 
-        let add_static_unary = |name: UnqualifiedName,
-                                output_type: FieldType<ClassId<'g>>|
-         -> MethodId<'g> {
-            class_graph.add_method(MethodData {
-                class,
-                name,
-                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::int()],
-                    return_type: Some(output_type),
-                },
-            })
-        };
+        let add_static_unary =
+            |name: UnqualifiedName, output_type: FieldType<ClassId<'g>>| -> MethodId<'g> {
+                class_graph.add_method(MethodData {
+                    class,
+                    name,
+                    access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![FieldType::int()],
+                        return_type: Some(output_type),
+                    },
+                })
+            };
         let value_of = add_static_unary(
             UnqualifiedName::VALUEOF,
             FieldType::object(classes.lang.integer),
@@ -550,16 +548,15 @@ impl<'g> IntegerMembers<'g> {
         let rotate_left = add_static_binary(UnqualifiedName::ROTATELEFT);
         let rotate_right = add_static_binary(UnqualifiedName::ROTATERIGHT);
 
-        let add_static_field = |name: UnqualifiedName,
-                                descriptor: FieldType<ClassId<'g>>|
-         -> FieldId<'g> {
-            class_graph.add_field(FieldData {
-                class,
-                name,
-                access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
-                descriptor,
-            })
-        };
+        let add_static_field =
+            |name: UnqualifiedName, descriptor: FieldType<ClassId<'g>>| -> FieldId<'g> {
+                class_graph.add_field(FieldData {
+                    class,
+                    name,
+                    access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
+                    descriptor,
+                })
+            };
         let max_value = add_static_field(UnqualifiedName::MAXVALUE, FieldType::int());
         let min_value = add_static_field(UnqualifiedName::MINVALUE, FieldType::int());
         let r#type = add_static_field(
@@ -680,19 +677,18 @@ impl<'g> LongMembers<'g> {
     ) -> LongMembers<'g> {
         let class = classes.lang.long;
 
-        let add_static_unary = |name: UnqualifiedName,
-                                output_type: FieldType<ClassId<'g>>|
-         -> MethodId<'g> {
-            class_graph.add_method(MethodData {
-                class,
-                name,
-                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
-                descriptor: MethodDescriptor {
-                    parameters: vec![FieldType::long()],
-                    return_type: Some(output_type),
-                },
-            })
-        };
+        let add_static_unary =
+            |name: UnqualifiedName, output_type: FieldType<ClassId<'g>>| -> MethodId<'g> {
+                class_graph.add_method(MethodData {
+                    class,
+                    name,
+                    access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![FieldType::long()],
+                        return_type: Some(output_type),
+                    },
+                })
+            };
         let value_of = add_static_unary(
             UnqualifiedName::VALUEOF,
             FieldType::object(classes.lang.long),
@@ -748,16 +744,15 @@ impl<'g> LongMembers<'g> {
             FieldType::long(),
         );
 
-        let add_static_field = |name: UnqualifiedName,
-                                descriptor: FieldType<ClassId<'g>>|
-         -> FieldId<'g> {
-            class_graph.add_field(FieldData {
-                class,
-                name,
-                access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
-                descriptor,
-            })
-        };
+        let add_static_field =
+            |name: UnqualifiedName, descriptor: FieldType<ClassId<'g>>| -> FieldId<'g> {
+                class_graph.add_field(FieldData {
+                    class,
+                    name,
+                    access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
+                    descriptor,
+                })
+            };
         let max_value = add_static_field(UnqualifiedName::MAXVALUE, FieldType::long());
         let min_value = add_static_field(UnqualifiedName::MINVALUE, FieldType::long());
         let r#type = add_static_field(
@@ -934,36 +929,34 @@ impl<'g> MathMembers<'g> {
         let sqrt = add_double_transformer(UnqualifiedName::SQRT);
         let rint = add_double_transformer(UnqualifiedName::RINT);
 
-        let add_binary_operator = |name: UnqualifiedName,
-                                   operator_type: FieldType<ClassId<'g>>|
-         -> MethodId<'g> {
-            class_graph.add_method(MethodData {
-                class,
-                name,
-                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
-                descriptor: MethodDescriptor {
-                    parameters: vec![operator_type.clone(), operator_type.clone()],
-                    return_type: Some(operator_type),
-                },
-            })
-        };
+        let add_binary_operator =
+            |name: UnqualifiedName, operator_type: FieldType<ClassId<'g>>| -> MethodId<'g> {
+                class_graph.add_method(MethodData {
+                    class,
+                    name,
+                    access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![operator_type.clone(), operator_type.clone()],
+                        return_type: Some(operator_type),
+                    },
+                })
+            };
         let copy_sign_float = add_binary_operator(UnqualifiedName::COPYSIGN, FieldType::float());
         let copy_sign_double = add_binary_operator(UnqualifiedName::COPYSIGN, FieldType::double());
         let add_exact = add_binary_operator(UnqualifiedName::ADDEXACT, FieldType::int());
 
-        let add_unary_operator = |name: UnqualifiedName,
-                                  operator_type: FieldType<ClassId<'g>>|
-         -> MethodId<'g> {
-            class_graph.add_method(MethodData {
-                class,
-                name,
-                access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
-                descriptor: MethodDescriptor {
-                    parameters: vec![operator_type.clone()],
-                    return_type: Some(operator_type),
-                },
-            })
-        };
+        let add_unary_operator =
+            |name: UnqualifiedName, operator_type: FieldType<ClassId<'g>>| -> MethodId<'g> {
+                class_graph.add_method(MethodData {
+                    class,
+                    name,
+                    access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+                    descriptor: MethodDescriptor {
+                        parameters: vec![operator_type.clone()],
+                        return_type: Some(operator_type),
+                    },
+                })
+            };
         let abs_float = add_unary_operator(UnqualifiedName::ABS, FieldType::float());
         let abs_double = add_unary_operator(UnqualifiedName::ABS, FieldType::double());
 
@@ -1626,18 +1619,17 @@ impl<'g> ByteBufferMembers<'g> {
             },
         });
 
-        let add_get =
-            |name: UnqualifiedName, typ: FieldType<ClassId<'g>>| -> MethodId<'g> {
-                class_graph.add_method(MethodData {
-                    class,
-                    name,
-                    access_flags: MethodAccessFlags::PUBLIC,
-                    descriptor: MethodDescriptor {
-                        parameters: vec![FieldType::int()],
-                        return_type: Some(typ),
-                    },
-                })
-            };
+        let add_get = |name: UnqualifiedName, typ: FieldType<ClassId<'g>>| -> MethodId<'g> {
+            class_graph.add_method(MethodData {
+                class,
+                name,
+                access_flags: MethodAccessFlags::PUBLIC,
+                descriptor: MethodDescriptor {
+                    parameters: vec![FieldType::int()],
+                    return_type: Some(typ),
+                },
+            })
+        };
         let get_byte = add_get(UnqualifiedName::GET, FieldType::byte());
         let get_short = add_get(UnqualifiedName::GETSHORT, FieldType::short());
         let get_int = add_get(UnqualifiedName::GETINT, FieldType::int());
@@ -1645,18 +1637,17 @@ impl<'g> ByteBufferMembers<'g> {
         let get_long = add_get(UnqualifiedName::GETLONG, FieldType::long());
         let get_double = add_get(UnqualifiedName::GETDOUBLE, FieldType::double());
 
-        let add_put =
-            |name: UnqualifiedName, typ: FieldType<ClassId<'g>>| -> MethodId<'g> {
-                class_graph.add_method(MethodData {
-                    class,
-                    name,
-                    access_flags: MethodAccessFlags::PUBLIC,
-                    descriptor: MethodDescriptor {
-                        parameters: vec![FieldType::int(), typ],
-                        return_type: Some(FieldType::object(classes.nio.byte_buffer)),
-                    },
-                })
-            };
+        let add_put = |name: UnqualifiedName, typ: FieldType<ClassId<'g>>| -> MethodId<'g> {
+            class_graph.add_method(MethodData {
+                class,
+                name,
+                access_flags: MethodAccessFlags::PUBLIC,
+                descriptor: MethodDescriptor {
+                    parameters: vec![FieldType::int(), typ],
+                    return_type: Some(FieldType::object(classes.nio.byte_buffer)),
+                },
+            })
+        };
         let put_byte = add_put(UnqualifiedName::PUT, FieldType::byte());
         let put_short = add_put(UnqualifiedName::PUTSHORT, FieldType::short());
         let put_int = add_put(UnqualifiedName::PUTINT, FieldType::int());

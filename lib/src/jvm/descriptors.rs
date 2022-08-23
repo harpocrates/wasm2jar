@@ -1,5 +1,5 @@
 use super::{BinaryName, Name};
-use crate::util::{Width, RefId};
+use crate::util::{RefId, Width};
 use std::io::{Error, ErrorKind, Result};
 use std::iter::Peekable;
 use std::str::Chars;

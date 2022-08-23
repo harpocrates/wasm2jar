@@ -1,7 +1,8 @@
 use super::{
-    BinaryName, ClassAccessFlags, FieldAccessFlags, FieldType, InvokeType, MethodAccessFlags,
-    MethodDescriptor, Name, RefType, RenderDescriptor, UnqualifiedName, InnerClassAccessFlags,
+    BinaryName, ClassAccessFlags, FieldAccessFlags, FieldType, InnerClassAccessFlags, InvokeType,
+    MethodAccessFlags, MethodDescriptor, Name, RefType, RenderDescriptor, UnqualifiedName,
 };
+use crate::util::RefId;
 use elsa::map::FrozenMap;
 use elsa::FrozenVec;
 use std::borrow::Cow;
@@ -9,7 +10,6 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use typed_arena::Arena;
-use crate::util::RefId;
 
 mod java_classes;
 mod java_lib_types;
@@ -172,7 +172,10 @@ impl<'g> ClassGraph<'g> {
             if let NestData::Host { members } = &nest_host.nest {
                 members.push(class_id)
             } else {
-                unreachable!("The nest host of {:?} (computed to be {:?}) thinks it is a nest member", data, nest_host)
+                unreachable!(
+                    "The nest host of {:?} (computed to be {:?}) thinks it is a nest member",
+                    data, nest_host
+                )
             }
         }
 
@@ -243,7 +246,7 @@ pub struct ClassData<'g> {
     pub fields: FrozenVec<FieldId<'g>>,
 
     /// Nesting information
-    pub nest: NestData<'g>
+    pub nest: NestData<'g>,
 }
 
 /// Nesting information for the class.
@@ -265,7 +268,7 @@ pub enum NestData<'g> {
         /// This is _not_ the nest host, though following the `enclosing_class` chain should
         /// eventually lead to the nest host.
         enclosing_class: ClassId<'g>,
-    }
+    },
 }
 
 impl<'g> RenderDescriptor for ClassData<'g> {
@@ -377,8 +380,13 @@ impl<'g> ClassData<'g> {
         outer_class: Option<(InnerClassAccessFlags, ClassId<'g>)>,
     ) -> ClassData<'g> {
         let nest = match outer_class {
-            None => NestData::Host { members: FrozenVec::new() },
-            Some((access_flags, enclosing_class)) => NestData::Member { access_flags, enclosing_class },
+            None => NestData::Host {
+                members: FrozenVec::new(),
+            },
+            Some((access_flags, enclosing_class)) => NestData::Member {
+                access_flags,
+                enclosing_class,
+            },
         };
         ClassData {
             name,
@@ -404,7 +412,9 @@ impl<'g> ClassId<'g> {
         loop {
             match host_candidate.nest {
                 NestData::Host { .. } => return host_candidate,
-                NestData::Member { enclosing_class, .. } => host_candidate = enclosing_class,
+                NestData::Member {
+                    enclosing_class, ..
+                } => host_candidate = enclosing_class,
             }
         }
     }

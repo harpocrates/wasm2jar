@@ -1,17 +1,17 @@
 mod access_flags;
 mod bytecode;
 mod bytecode_builder;
-pub mod class_file;
-pub mod model;
-pub mod verifier;
 mod class_builder;
+pub mod class_file;
 mod class_graph;
 mod constants;
 mod constants_writer;
 mod descriptors;
 mod errors;
-mod names;
 pub mod jump_encoding;
+pub mod model;
+mod names;
+pub mod verifier;
 
 pub use access_flags::*;
 pub use bytecode::*;

@@ -85,10 +85,7 @@ impl FunctionType {
     }
 
     /// Into a method descriptor
-    pub fn method_descriptor<'g>(
-        &self,
-        java: &JavaClasses<'g>,
-    ) -> MethodDescriptor<ClassId<'g>> {
+    pub fn method_descriptor<'g>(&self, java: &JavaClasses<'g>) -> MethodDescriptor<ClassId<'g>> {
         let return_type = match self.outputs.as_slice() {
             [] => None,
             [output_ty] => Some(output_ty.field_type(java)),

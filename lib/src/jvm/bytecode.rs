@@ -13,12 +13,12 @@
 //!
 
 use super::*;
+use crate::jvm::class_file::Serialize;
+use crate::util::Width;
 use byteorder::WriteBytesExt;
 use std::convert::TryFrom;
 use std::io::Result;
 use std::ops::Not;
-use crate::jvm::class_file::Serialize;
-use crate::util::{Width};
 
 /// Non-branching JVM bytecode instruction
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,10 +161,7 @@ impl<Class, Constant, Field, Method, IndyMethod>
         map_field: impl FnOnce(&Field) -> std::result::Result<Field2, E>,
         map_method: impl FnOnce(&Method) -> std::result::Result<Method2, E>,
         map_indy_method: impl FnOnce(&IndyMethod) -> std::result::Result<IndyMethod2, E>,
-    ) -> std::result::Result<
-        Instruction<Class2, Constant2, Field2, Method2, IndyMethod2>,
-        E,
-    > {
+    ) -> std::result::Result<Instruction<Class2, Constant2, Field2, Method2, IndyMethod2>, E> {
         use Instruction::*;
         Ok(match self {
             Nop => Nop,
@@ -299,7 +296,9 @@ pub type VerifierInstruction<'g> = Instruction<
 
 // Dummy impl mostly so that `VerifierInstructions` can still be used in a basic block
 impl<'g> Width for VerifierInstruction<'g> {
-    fn width(&self) -> usize { 1 }
+    fn width(&self) -> usize {
+        1
+    }
 }
 
 impl<Class, Field, Method, IndyMethod> Width
@@ -834,8 +833,12 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
     pub fn set_padding(&mut self, padding: u8) {
         let pad_to = padding;
         match self {
-            BranchInstruction::TableSwitch { ref mut padding, .. } => *padding = pad_to,
-            BranchInstruction::LookupSwitch { ref mut padding, .. } => *padding = pad_to,
+            BranchInstruction::TableSwitch {
+                ref mut padding, ..
+            } => *padding = pad_to,
+            BranchInstruction::LookupSwitch {
+                ref mut padding, ..
+            } => *padding = pad_to,
             _no_padding_used => (),
         }
     }

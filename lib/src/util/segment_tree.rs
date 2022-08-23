@@ -1,6 +1,6 @@
-use std::rc::Rc;
 use std::borrow::Borrow;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 /// Simplified segment tree
 ///
@@ -10,7 +10,6 @@ use std::collections::BTreeSet;
 pub struct SegmentTree<I: Interval + Clone>(Option<SegmentNode<I>>);
 
 impl<I: Interval + Clone> SegmentTree<I> {
-
     /// Find all intervals containing the specified point
     pub fn intervals_containing(&self, point: &I::Endpoint) -> Vec<&I> {
         let mut node = if let Some(root_node) = self.0.as_ref() {
@@ -26,14 +25,18 @@ impl<I: Interval + Clone> SegmentTree<I> {
         // These are all the intervals encountered while searching for the point
         let mut containing_intervals: Vec<&I> = vec![];
         loop {
-
             // All intervals on this node contain the point
             for interval in node.intervals() {
                 containing_intervals.push(interval.borrow());
             }
 
             // Select at most one of the children (if there are any) to continue the search
-            if let SegmentNode::Inner { left_child, right_child, .. } = node {
+            if let SegmentNode::Inner {
+                left_child,
+                right_child,
+                ..
+            } = node
+            {
                 if left_child.contains(point) {
                     node = left_child;
                     continue;
@@ -50,7 +53,6 @@ impl<I: Interval + Clone> SegmentTree<I> {
 
     /// Make a new segment tree containing all the specified intervals
     pub fn new(intervals: Vec<I>) -> SegmentTree<I> {
-
         // Collect and sort all endpoints
         let endpoints: &[I::Endpoint] = &intervals
             .iter()
@@ -78,14 +80,23 @@ impl<I: Interval + Clone> SegmentTree<I> {
     fn build_empty(endpoints: &[I::Endpoint]) -> SegmentNode<I> {
         match endpoints.len() {
             0 => unreachable!(),
-            1 => SegmentNode::Leaf { endpoint: endpoints[0], intervals: vec![] },
+            1 => SegmentNode::Leaf {
+                endpoint: endpoints[0],
+                intervals: vec![],
+            },
             n => {
                 let (left_endpoints, right_endpoints) = endpoints.split_at(n / 2);
                 let from = endpoints[0];
                 let until = endpoints[n - 1];
                 let left_child = Box::new(Self::build_empty(left_endpoints));
                 let right_child = Box::new(Self::build_empty(right_endpoints));
-                SegmentNode::Inner { from, until, left_child, right_child, intervals: vec![] }
+                SegmentNode::Inner {
+                    from,
+                    until,
+                    left_child,
+                    right_child,
+                    intervals: vec![],
+                }
             }
         }
     }
@@ -107,14 +118,17 @@ impl<I: Interval + Clone> SegmentTree<I> {
             }
 
             // Otherwise, repeat with the left and right children
-            if let SegmentNode::Inner { ref mut left_child, ref mut right_child, .. } = node {
+            if let SegmentNode::Inner {
+                ref mut left_child,
+                ref mut right_child,
+                ..
+            } = node
+            {
                 to_visit.push(left_child);
                 to_visit.push(right_child);
             }
         }
-
     }
-
 }
 
 /// Internal node in the segment tree
@@ -145,7 +159,6 @@ enum SegmentNode<I: Interval> {
 }
 
 impl<I: Interval + Clone> SegmentNode<I> {
-
     /// Is a point represented by this node?
     fn contains(&self, point: &I::Endpoint) -> bool {
         match self {
@@ -178,7 +191,6 @@ impl<I: Interval + Clone> SegmentNode<I> {
 
 /// Closed interval
 pub trait Interval {
-
     type Endpoint: Ord + Copy;
 
     /// Start of the interval (inclusive)
@@ -189,7 +201,6 @@ pub trait Interval {
 }
 
 impl<I: Interval> Interval for SegmentNode<I> {
-
     type Endpoint = I::Endpoint;
 
     fn from(&self) -> Self::Endpoint {
@@ -208,7 +219,6 @@ impl<I: Interval> Interval for SegmentNode<I> {
 }
 
 impl<I: Interval> Interval for &I {
-
     type Endpoint = I::Endpoint;
 
     fn from(&self) -> Self::Endpoint {
@@ -221,7 +231,6 @@ impl<I: Interval> Interval for &I {
 }
 
 impl<I: Interval> Interval for Rc<I> {
-
     type Endpoint = I::Endpoint;
 
     fn from(&self) -> Self::Endpoint {
@@ -234,5 +243,3 @@ impl<I: Interval> Interval for Rc<I> {
         interval.until()
     }
 }
-
-

@@ -1,6 +1,6 @@
-use byteorder::WriteBytesExt;
-use crate::jvm::{FieldAccessFlags, Utf8ConstantIndex};
 use crate::jvm::class_file::{Attribute, Serialize};
+use crate::jvm::{FieldAccessFlags, Utf8ConstantIndex};
+use byteorder::WriteBytesExt;
 
 /// Field declared by a class or interface
 ///

@@ -2,12 +2,12 @@ use super::{
     AccessMode, BootstrapUtilities, BranchCond, CodeBuilderExts, Error, Function, Global, Memory,
     Settings, Table, UtilityClass, UtilityMethod,
 };
-use crate::util::{OffsetVec, Width};
-use crate::jvm::{
-    BaseType, BranchInstruction, BytecodeBuilder, EqComparison, FieldType, Instruction,
-    MethodDescriptor, OrdComparison, RefType, UnqualifiedName, ClassId,
-};
 use crate::jvm::model::SynLabel;
+use crate::jvm::{
+    BaseType, BranchInstruction, BytecodeBuilder, ClassId, EqComparison, FieldType, Instruction,
+    MethodDescriptor, OrdComparison, RefType, UnqualifiedName,
+};
+use crate::util::{OffsetVec, Width};
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
 };
@@ -1373,7 +1373,8 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         let _ = self.jvm_locals.pop_local()?;
         let _ = self.jvm_locals.pop_local()?;
         self.jvm_code.kill_top_local(tmp_offset, None)?;
-        self.jvm_code.kill_top_local(idx_offset, Some(FieldType::int()))?;
+        self.jvm_code
+            .kill_top_local(idx_offset, Some(FieldType::int()))?;
         self.jvm_code.kill_top_local(arr_offset, None)?;
 
         Ok(())
@@ -1451,7 +1452,8 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
         // Kill the locals
         let _ = self.jvm_locals.pop_local()?;
         let _ = self.jvm_locals.pop_local()?;
-        self.jvm_code.kill_top_local(idx_offset, Some(FieldType::int()))?;
+        self.jvm_code
+            .kill_top_local(idx_offset, Some(FieldType::int()))?;
         self.jvm_code.kill_top_local(arr_offset, None)?;
 
         Ok(())
@@ -1515,7 +1517,8 @@ impl<'a, 'b, 'c, 'g> FunctionTranslator<'a, 'b, 'c, 'g> {
             todo!()
         }
 
-        self.jvm_code.kill_top_local(temp_index, Some(global_field_type))?;
+        self.jvm_code
+            .kill_top_local(temp_index, Some(global_field_type))?;
         self.jvm_locals.pop_local()?;
 
         Ok(())
@@ -1819,10 +1822,7 @@ impl<'g> LocalsLayout<'g> {
     ///
     /// Adjusts for the fact that JVM locals sometimes take two slots, and that there is an extra
     /// local argument corresponding to the parameter that is used to pass around the module.
-    fn lookup_local(
-        &self,
-        mut local_idx: u32,
-    ) -> Result<(u16, FieldType<ClassId<'g>>), Error> {
+    fn lookup_local(&self, mut local_idx: u32) -> Result<(u16, FieldType<ClassId<'g>>), Error> {
         if local_idx as usize >= self.jvm_module_idx {
             local_idx += 1;
         }

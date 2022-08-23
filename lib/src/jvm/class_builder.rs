@@ -1,6 +1,9 @@
 use super::*;
 
-use crate::jvm::class_file::{Signature, Code, AttributeLike, NestHost, NestMembers, BootstrapMethods, BootstrapMethod, Version, Method, Field, Attribute, ClassFile};
+use crate::jvm::class_file::{
+    Attribute, AttributeLike, BootstrapMethod, BootstrapMethods, ClassFile, Code, Field, Method,
+    NestHost, NestMembers, Signature, Version,
+};
 use elsa::FrozenVec;
 
 pub struct ClassBuilder<'g> {
@@ -53,7 +56,12 @@ impl<'g> ClassBuilder<'g> {
         java: &'g JavaLibrary<'g>,
     ) -> Result<ClassBuilder<'g>, Error> {
         // Make sure this class is in the class graph
-        let class = class_graph.add_class(ClassData::new(this_class, super_class, access_flags, outer_class));
+        let class = class_graph.add_class(ClassData::new(
+            this_class,
+            super_class,
+            access_flags,
+            outer_class,
+        ));
         for interface in &interfaces {
             class.interfaces.push(*interface);
         }
@@ -138,12 +146,13 @@ impl<'g> ClassBuilder<'g> {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 self.add_attribute(NestMembers(nest_members))?;
-            },
+            }
             NestData::Member { .. } => {
-                let nest_host_name = constants_pool.get_utf8(self.class.nest_host().name.as_str())?;
+                let nest_host_name =
+                    constants_pool.get_utf8(self.class.nest_host().name.as_str())?;
                 let nest_host_class = constants_pool.get_class(nest_host_name)?;
                 self.add_attribute(NestHost(nest_host_class))?;
-            },
+            }
             _ => (),
         }
 
@@ -336,9 +345,9 @@ impl<'a, 'g> MethodBuilder<'a, 'g> {
 
 #[test]
 fn sample_class() -> Result<(), Error> {
+    use crate::jvm::class_file::Serialize;
     use BranchInstruction::*;
     use Instruction::*;
-    use crate::jvm::class_file::Serialize;
 
     let class_graph_arenas = ClassGraphArenas::new();
     let class_graph = ClassGraph::new(&class_graph_arenas);

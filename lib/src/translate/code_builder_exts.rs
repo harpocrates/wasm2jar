@@ -1,20 +1,16 @@
-use crate::util::Width;
 use crate::jvm::{
-    BaseType, BranchInstruction, BytecodeBuilder, ConstantData,
-    EqComparison, Error, FieldType, Instruction, InvokeDynamicData, InvokeType,
-    MethodAccessFlags, MethodData, MethodDescriptor, OrdComparison, RefType, UnqualifiedName,
-    ClassId, FieldId, MethodId, BootstrapMethodId,
+    BaseType, BootstrapMethodId, BranchInstruction, BytecodeBuilder, ClassId, ConstantData,
+    EqComparison, Error, FieldId, FieldType, Instruction, InvokeDynamicData, InvokeType,
+    MethodAccessFlags, MethodData, MethodDescriptor, MethodId, OrdComparison, RefType,
+    UnqualifiedName,
 };
+use crate::util::Width;
 use std::borrow::Cow;
 use std::ops::Not;
 
 pub trait CodeBuilderExts<'a, 'g> {
     /// Zero initialize a local variable
-    fn zero_local(
-        &mut self,
-        offset: u16,
-        field_type: FieldType<ClassId<'g>>,
-    ) -> Result<(), Error>;
+    fn zero_local(&mut self, offset: u16, field_type: FieldType<ClassId<'g>>) -> Result<(), Error>;
 
     /// Push a null of a specific value to the stack
     fn const_null(&mut self, ref_type: RefType<ClassId<'g>>) -> Result<(), Error>;
@@ -23,24 +19,13 @@ pub trait CodeBuilderExts<'a, 'g> {
     fn const_string(&mut self, string: impl Into<Cow<'static, str>>) -> Result<(), Error>;
 
     /// Get a local at a particular offset
-    fn get_local(
-        &mut self,
-        offset: u16,
-        field_type: &FieldType<ClassId<'g>>,
-    ) -> Result<(), Error>;
+    fn get_local(&mut self, offset: u16, field_type: &FieldType<ClassId<'g>>) -> Result<(), Error>;
 
     /// Set a local at a particular offset
-    fn set_local(
-        &mut self,
-        offset: u16,
-        field_type: &FieldType<ClassId<'g>>,
-    ) -> Result<(), Error>;
+    fn set_local(&mut self, offset: u16, field_type: &FieldType<ClassId<'g>>) -> Result<(), Error>;
 
     /// Return from the function
-    fn return_(
-        &mut self,
-        field_type_opt: Option<FieldType<ClassId<'g>>>,
-    ) -> Result<(), Error>;
+    fn return_(&mut self, field_type_opt: Option<FieldType<ClassId<'g>>>) -> Result<(), Error>;
 
     /// Push an integer constant onto the stack
     fn const_int(&mut self, integer: i32) -> Result<(), Error>;
@@ -103,11 +88,7 @@ pub trait CodeBuilderExts<'a, 'g> {
     ) -> Result<(), Error>;
 
     /// Get/put a field
-    fn access_field(
-        &mut self,
-        field: FieldId<'g>,
-        access_mode: AccessMode,
-    ) -> Result<(), Error>;
+    fn access_field(&mut self, field: FieldId<'g>, access_mode: AccessMode) -> Result<(), Error>;
 
     /// Construct a new object of the given type
     fn new(&mut self, class: ClassId<'g>) -> Result<(), Error>;
@@ -117,11 +98,7 @@ pub trait CodeBuilderExts<'a, 'g> {
 }
 
 impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
-    fn zero_local(
-        &mut self,
-        offset: u16,
-        field_type: FieldType<ClassId<'g>>,
-    ) -> Result<(), Error> {
+    fn zero_local(&mut self, offset: u16, field_type: FieldType<ClassId<'g>>) -> Result<(), Error> {
         match field_type {
             FieldType::Base(
                 BaseType::Int
@@ -168,11 +145,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Get a local at a particular offset
-    fn get_local(
-        &mut self,
-        offset: u16,
-        field_type: &FieldType<ClassId<'g>>,
-    ) -> Result<(), Error> {
+    fn get_local(&mut self, offset: u16, field_type: &FieldType<ClassId<'g>>) -> Result<(), Error> {
         let insn = match *field_type {
             FieldType::Base(
                 BaseType::Int
@@ -190,11 +163,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Set a local at a particular offset
-    fn set_local(
-        &mut self,
-        offset: u16,
-        field_type: &FieldType<ClassId<'g>>,
-    ) -> Result<(), Error> {
+    fn set_local(&mut self, offset: u16, field_type: &FieldType<ClassId<'g>>) -> Result<(), Error> {
         let insn = match *field_type {
             FieldType::Base(
                 BaseType::Int
@@ -212,10 +181,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
     }
 
     /// Return from the function
-    fn return_(
-        &mut self,
-        field_type_opt: Option<FieldType<ClassId<'g>>>,
-    ) -> Result<(), Error> {
+    fn return_(&mut self, field_type_opt: Option<FieldType<ClassId<'g>>>) -> Result<(), Error> {
         let insn = match field_type_opt {
             None => BranchInstruction::Return,
             Some(FieldType::Base(
@@ -436,11 +402,7 @@ impl<'a, 'g> CodeBuilderExts<'a, 'g> for BytecodeBuilder<'a, 'g> {
         self.push_instruction(Instruction::Invoke(InvokeType::Virtual, method))
     }
 
-    fn access_field(
-        &mut self,
-        field: FieldId<'g>,
-        access_mode: AccessMode,
-    ) -> Result<(), Error> {
+    fn access_field(&mut self, field: FieldId<'g>, access_mode: AccessMode) -> Result<(), Error> {
         self.push_instruction(match (field.is_static(), access_mode) {
             (true, AccessMode::Read) => Instruction::GetStatic(field),
             (true, AccessMode::Write) => Instruction::PutStatic(field),

@@ -4,11 +4,11 @@ use super::{
     UtilitiesStrategy, UtilityClass,
 };
 use crate::jvm;
+use crate::jvm::class_file::{ClassFile, InnerClass, InnerClasses};
 use crate::jvm::{
-    BinaryName, BranchInstruction, BytecodeBuilder, ClassAccessFlags, ClassBuilder,
-    ClassGraph, ConstantData, FieldAccessFlags, FieldType, InnerClassAccessFlags,
-    Instruction, JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name,
-    RefType, UnqualifiedName, ClassId,
+    BinaryName, BranchInstruction, BytecodeBuilder, ClassAccessFlags, ClassBuilder, ClassGraph,
+    ClassId, ConstantData, FieldAccessFlags, FieldType, InnerClassAccessFlags, Instruction,
+    JavaLibrary, MethodAccessFlags, MethodData, MethodDescriptor, Name, RefType, UnqualifiedName,
 };
 use crate::util::Width;
 use crate::wasm::{ref_type_from_general, FunctionType, StackType, TableType};
@@ -20,7 +20,6 @@ use wasmparser::{
     Import, ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
     TableSectionReader, Type, TypeRef, TypeSectionReader, Validator,
 };
-use crate::jvm::class_file::{ClassFile, InnerClasses, InnerClass};
 
 /// Main entry point for translating a WASM module
 pub struct ModuleTranslator<'a, 'g> {
@@ -142,7 +141,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 .concat(&UnqualifiedName::DOLLAR)
                 .concat(&name),
             java.classes.lang.object,
-            Some((InnerClassAccessFlags::STATIC | InnerClassAccessFlags::PRIVATE, wasm_module_class)),
+            Some((
+                InnerClassAccessFlags::STATIC | InnerClassAccessFlags::PRIVATE,
+                wasm_module_class,
+            )),
             vec![],
             class_graph,
             java,

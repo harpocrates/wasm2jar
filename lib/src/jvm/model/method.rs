@@ -1,15 +1,18 @@
-use crate::jvm::{BranchInstruction, SerializableInstruction};
-use crate::util::{RefId, Offset, OffsetVec, Width};
-use crate::jvm::verifier::VerifierFrame;
-use std::collections::HashMap;
-use std::fmt;
-use std::cell::Cell;
-use crate::jvm::{Instruction, JumpTargets, MethodId, ClassId, BootstrapMethodId, VerifierInstruction, ConstantsPool, ConstantPoolOverflow};
+use crate::jvm::constants_writer::ConstantsWriter;
 use crate::jvm::descriptors::RenderDescriptor;
 use crate::jvm::names::Name;
-use crate::jvm::constants_writer::ConstantsWriter;
-use std::rc::Rc;
+use crate::jvm::verifier::VerifierFrame;
+use crate::jvm::{
+    BootstrapMethodId, ClassId, ConstantPoolOverflow, ConstantsPool, Instruction, JumpTargets,
+    MethodId, VerifierInstruction,
+};
+use crate::jvm::{BranchInstruction, SerializableInstruction};
+use crate::util::{Offset, OffsetVec, RefId, Width};
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt;
+use std::rc::Rc;
 
 /// In-memory representation of a method
 pub struct Method<'g> {
@@ -32,7 +35,6 @@ pub struct Method<'g> {
 
 /// Method code.
 pub struct Code<'g> {
-
     /// Maximum size of locals through the method
     pub max_locals: Offset,
 
@@ -44,12 +46,19 @@ pub struct Code<'g> {
 
     /// Order of basic blocks in the code (elements are unique and exactly match keys of `blocks`)
     pub block_order: Vec<SynLabel>,
-
 }
 
-pub type SerializableBasicBlock<'g> = BasicBlock<VerifierFrame<'g>, SerializableInstruction, BranchInstruction<SynLabel, SynLabel, SynLabel>>;
+pub type SerializableBasicBlock<'g> = BasicBlock<
+    VerifierFrame<'g>,
+    SerializableInstruction,
+    BranchInstruction<SynLabel, SynLabel, SynLabel>,
+>;
 
-pub type VerifierBasicBlock<'g> = BasicBlock<VerifierFrame<'g>, VerifierInstruction<'g>, BranchInstruction<SynLabel, SynLabel, SynLabel>>;
+pub type VerifierBasicBlock<'g> = BasicBlock<
+    VerifierFrame<'g>,
+    VerifierInstruction<'g>,
+    BranchInstruction<SynLabel, SynLabel, SynLabel>,
+>;
 
 /// A JVM method code body is made up of a linear sequence of basic blocks.
 ///
@@ -76,8 +85,26 @@ impl<Frame, Insn: Width, BrInsn: Width> Width for BasicBlock<Frame, Insn, BrInsn
     }
 }
 
-impl<'g, Frame> BasicBlock<Frame, VerifierInstruction<'g>, BranchInstruction<SynLabel, SynLabel, SynLabel>> {
+impl<Frame, Insn: Width, BrInsn: Width> BasicBlock<Frame, Insn, BrInsn> {
+    /// Given an expected order of blocks, compute the offset of every basic block with respect to
+    /// that start of the method.
+    pub fn compute_block_offsets(
+        block_layout_order: &[SynLabel],
+        blocks: &HashMap<SynLabel, BasicBlock<Frame, Insn, BrInsn>>,
+    ) -> HashMap<SynLabel, Offset> {
+        let mut block_offsets: HashMap<SynLabel, Offset> = HashMap::new();
+        let mut offset = Offset(0);
+        for block_lbl in block_layout_order {
+            block_offsets.insert(*block_lbl, offset);
+            offset.0 += blocks[block_lbl].width();
+        }
+        block_offsets
+    }
+}
 
+impl<'g, Frame>
+    BasicBlock<Frame, VerifierInstruction<'g>, BranchInstruction<SynLabel, SynLabel, SynLabel>>
+{
     /// Serialize the instructions inside a block
     ///
     /// This is the point at which instructions referencing the constant pool get fully resolved
@@ -88,33 +115,43 @@ impl<'g, Frame> BasicBlock<Frame, VerifierInstruction<'g>, BranchInstruction<Syn
         constants: &ConstantsPool,
         bootstrap_methods: &mut HashMap<BootstrapMethodId<'g>, u16>,
         offset_from_start: Offset,
-    ) -> Result<BasicBlock<Frame, SerializableInstruction, BranchInstruction<SynLabel, SynLabel, ()>>, ConstantPoolOverflow> {
-
+    ) -> Result<
+        BasicBlock<Frame, SerializableInstruction, BranchInstruction<SynLabel, SynLabel, ()>>,
+        ConstantPoolOverflow,
+    > {
         // Serialize the instructions
-        let instructions = self.instructions
-            .iter()
-            .map(|(_, _, insn)| -> Result<SerializableInstruction, ConstantPoolOverflow> {
-                insn.map(
-                    |class| class.constant_index(constants),
-                    |constant| constant.constant_index(constants),
-                    |field| field.constant_index(constants),
-                    |method| method.constant_index(constants),
-                    |indy_method| -> Result<_, ConstantPoolOverflow> {
-                        let next_bootstrap_index = bootstrap_methods.len() as u16;
-                        let bootstrap_method = *bootstrap_methods
-                            .entry(indy_method.bootstrap)
-                            .or_insert(next_bootstrap_index);
-                        let method_utf8 = constants.get_utf8(indy_method.name.as_str())?;
-                        let desc_utf8 = constants.get_utf8(&indy_method.descriptor.render())?;
-                        let name_and_type_idx = constants.get_name_and_type(method_utf8, desc_utf8)?;
-                        Ok(constants.get_invoke_dynamic(bootstrap_method, name_and_type_idx)?)
+        let instructions =
+            self.instructions
+                .iter()
+                .map(
+                    |(_, _, insn)| -> Result<SerializableInstruction, ConstantPoolOverflow> {
+                        insn.map(
+                            |class| class.constant_index(constants),
+                            |constant| constant.constant_index(constants),
+                            |field| field.constant_index(constants),
+                            |method| method.constant_index(constants),
+                            |indy_method| -> Result<_, ConstantPoolOverflow> {
+                                let next_bootstrap_index = bootstrap_methods.len() as u16;
+                                let bootstrap_method = *bootstrap_methods
+                                    .entry(indy_method.bootstrap)
+                                    .or_insert(next_bootstrap_index);
+                                let method_utf8 = constants.get_utf8(indy_method.name.as_str())?;
+                                let desc_utf8 =
+                                    constants.get_utf8(&indy_method.descriptor.render())?;
+                                let name_and_type_idx =
+                                    constants.get_name_and_type(method_utf8, desc_utf8)?;
+                                Ok(constants
+                                    .get_invoke_dynamic(bootstrap_method, name_and_type_idx)?)
+                            },
+                        )
                     },
                 )
-            })
-            .collect::<Result<OffsetVec<SerializableInstruction>, ConstantPoolOverflow>>()?;
+                .collect::<Result<OffsetVec<SerializableInstruction>, ConstantPoolOverflow>>()?;
 
         // Ensure the branch instruction has the right padding
-        let mut branch_end = self.branch_end.map_labels(|lbl| *lbl, |lbl| *lbl, |_lbl| ());
+        let mut branch_end = self
+            .branch_end
+            .map_labels(|lbl| *lbl, |lbl| *lbl, |_lbl| ());
         let branch_off = offset_from_start.0 + instructions.offset_len().0;
         let padding = match (branch_off % 4) as u8 {
             0 => 0,
@@ -122,9 +159,13 @@ impl<'g, Frame> BasicBlock<Frame, VerifierInstruction<'g>, BranchInstruction<Syn
         };
         branch_end.set_padding(padding);
 
-        Ok(BasicBlock { offset_from_start, frame: self.frame, instructions, branch_end })
+        Ok(BasicBlock {
+            offset_from_start,
+            frame: self.frame,
+            instructions,
+            branch_end,
+        })
     }
-
 }
 
 /// Opaque label
@@ -145,7 +186,6 @@ impl SynLabel {
 pub struct SynLabelGenerator(SynLabel);
 
 impl SynLabelGenerator {
-
     pub fn new(start: SynLabel) -> SynLabelGenerator {
         SynLabelGenerator(start)
     }
@@ -162,4 +202,3 @@ impl fmt::Debug for SynLabel {
         formatter.write_fmt(format_args!("l{}", self.0))
     }
 }
-

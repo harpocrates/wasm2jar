@@ -1,6 +1,6 @@
-use byteorder::WriteBytesExt;
-use crate::jvm::{MethodAccessFlags, Utf8ConstantIndex};
 use crate::jvm::class_file::{Attribute, Serialize};
+use crate::jvm::{MethodAccessFlags, Utf8ConstantIndex};
+use byteorder::WriteBytesExt;
 
 /// Method declared by a class or interface
 ///

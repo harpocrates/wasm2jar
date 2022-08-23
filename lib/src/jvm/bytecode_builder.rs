@@ -1,12 +1,12 @@
 use super::*;
 
+use crate::jvm::class_file::{BytecodeArray, Code, Serialize, StackMapTable};
+use crate::jvm::model::{BasicBlock, SerializableBasicBlock, SynLabel};
+use crate::jvm::verifier::*;
+use crate::util::{Offset, OffsetVec, Width};
+use elsa::FrozenVec;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use crate::util::{OffsetVec, Width, Offset};
-use crate::jvm::class_file::{Code, StackMapTable, BytecodeArray, Serialize};
-use crate::jvm::model::{SynLabel, BasicBlock, SerializableBasicBlock};
-use crate::jvm::verifier::*;
-use elsa::FrozenVec;
 
 /*
 
@@ -455,10 +455,7 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
             let fall_through_insn = BranchInstruction::FallThrough(label);
             current_block
                 .latest_frame
-                .verify_branch_instruction(
-                    &fall_through_insn,
-                    &self.method.descriptor.return_type,
-                )
+                .verify_branch_instruction(&fall_through_insn, &self.method.descriptor.return_type)
                 .map_err(|kind| Error::VerifierBranchingError {
                     instruction: fall_through_insn.map_labels(|lbl| *lbl, |lbl| *lbl, |_| ()),
                     kind,
@@ -549,14 +546,16 @@ impl<'a, 'g> BytecodeBuilder<'a, 'g> {
                 .latest_frame
                 .kill_top_local(offset, local_type_assertion)
                 .map_err(|kind| Error::VerifierError {
-                    instruction: format!("Kill local (at offset {}): {:?}", offset, local_type_assertion),
+                    instruction: format!(
+                        "Kill local (at offset {}): {:?}",
+                        offset, local_type_assertion
+                    ),
                     kind,
                 })
         } else {
             Ok(())
         }
     }
-
 }
 
 /// Just like `BasicBlock`, but not closed off yet
@@ -666,4 +665,3 @@ impl<'g> CurrentBlock<'g> {
         Ok(())
     }
 }
-

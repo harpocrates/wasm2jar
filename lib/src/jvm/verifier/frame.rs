@@ -1,11 +1,15 @@
 use super::*;
-use crate::util::{OffsetVec, Width, Offset};
-use crate::jvm::VerifierInstruction;
-use crate::jvm::model::SynLabel;
 use crate::jvm::class_file::StackMapFrame;
 use crate::jvm::descriptors::RenderDescriptor;
+use crate::jvm::model::SynLabel;
+use crate::jvm::VerifierInstruction;
+use crate::jvm::{
+    ArrayType, BaseType, BinaryName, BranchInstruction, ClassConstantIndex, ClassGraph, ClassId,
+    ConstantData, ConstantPoolOverflow, ConstantsPool, FieldType, Instruction, InvokeType,
+    JavaClasses, RefType, UnqualifiedName, VerifierErrorKind,
+};
+use crate::util::{Offset, OffsetVec, Width};
 use std::collections::HashMap;
-use crate::jvm::{ClassId, ConstantsPool, BaseType, ClassConstantIndex, BranchInstruction, ArrayType, JavaClasses, Instruction, RefType, ClassGraph, FieldType, VerifierErrorKind, BinaryName, ConstantData, ConstantPoolOverflow, InvokeType, UnqualifiedName};
 
 /// A frame represents the state of the stack and local variables at any location in the bytecode
 ///
@@ -25,13 +29,11 @@ pub type VerifierFrame<'g> = Frame<RefType<ClassId<'g>>, UninitializedRefType<'g
 type VType<'g> = VerificationType<RefType<ClassId<'g>>, UninitializedRefType<'g>>;
 
 impl<'g> VerifierFrame<'g> {
-
     /// Generalize a type at the top of the stack
     pub fn generalize_top_stack_type(
         &mut self,
         general_type: RefType<ClassId<'g>>,
     ) -> Result<(), VerifierErrorKind> {
-
         let general_type = VType::Object(general_type.clone());
         let specific_type = pop_offset_vec(&mut self.stack)?;
         let is_valid_weakening = VerificationType::is_assignable(&specific_type, &general_type);
@@ -77,7 +79,14 @@ impl<'g> VerifierFrame<'g> {
         java: &JavaClasses<'g>,
         this_class: &RefType<ClassId<'g>>,
     ) -> Result<(), VerifierErrorKind> {
-        verify_instruction(self, java, this_class, insn, insn_offset_in_block, current_block)
+        verify_instruction(
+            self,
+            java,
+            this_class,
+            insn,
+            insn_offset_in_block,
+            current_block,
+        )
     }
 
     /// Update the frame to reflect the effects of the given branching instruction
@@ -125,9 +134,11 @@ impl<'g> VerifierFrame<'g> {
             vty.map(
                 |ref_type| ref_type.map(|cls| cls.name.clone()),
                 |uninit_ref_type| {
-                    let ref_type = uninit_ref_type.verification_type.map(|cls| cls.name.clone());
+                    let ref_type = uninit_ref_type
+                        .verification_type
+                        .map(|cls| cls.name.clone());
                     (ref_type, uninit_ref_type.offset_in_block)
-                }
+                },
             )
         };
         Frame {
@@ -214,7 +225,6 @@ impl Frame<ClassConstantIndex, u16> {
         }
     }
 }
-
 
 fn verify_instruction<'g>(
     frame: &mut VerifierFrame<'g>,
@@ -796,12 +806,8 @@ fn verify_instruction<'g>(
 
                     uninitialized @ Uninitialized(ref initialized_ref_type) => {
                         let reftype = initialized_ref_type.verification_type;
-                        replace_all(stack, &uninitialized, || {
-                            Object(reftype.clone())
-                        });
-                        replace_all(locals, &uninitialized, || {
-                            Object(reftype.clone())
-                        });
+                        replace_all(stack, &uninitialized, || Object(reftype.clone()));
+                        replace_all(locals, &uninitialized, || Object(reftype.clone()));
                     }
 
                     _ => return Err(VerifierErrorKind::InvalidType),

@@ -1,4 +1,4 @@
-use crate::jvm::{FieldId, ConstantData};
+use crate::jvm::{ConstantData, FieldId};
 
 /// In-memory representation of a field
 pub struct Field<'g> {

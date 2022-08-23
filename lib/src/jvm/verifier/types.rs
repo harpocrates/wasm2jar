@@ -1,10 +1,13 @@
-use byteorder::WriteBytesExt;
 use crate::jvm::class_file::Serialize;
-use crate::util::{Width, Offset};
 use crate::jvm::constants_writer::ConstantsWriter;
-use crate::jvm::{ClassId, BaseType, ConstantsPool, ClassConstantIndex, RefType, ClassGraph, FieldType, ConstantPoolOverflow};
-use std::collections::HashMap;
 use crate::jvm::model::SynLabel;
+use crate::jvm::{
+    BaseType, ClassConstantIndex, ClassGraph, ClassId, ConstantPoolOverflow, ConstantsPool,
+    FieldType, RefType,
+};
+use crate::util::{Offset, Width};
+use byteorder::WriteBytesExt;
+use std::collections::HashMap;
 
 /// These types are from [this hierarchy][0]
 ///
@@ -168,7 +171,6 @@ impl<C, U> VerificationType<C, U> {
         }
     }
 }
-
 
 /// During code generation, after a `new` instruction, the top of the stack will contain an
 /// uninitialized value. Although ultimately the stack map frame will contain only an absolute

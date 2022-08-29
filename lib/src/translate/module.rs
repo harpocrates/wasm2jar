@@ -24,6 +24,7 @@ use wasmparser::{
     Import, ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
     TableSectionReader, Type, TypeRef, TypeSectionReader, Validator,
 };
+use crate::runtime::{WasmRuntime, make_function_class, make_global_class, make_function_table_class, make_reference_table_class, make_memory_class};
 
 /// Main entry point for translating a WASM module
 pub struct ModuleTranslator<'a, 'g> {
@@ -34,6 +35,7 @@ pub struct ModuleTranslator<'a, 'g> {
     fields_generated: bool,
     class_graph: &'g ClassGraph<'g>,
     java: &'g JavaLibrary<'g>,
+    runtime: WasmRuntime<'g>,
 
     current_part: CurrentPart<'g>,
 
@@ -91,6 +93,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         ));
         let current_part = Self::new_part(&settings, class_id, class_graph, java, 0)?;
         let utilities = UtilityClass::new(&settings, class_id, class_graph, java)?;
+        let runtime = WasmRuntime::add_to_graph(class_graph, &java.classes);
 
         Ok(ModuleTranslator {
             settings,
@@ -100,6 +103,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             fields_generated: false,
             class_graph,
             java,
+            runtime,
             current_part,
             utilities,
             types: vec![],
@@ -899,8 +903,9 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.const_string(import_loc.name.to_string())?;
                 jvm_code.invoke(jvm_code.java.members.util.map.get)?;
                 jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
-                    jvm_code.java.classes.lang.invoke.method_handle,
+                    self.runtime.classes.function,
                 )))?;
+                jvm_code.access_field(self.runtime.members.function.handle, AccessMode::Read)?;
 
                 // Assign it to the right field
                 jvm_code.access_field(*import_field, AccessMode::Write)?;
@@ -946,6 +951,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             let method = function.method;
             let method_handle = ConstantData::MethodHandle(method);
 
+            // `new org.wasm2jar.Function(handle);`
+            jvm_code.new(self.runtime.classes.function)?;
+            jvm_code.push_instruction(Instruction::Dup)?;
+
             // `MethodHandles.insertArguments(hdl, n - 1, new Object[1] { this })`
             jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
             jvm_code.const_int((method.descriptor.parameters.len() - 1) as i32)?;
@@ -964,6 +973,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     .method_handles
                     .insert_arguments,
             )?;
+            jvm_code.invoke(self.runtime.members.function.init)?;
 
             // Put the value in the map
             jvm_code.invoke(jvm_code.java.members.util.map.put)?;
@@ -1030,6 +1040,15 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         self.generate_exports()?;
         self.generate_constructor()?;
 
+        // Prepare runtime libraries
+        let runtime_classes = vec![
+            make_function_class(self.class_graph, self.java, &self.runtime)?,
+            make_global_class(self.class_graph, self.java, &self.runtime)?,
+            make_function_table_class(self.class_graph, self.java, &self.runtime)?,
+            make_reference_table_class(self.class_graph, self.java, &self.runtime)?,
+            make_memory_class(self.class_graph, self.java, &self.runtime)?,
+        ];
+
         // Assemble all the parts
         let mut parts = self.previous_parts;
         parts.push(self.current_part.result()?);
@@ -1038,6 +1057,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         let results: Vec<(BinaryName, class_file::ClassFile)> = iter::once(self.class)
             .chain(self.utilities.into_builder().into_iter())
             .chain(parts.into_iter())
+            .chain(runtime_classes.into_iter())
             .map(|builder| {
                 let name = builder.id.name.clone();
                 builder

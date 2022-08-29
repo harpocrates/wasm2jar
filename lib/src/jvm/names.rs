@@ -41,6 +41,15 @@ pub trait Name: Sized {
 
     /// Try to construct a name from a string
     fn from_string(name: String) -> Result<Self, String>;
+
+    fn from_str(name: &'static str) -> Result<Self, String> {
+        match Self::check_valid(name) {
+            Ok(()) => Ok(Self::from_str_unsafe(name)),
+            Err(msg) => Err(msg),
+        }
+    }
+
+    fn from_str_unsafe(name: &'static str) -> Self;
 }
 
 impl Name for UnqualifiedName {
@@ -68,6 +77,10 @@ impl Name for UnqualifiedName {
             Err(msg) => Err(msg),
         }
     }
+
+    fn from_str_unsafe(name: &'static str) -> Self {
+        UnqualifiedName(Cow::Borrowed(name))
+    }
 }
 
 impl Name for BinaryName {
@@ -89,6 +102,10 @@ impl Name for BinaryName {
             Ok(()) => Ok(BinaryName(Cow::Owned(name))),
             Err(msg) => Err(msg),
         }
+    }
+
+    fn from_str_unsafe(name: &'static str) -> Self {
+        BinaryName(Cow::Borrowed(name))
     }
 }
 

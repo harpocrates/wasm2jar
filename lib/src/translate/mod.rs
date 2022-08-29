@@ -129,7 +129,7 @@ pub struct Function<'a, 'g> {
     pub tailcall_method: Option<MethodId<'g>>,
 
     /// If the function is imported, this contains the name under which it is imported along with
-    /// the field (no the main WASM object) holding the method handle
+    /// the field (on the main WASM object) holding the method handle.
     pub import: Option<(ImportName<'a>, FieldId<'g>)>,
 
     /// If the function is exported, this holds the export information

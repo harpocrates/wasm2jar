@@ -98,6 +98,9 @@ pub trait CodeBuilderExts<'g> {
     /// Construct a new object of the given type
     fn new(&mut self, class: ClassId<'g>) -> Result<(), Error>;
 
+    /// Do a `checkcast` on the given type
+    fn checkcast(&mut self, class: ClassId<'g>) -> Result<(), Error>;
+
     /// Construct a new array of the given type
     fn new_ref_array(&mut self, elem_type: RefType<ClassId<'g>>) -> Result<(), Error>;
 }
@@ -418,6 +421,10 @@ impl<'g> CodeBuilderExts<'g> for CodeBuilder<'g> {
 
     fn new(&mut self, class: ClassId<'g>) -> Result<(), Error> {
         self.push_instruction(Instruction::New(RefType::Object(class)))
+    }
+
+    fn checkcast(&mut self, class: ClassId<'g>) -> Result<(), Error> {
+        self.push_instruction(Instruction::CheckCast(RefType::Object(class)))
     }
 
     /// Construct a new array of the given type

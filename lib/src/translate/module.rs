@@ -1,6 +1,6 @@
 use super::{
     BootstrapUtilities, Element, Error, ExportName, Function, FunctionTranslator, Global,
-    ImportName, MemberOrigin, Memory, Settings, Table, UtilityClass,
+    ImportName, MemberOrigin, Memory, Settings, Table, UtilityClass, GlobalRepr,
 };
 use crate::jvm;
 use crate::jvm::class_file;
@@ -405,10 +405,23 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             }),
 
             TypeRef::Global(global_type) => {
+                let global_idx = self.globals.len();
+                let field = self.class_graph.add_field(FieldData {
+                    class: self.class.id,
+                    access_flags: FieldAccessFlags::PRIVATE | FieldAccessFlags::FINAL,
+                    name: self.settings.wasm_import_name(global_idx as usize),
+                    descriptor: FieldType::object(self.runtime.classes.global),
+                });
+                self.class.add_field(Field {
+                    id: field,
+                    generic_signature: None,
+                    constant_value: None,
+                });
+
                 self.globals.push(Global {
                     origin,
-                    field_name: name,
-                    field: None,
+                    field,
+                    repr: GlobalRepr::BoxedExternal,
                     global_type: StackType::from_general(global_type.content_type)?,
                     mutable: global_type.mutable,
                     initial: None,
@@ -792,7 +805,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     if let Some(init_expr) = &global.initial {
                         jvm_code.push_instruction(Instruction::ALoad(0))?;
                         self.translate_init_expr(&mut jvm_code, init_expr)?;
-                        jvm_code.access_field(global.field.unwrap(), AccessMode::Write)?;
+                        global.write(&mut jvm_code)?;
                     }
                 } else {
                     todo!()

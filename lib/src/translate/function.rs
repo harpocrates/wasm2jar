@@ -1485,15 +1485,12 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
     /// Visit a global get operator
     fn visit_global_get(&mut self, global_index: u32) -> Result<(), Error> {
         let global = &self.wasm_globals[global_index as usize];
-        if global.origin.is_internal() {
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code
-                .access_field(global.field.unwrap(), AccessMode::Read)?;
-        } else {
-            todo!()
-        }
+
+        // Read from the field
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        global.read(&mut self.jvm_code)?;
 
         Ok(())
     }
@@ -1507,17 +1504,14 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let temp_index = self.jvm_locals.push_local(global_field_type.clone())?;
         self.jvm_code.set_local(temp_index, &global_field_type)?;
 
-        if global.origin.is_internal() {
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code.get_local(temp_index, &global_field_type)?;
-            self.jvm_code
-                .access_field(global.field.unwrap(), AccessMode::Write)?;
-        } else {
-            todo!()
-        }
+        // Write to the field
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        self.jvm_code.get_local(temp_index, &global_field_type)?;
+        global.write(&mut self.jvm_code)?;
 
+        // Clear the local
         self.jvm_code
             .kill_top_local(temp_index, Some(global_field_type))?;
         self.jvm_locals.pop_local()?;

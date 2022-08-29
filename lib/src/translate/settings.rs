@@ -170,8 +170,7 @@ impl Settings {
 
     /// Name given to the `MethodHandle` fields that store imported functions
     pub fn wasm_global_import_name(&self, import_idx: usize) -> UnqualifiedName {
-        self.wasm_import_name_prefix
-            .concat(&UnqualifiedName::from_str_unsafe("_global"))
+        self.wasm_global_name_prefix
             .concat(&UnqualifiedName::number(import_idx))
     }
 }

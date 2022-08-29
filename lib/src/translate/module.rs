@@ -279,12 +279,12 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             };
             let field_name = self
                 .settings
-                .wasm_global_name_prefix
-                .concat(&UnqualifiedName::number(self.globals.len()));
+                .wasm_global_import_name(self.globals.len());
             let global = Global {
                 origin,
                 field_name,
                 field: None,
+                repr: GlobalRepr::UnboxedInternal,
                 global_type: StackType::from_general(ty.content_type)?,
                 mutable: ty.mutable,
                 initial: Some(init_expr),
@@ -297,14 +297,15 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     /// Generate the fields associated with globals
     fn generate_global_fields(&mut self) -> Result<(), Error> {
         for global in &mut self.globals {
-            if !global.origin.is_internal() {
-                todo!("exported/imported global")
-            }
+            let access_flags = match global.repr {
+                GlobalRepr::BoxedExternal => FieldAccessFlags::FINAL,
+                GlobalRepr::UnboxedInternal if global.mutable => FieldAccessFlags::PRIVATE,
+                GlobalRepr::UnboxedInternal => FieldAccessFlags::PRIVATE | FieldAccessFlags::FINAL,
+            };
 
-            let mutable_flag = if global.mutable {
-                FieldAccessFlags::empty()
-            } else {
-                FieldAccessFlags::FINAL
+            let descriptor = match global.repr {
+                GlobalRepr::BoxedExternal => FieldType::object(self.runtime.classes.global),
+                GlobalRepr::UnboxedInternal => global.global_type.field_type(&self.java.classes),
             };
 
             // TODO: this only works for Java 11+. For other Java versions, private fields from
@@ -312,9 +313,9 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             // _are_ visible)
             let field_id = self.class_graph.add_field(FieldData {
                 class: self.class.id,
-                access_flags: FieldAccessFlags::PRIVATE | mutable_flag,
+                access_flags,
                 name: global.field_name.clone(),
-                descriptor: global.global_type.field_type(&self.java.classes),
+                descriptor,
             });
             self.class.add_field(Field {
                 id: field_id,
@@ -405,22 +406,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             }),
 
             TypeRef::Global(global_type) => {
-                let global_idx = self.globals.len();
-                let field = self.class_graph.add_field(FieldData {
-                    class: self.class.id,
-                    access_flags: FieldAccessFlags::PRIVATE | FieldAccessFlags::FINAL,
-                    name: self.settings.wasm_import_name(global_idx as usize),
-                    descriptor: FieldType::object(self.runtime.classes.global),
-                });
-                self.class.add_field(Field {
-                    id: field,
-                    generic_signature: None,
-                    constant_value: None,
-                });
-
                 self.globals.push(Global {
                     origin,
-                    field,
+                    field: None,
+                    field_name: self.settings.wasm_global_import_name(self.globals.len()),
                     repr: GlobalRepr::BoxedExternal,
                     global_type: StackType::from_general(global_type.content_type)?,
                     mutable: global_type.mutable,

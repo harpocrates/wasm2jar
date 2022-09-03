@@ -54,6 +54,7 @@ impl JavaHarness {
 
         // Class pre-amble
         for import in &[
+            "org.wasm2jar.*",
             "java.lang.invoke.MethodHandle",
             "java.lang.invoke.MethodHandles",
             "java.lang.invoke.MethodType",
@@ -81,10 +82,7 @@ impl JavaHarness {
         format!("testMethod{}", idx)
     }
 
-    /// Get a mutable reference to the Java code writer in order to write in another test
-    ///
-    /// Every time this gets called, the test counter is incremented
-    pub fn writer(&mut self) -> io::Result<&mut JavaWriter<fs::File>> {
+    pub fn finish_test(&mut self) -> io::Result<()> {
         self.tests_in_latest_method += 1;
 
         // Switch to a new test method if we've exceeded the max number of tests in this method
@@ -95,6 +93,13 @@ impl JavaHarness {
             self.tests_in_latest_method = 0;
         }
 
+        Ok(())
+    }
+
+    /// Get a mutable reference to the Java code writer in order to write in another test
+    ///
+    /// Every time this gets called, the test counter is incremented
+    pub fn writer(&mut self) -> io::Result<&mut JavaWriter<fs::File>> {
         Ok(&mut self.writer)
     }
 
@@ -237,8 +242,23 @@ impl JavaHarness {
             .inline_code("final var spectest = new java.util.HashMap<String, Object>();")?;
         self.writer.newline()?;
         self.writer.inline_code(
-            "spectest.put(\"print_i32\", lookup.findVirtual(java.io.PrintStream.class, \"print\", MethodType.methodType(void.class, int.class)).bindTo(System.out));",
+            "spectest.put(\"print_i32\", new org.wasm2jar.Function(lookup.findVirtual(java.io.PrintStream.class, \"print\", MethodType.methodType(void.class, int.class)).bindTo(System.out)));",
         )?;
+        self.writer.newline()?;
+        self.writer.inline_code(
+            "spectest.put(\"print\", new org.wasm2jar.Function(lookup.findVirtual(java.io.PrintStream.class, \"print\", MethodType.methodType(void.class, String.class)).bindTo(System.out).bindTo(\"\")));",
+        )?;
+        self.writer.newline()?;
+        self.writer
+            .inline_code("spectest.put(\"global_i32\", new org.wasm2jar.Global(666));")?;
+        self.writer.newline()?;
+        self.writer
+            .inline_code("spectest.put(\"global_i64\", new org.wasm2jar.Global(666L));")?;
+        self.writer.newline()?;
+        self.writer
+            .inline_code("spectest.put(\"global_f64\", new org.wasm2jar.Global(666d));")?;
+        self.writer.newline()?;
+        self.writer.inline_code("spectest.put(\"memory\", new org.wasm2jar.Memory(java.nio.ByteBuffer.allocate(65536)));")?;
         self.writer.newline()?;
         self.writer.inline_code_fmt(format_args!(
             "{}.put(\"spectest\", spectest);",

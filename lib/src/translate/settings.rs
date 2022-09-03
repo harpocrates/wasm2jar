@@ -167,6 +167,21 @@ impl Settings {
         self.wasm_import_name_prefix
             .concat(&UnqualifiedName::number(import_idx))
     }
+
+    pub fn wasm_global_name(&self, import_idx: usize) -> UnqualifiedName {
+        self.wasm_global_name_prefix
+            .concat(&UnqualifiedName::number(import_idx))
+    }
+
+    pub fn wasm_memory_name(&self, memory_idx: usize) -> UnqualifiedName {
+        self.wasm_memory_name_prefix
+            .concat(&UnqualifiedName::number(memory_idx))
+    }
+
+    pub fn wasm_table_name(&self, import_idx: usize) -> UnqualifiedName {
+        self.wasm_table_name_prefix
+            .concat(&UnqualifiedName::number(import_idx))
+    }
 }
 
 pub enum ExportStrategy {

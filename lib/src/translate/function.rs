@@ -2,12 +2,13 @@ use super::{
     BootstrapUtilities, Error, Function, Global, Memory, Settings, Table, UtilityClass,
     UtilityMethod,
 };
-use crate::jvm::class_graph::{AccessMode, ClassId};
+use crate::jvm::class_graph::ClassId;
 use crate::jvm::code::{
     BranchCond, BranchInstruction, CodeBuilder, CodeBuilderExts, EqComparison, Instruction,
     OrdComparison, SynLabel,
 };
 use crate::jvm::{BaseType, FieldType, MethodDescriptor, RefType, UnqualifiedName};
+use crate::runtime::WasmRuntime;
 use crate::util::{OffsetVec, Width};
 use crate::wasm::{
     ref_type_from_general, ControlFrame, FunctionType, StackType, WasmModuleResourcesExt,
@@ -17,8 +18,7 @@ use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::ops::Not;
 use wasmparser::{
-    BlockType, BrTable, FuncValidator, FunctionBody, MemoryImmediate, Operator, ValType,
-    ValidatorResources,
+    BlockType, BrTable, FuncValidator, FunctionBody, MemArg, Operator, ValType, ValidatorResources,
 };
 
 /// Context for translating a WASM function into a JVM one
@@ -38,6 +38,8 @@ pub struct FunctionTranslator<'a, 'b, 'g> {
     /// Code builder
     jvm_code: &'b mut CodeBuilder<'g>,
 
+    runtime: &'b WasmRuntime<'g>,
+
     /// Main module class
     class: ClassId<'g>,
 
@@ -45,10 +47,10 @@ pub struct FunctionTranslator<'a, 'b, 'g> {
     wasm_functions: &'b [Function<'a, 'g>],
 
     /// Tables
-    wasm_tables: &'b [Table<'g>],
+    wasm_tables: &'b [Table<'a, 'g>],
 
     /// Memories
-    wasm_memories: &'b [Memory<'g>],
+    wasm_memories: &'b [Memory<'a, 'g>],
 
     /// Globals
     wasm_globals: &'b [Global<'a, 'g>],
@@ -80,9 +82,10 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         bootstrap_utilities: &'b mut BootstrapUtilities<'g>,
         jvm_code: &'b mut CodeBuilder<'g>,
         class: ClassId<'g>,
+        runtime: &'b WasmRuntime<'g>,
         wasm_functions: &'b [Function<'a, 'g>],
-        wasm_tables: &'b [Table<'g>],
-        wasm_memories: &'b [Memory<'g>],
+        wasm_tables: &'b [Table<'a, 'g>],
+        wasm_memories: &'b [Memory<'a, 'g>],
         wasm_globals: &'b [Global<'a, 'g>],
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<ValidatorResources>,
@@ -103,6 +106,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             jvm_code,
             jvm_locals,
             class,
+            runtime,
             wasm_functions,
             wasm_tables,
             wasm_memories,
@@ -126,23 +130,18 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
     ///
     /// This also handles zero-initializing the locals (as is required by WASM)
     fn visit_locals(&mut self) -> Result<(), Error> {
-        // I'd like to use `get_locals_reader`, but that doesn't expose the offset
         let mut reader = self.wasm_function.get_binary_reader();
+        self.wasm_validator.read_locals(&mut reader)?;
 
-        for _ in 0..reader.read_var_u32()? {
-            let offset = reader.original_position();
-            let count = reader.read_var_u32()?;
-            let local_type = reader.read_val_type()?;
-            self.wasm_validator
-                .define_locals(offset, count, local_type)?;
+        let first_local_idx = self.function_typ.inputs.len() as u32;
+        for local_idx in first_local_idx..self.wasm_validator.len_locals() {
+            let local_type = self.wasm_validator.get_local_type(local_idx).unwrap();
 
             // WASM locals are zero initialized
             let local_type = StackType::from_general(local_type)?;
-            for _ in 0..count {
-                let field_type = local_type.field_type(&self.jvm_code.java.classes);
-                let idx = self.jvm_locals.push_local(field_type.clone())?;
-                self.jvm_code.zero_local(idx, field_type)?;
-            }
+            let field_type = local_type.field_type(&self.jvm_code.java.classes);
+            let idx = self.jvm_locals.push_local(field_type.clone())?;
+            self.jvm_code.zero_local(idx, field_type)?;
         }
 
         Ok(())
@@ -152,6 +151,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
     fn visit_operators(&mut self) -> Result<(), Error> {
         let op_reader = self.wasm_function.get_operators_reader()?;
         let mut op_iter = op_reader.into_iter_with_offsets();
+        let mut last_offset = 0;
 
         /* When we call `visit_operator`, we need to pass in an operator which we know will get
          * consumed and an option of an operator that may be consumed. We keep a mutable option
@@ -162,13 +162,18 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             let this_operator = if let Some(operator) = next_operator.take() {
                 operator
             } else if let Some(op_offset) = op_iter.next() {
-                op_offset?
+                let operator_offset = op_offset?;
+                last_offset = operator_offset.1;
+                operator_offset
             } else {
                 break;
             };
             next_operator = match op_iter.next() {
                 None => None,
-                Some(Ok(next_op)) => Some(next_op),
+                Some(Ok(next_op)) => {
+                    last_offset = next_op.1;
+                    Some(next_op)
+                }
                 Some(Err(err)) => return Err(Error::WasmParser(err)),
             };
 
@@ -180,7 +185,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             self.visit_return()?;
         }
 
-        self.wasm_validator.finish(Self::BAD_OFFSET)?;
+        self.wasm_validator.finish(last_offset + 1)?;
         Ok(())
     }
 
@@ -1485,15 +1490,12 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
     /// Visit a global get operator
     fn visit_global_get(&mut self, global_index: u32) -> Result<(), Error> {
         let global = &self.wasm_globals[global_index as usize];
-        if global.origin.is_internal() {
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code
-                .access_field(global.field.unwrap(), AccessMode::Read)?;
-        } else {
-            todo!()
-        }
+
+        // Read from the field
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        global.read(self.runtime, &mut self.jvm_code)?;
 
         Ok(())
     }
@@ -1507,17 +1509,14 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let temp_index = self.jvm_locals.push_local(global_field_type.clone())?;
         self.jvm_code.set_local(temp_index, &global_field_type)?;
 
-        if global.origin.is_internal() {
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code.get_local(temp_index, &global_field_type)?;
-            self.jvm_code
-                .access_field(global.field.unwrap(), AccessMode::Write)?;
-        } else {
-            todo!()
-        }
+        // Write to the field
+        let this_off = self.jvm_locals.lookup_this()?.0;
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        self.jvm_code.get_local(temp_index, &global_field_type)?;
+        global.write(self.runtime, &mut self.jvm_code)?;
 
+        // Clear the local
         self.jvm_code
             .kill_top_local(temp_index, Some(global_field_type))?;
         self.jvm_locals.pop_local()?;
@@ -1531,7 +1530,9 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
 
         let desc = MethodDescriptor {
             parameters: vec![FieldType::int()],
-            return_type: Some(table.table_type.field_type(&self.jvm_code.java.classes)),
+            return_type: Some(FieldType::Ref(
+                table.element_type(&self.jvm_code.java.classes),
+            )),
         };
         self.visit_table_operator(table_idx, UnqualifiedName::TABLEGET, desc)?;
 
@@ -1545,7 +1546,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let desc = MethodDescriptor {
             parameters: vec![
                 FieldType::int(),
-                table.table_type.field_type(&self.jvm_code.java.classes),
+                FieldType::Ref(table.element_type(&self.jvm_code.java.classes)),
             ],
             return_type: None,
         };
@@ -1560,7 +1561,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
 
         let desc = MethodDescriptor {
             parameters: vec![
-                table.table_type.field_type(&self.jvm_code.java.classes),
+                FieldType::Ref(table.element_type(&self.jvm_code.java.classes)),
                 FieldType::int(),
             ],
             return_type: Some(FieldType::int()),
@@ -1588,7 +1589,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let desc = MethodDescriptor {
             parameters: vec![
                 FieldType::int(),
-                table.table_type.field_type(&self.jvm_code.java.classes),
+                FieldType::Ref(table.element_type(&self.jvm_code.java.classes)),
                 FieldType::int(),
             ],
             return_type: None,
@@ -1628,89 +1629,29 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         Ok(())
     }
 
-    fn visit_memory_load(&mut self, memarg: MemoryImmediate, ty: BaseType) -> Result<(), Error> {
+    fn visit_memory_load(&mut self, memarg: MemArg, ty: BaseType) -> Result<(), Error> {
         let memory = &self.wasm_memories[memarg.memory as usize];
-
-        // Adjust the offset
-        if memarg.offset != 0 {
-            self.jvm_code.const_int(memarg.offset as i32)?; // TODO: overflow
-            self.jvm_code.push_instruction(Instruction::IAdd)?;
-        }
-
-        // Load the memory
         let this_off = self.jvm_locals.lookup_this()?.0;
-        self.jvm_code
-            .push_instruction(Instruction::ALoad(this_off))?;
-        self.jvm_code
-            .access_field(memory.field.unwrap(), AccessMode::Read)?;
-
-        // Re-order the stack and call the get function
-        self.jvm_code.push_instruction(Instruction::Swap)?;
-        let get_func = match ty {
-            BaseType::Byte => self.jvm_code.java.members.nio.byte_buffer.get_byte,
-            BaseType::Short => self.jvm_code.java.members.nio.byte_buffer.get_short,
-            BaseType::Int => self.jvm_code.java.members.nio.byte_buffer.get_int,
-            BaseType::Float => self.jvm_code.java.members.nio.byte_buffer.get_float,
-            BaseType::Long => self.jvm_code.java.members.nio.byte_buffer.get_long,
-            BaseType::Double => self.jvm_code.java.members.nio.byte_buffer.get_double,
-            t => panic!("Cannot get {:?}", t),
-        };
-        self.jvm_code.invoke(get_func)?;
+        memory.load(&self.runtime, &mut self.jvm_code, this_off, memarg, ty)?;
 
         Ok(())
     }
 
-    fn visit_memory_store(&mut self, memarg: MemoryImmediate, ty: BaseType) -> Result<(), Error> {
+    fn visit_memory_store(&mut self, memarg: MemArg, ty: BaseType) -> Result<(), Error> {
         let memory = &self.wasm_memories[memarg.memory as usize];
+        let this_off = self.jvm_locals.lookup_this()?.0;
 
-        if ty.width() == 1 && memarg.offset == 0 {
-            // Load the memory
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code
-                .access_field(memory.field.unwrap(), AccessMode::Read)?;
-
-            // Re-order the stack
-            self.jvm_code.push_instruction(Instruction::DupX2)?;
-            self.jvm_code.push_instruction(Instruction::Pop)?;
-        } else {
-            // Stash the value being stored
-            let off = self.jvm_locals.push_local(FieldType::Base(ty))?;
-            self.jvm_code.set_local(off, &FieldType::Base(ty))?;
-
-            // Adjust the offset
-            if memarg.offset != 0 {
-                self.jvm_code.const_int(memarg.offset as i32)?; // TODO: overflow
-                self.jvm_code.push_instruction(Instruction::IAdd)?;
-            }
-
-            // Load the memory
-            let this_off = self.jvm_locals.lookup_this()?.0;
-            self.jvm_code
-                .push_instruction(Instruction::ALoad(this_off))?;
-            self.jvm_code
-                .access_field(memory.field.unwrap(), AccessMode::Read)?;
-
-            // Re-order the stack
-            self.jvm_code.push_instruction(Instruction::Swap)?;
-            self.jvm_code.get_local(off, &FieldType::Base(ty))?;
-            let (off, ty) = self.jvm_locals.pop_local()?;
-            self.jvm_code.kill_top_local(off, Some(ty))?;
-        }
-
-        // Call the store function
-        let put_func = match ty {
-            BaseType::Byte => self.jvm_code.java.members.nio.byte_buffer.put_byte,
-            BaseType::Short => self.jvm_code.java.members.nio.byte_buffer.put_short,
-            BaseType::Int => self.jvm_code.java.members.nio.byte_buffer.put_int,
-            BaseType::Float => self.jvm_code.java.members.nio.byte_buffer.put_float,
-            BaseType::Long => self.jvm_code.java.members.nio.byte_buffer.put_long,
-            BaseType::Double => self.jvm_code.java.members.nio.byte_buffer.put_double,
-            t => panic!("Cannot store {:?}", t),
-        };
-        self.jvm_code.invoke(put_func)?;
-        self.jvm_code.push_instruction(Instruction::Pop)?;
+        // TODO: this is unused if the type has width 1
+        let temp_off = self.jvm_locals.push_local(FieldType::Base(ty))?;
+        memory.store(
+            &self.runtime,
+            &mut self.jvm_code,
+            this_off,
+            temp_off,
+            memarg,
+            ty,
+        )?;
+        self.jvm_locals.pop_local()?;
 
         Ok(())
     }
@@ -1777,9 +1718,6 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
 
         Ok(())
     }
-
-    // TODO: everywhere we use this, we should find a way to thread through the _actual_ offset
-    const BAD_OFFSET: usize = 0;
 }
 
 // #[derive(Debug)]

@@ -8,6 +8,7 @@ use std::io;
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::process::Command;
+use wasm2jar::jvm::Name;
 use wasm2jar::{jvm, translate};
 use wast::component::Component;
 use wast::core::Module;
@@ -80,6 +81,9 @@ impl<'a> TestHarness<'a> {
 
         for directive in directives {
             harness.visit_directive(directive)?;
+            if let Some((harness, _)) = harness.latest_java_harness.as_mut() {
+                harness.finish_test()?;
+            }
         }
         harness.end_java_harness(true)?;
 
@@ -93,19 +97,10 @@ impl<'a> TestHarness<'a> {
     }
 
     fn visit_directive(&mut self, directive: WastDirective<'a>) -> Result<(), TestError> {
-        use jvm::Name;
-
         match directive {
             WastDirective::Wat(module) => {
                 self.end_java_harness(false)?;
-                for (class_name, class) in self.visit_module(module)? {
-                    let class_file = self
-                        .output_directory
-                        .join(format!("{}.class", class_name.as_str()));
-                    class
-                        .save_to_path(&class_file, true)
-                        .map_err(|err| translate::Error::BytecodeGen(jvm::Error::IoError(err)))?;
-                }
+                self.visit_module_and_save_classfiles(module)?;
             }
 
             WastDirective::AssertMalformed {
@@ -140,14 +135,17 @@ impl<'a> TestHarness<'a> {
 
                 match results.as_slice() {
                     [] => {
-                        Self::java_execute(&exec, harness)?;
+                        self.java_execute(exec)?;
+                        let harness = self.get_java_writer()?;
                         harness.inline_code(";")?;
                     }
                     [result] => {
                         let (typ, _boxed_ty, _unbox) = Self::java_assert_type(result);
+                        let harness = self.get_java_writer()?;
                         harness
                             .inline_code_fmt(format_args!("{typ} result = ({typ})", typ = typ))?;
-                        Self::java_execute(&exec, harness)?;
+                        self.java_execute(exec)?;
+                        let harness = self.get_java_writer()?;
                         harness.inline_code(";")?;
                         harness.newline()?;
 
@@ -169,7 +167,8 @@ impl<'a> TestHarness<'a> {
                     }
                     _ => {
                         harness.inline_code("Object[] result = (Object[])")?;
-                        Self::java_execute(&exec, harness)?;
+                        self.java_execute(exec)?;
+                        let harness = self.get_java_writer()?;
                         harness.inline_code(";")?;
                         harness.newline()?;
 
@@ -204,6 +203,7 @@ impl<'a> TestHarness<'a> {
                     }
                 }
 
+                let harness = self.get_java_writer()?;
                 harness.close_curly_block()?;
                 harness.inline_code("catch (Throwable e)")?;
                 harness.open_curly_block()?;
@@ -230,7 +230,8 @@ impl<'a> TestHarness<'a> {
                 harness.inline_code("try")?;
                 harness.open_curly_block()?;
 
-                Self::java_execute(&exec, harness)?;
+                self.java_execute(exec)?;
+                let harness = self.get_java_writer()?;
                 harness.inline_code(";")?;
                 harness.newline()?;
                 harness
@@ -397,6 +398,18 @@ impl<'a> TestHarness<'a> {
         }
     }
 
+    fn visit_module_and_save_classfiles(&mut self, module: QuoteWat<'a>) -> Result<(), TestError> {
+        for (class_name, class) in self.visit_module(module)? {
+            let class_file = self
+                .output_directory
+                .join(format!("{}.class", class_name.as_str()));
+            class
+                .save_to_path(&class_file, true)
+                .map_err(|err| translate::Error::BytecodeGen(jvm::Error::IoError(err)))?;
+        }
+        Ok(())
+    }
+
     /// Try to translate a module, expecting to get a certain error message
     fn visit_module_expecting_error(
         &mut self,
@@ -506,22 +519,31 @@ impl<'a> TestHarness<'a> {
     }
 
     /// Print a WAST execute into a Java expression
-    pub fn java_execute<W: io::Write>(
-        execute: &wast::WastExecute,
-        java_writer: &mut JavaWriter<W>,
-    ) -> Result<(), TestError> {
+    pub fn java_execute(&mut self, execute: wast::WastExecute<'a>) -> Result<(), TestError> {
         use wast::WastExecute;
 
         match execute {
-            WastExecute::Invoke(invoke) => Self::java_invoke(invoke, java_writer)?,
-            WastExecute::Wat(_) => return Err(TestError::IncompleteHarness("wat module")),
+            WastExecute::Invoke(invoke) => {
+                let java_writer = self.get_java_writer()?;
+                Self::java_invoke(&invoke, java_writer)?;
+            }
+            WastExecute::Wat(module) => {
+                self.visit_module_and_save_classfiles(QuoteWat::Wat(module))?;
+                let name = self.latest_module.clone().unwrap();
+                self.get_java_writer()?.inline_code_fmt(format_args!(
+                    "new {name}({imports})",
+                    name = name,
+                    imports = JavaHarness::IMPORTS_VAR_NAME,
+                ))?;
+            }
             WastExecute::Get { module, global } => {
+                let java_writer = self.get_java_writer()?;
                 let name = match module {
                     None => String::from("current"),
                     Some(id) => format!("mod_{}", id.name()),
                 };
                 java_writer.inline_code_fmt(format_args!(
-                    "{name}.{field}",
+                    "((org.wasm2jar.Global){name}.exports.get(\"{field}\")).value",
                     name = name,
                     field = global
                 ))?;
@@ -542,7 +564,7 @@ impl<'a> TestHarness<'a> {
         };
 
         java_writer.inline_code_fmt(format_args!(
-            "((MethodHandle){name}.exports.get(\"{method}\")).invoke(",
+            "((org.wasm2jar.Function){name}.exports.get(\"{method}\")).handle.invoke(",
             name = name,
             method = invoke.name,
         ))?;
@@ -562,25 +584,21 @@ impl<'a> TestHarness<'a> {
 
     /// Print a WAST expression into a Java expression
     pub fn java_expr<W: io::Write>(
-        expr: &wast::core::Expression,
+        expr: &wast::WastArg,
         java_writer: &mut JavaWriter<W>,
     ) -> io::Result<()> {
         use std::num::FpCategory;
-        use wast::core::Instruction;
+        use wast::core::WastArgCore;
+        use wast::WastArg;
 
-        let instrs = &expr.instrs;
-        assert_eq!(
-            instrs.len(),
-            1,
-            "WAST expression has more than 1 instruction {:?}",
-            instrs
-        );
-        match &instrs[0] {
-            Instruction::I32Const(integer) => {
+        match expr {
+            WastArg::Core(WastArgCore::I32(integer)) => {
                 java_writer.inline_code_fmt(format_args!("{}", integer))
             }
-            Instruction::I64Const(long) => java_writer.inline_code_fmt(format_args!("{}L", long)),
-            Instruction::F32Const(Float32 { bits }) => {
+            WastArg::Core(WastArgCore::I64(long)) => {
+                java_writer.inline_code_fmt(format_args!("{}L", long))
+            }
+            WastArg::Core(WastArgCore::F32(Float32 { bits })) => {
                 let float = f32::from_bits(*bits);
                 match float.classify() {
                     FpCategory::Normal => java_writer.inline_code_fmt(format_args!("{}f", float)),
@@ -596,7 +614,7 @@ impl<'a> TestHarness<'a> {
                         .inline_code_fmt(format_args!("Float.intBitsToFloat({:#08x})", bits)),
                 }
             }
-            Instruction::F64Const(Float64 { bits }) => {
+            WastArg::Core(WastArgCore::F64(Float64 { bits })) => {
                 let double = f64::from_bits(*bits);
                 match double.classify() {
                     FpCategory::Normal => java_writer.inline_code_fmt(format_args!("{}d", double)),
@@ -612,8 +630,8 @@ impl<'a> TestHarness<'a> {
                         .inline_code_fmt(format_args!("Double.longBitsToDouble({:#016x}L)", bits)),
                 }
             }
-            Instruction::RefNull(_) => java_writer.inline_code("null"),
-            Instruction::RefExtern(idx) => {
+            WastArg::Core(WastArgCore::RefNull(_)) => java_writer.inline_code("null"),
+            WastArg::Core(WastArgCore::RefExtern(idx)) => {
                 java_writer.inline_code_fmt(format_args!("java.lang.Integer.valueOf({})", idx))
             }
             other => panic!("Unsupported WAST expression instruction {:?}", other),
@@ -627,14 +645,17 @@ impl<'a> TestHarness<'a> {
     ///   * method to go from the boxed variant to the unboxed one
     ///
     pub fn java_assert_type(
-        assert_expr: &wast::AssertExpression,
+        assert_expr: &wast::WastRet,
     ) -> (&'static str, &'static str, &'static str) {
+        use wast::core::WastRetCore;
+        use wast::WastRet;
+
         match assert_expr {
-            wast::AssertExpression::I32(_) => ("int", "Integer", ".intValue()"),
-            wast::AssertExpression::I64(_) => ("long", "Long", ".longValue()"),
-            wast::AssertExpression::F32(_) => ("float", "Float", ".floatValue()"),
-            wast::AssertExpression::F64(_) => ("double", "Double", ".doubleValue()"),
-            wast::AssertExpression::RefNull(_) | wast::AssertExpression::RefExtern(_) => {
+            WastRet::Core(WastRetCore::I32(_)) => ("int", "Integer", ".intValue()"),
+            WastRet::Core(WastRetCore::I64(_)) => ("long", "Long", ".longValue()"),
+            WastRet::Core(WastRetCore::F32(_)) => ("float", "Float", ".floatValue()"),
+            WastRet::Core(WastRetCore::F64(_)) => ("double", "Double", ".doubleValue()"),
+            WastRet::Core(WastRetCore::RefNull(_) | WastRetCore::RefExtern(_)) => {
                 ("Object", "Object", "")
             }
             _ => unimplemented!(),
@@ -643,26 +664,28 @@ impl<'a> TestHarness<'a> {
 
     /// Print a WAST assert prefix into a Java expression and return any closing part
     pub fn java_assert_expr<W: io::Write>(
-        assert_expr: &wast::AssertExpression,
+        assert_expr: &wast::WastRet,
         java_writer: &mut JavaWriter<W>,
     ) -> io::Result<&'static str> {
-        use wast::{AssertExpression, NanPattern};
+        use wast::core::{NanPattern, WastRetCore};
+        use wast::WastRet;
 
         match assert_expr {
-            AssertExpression::I32(integer) => {
+            WastRet::Core(WastRetCore::I32(integer)) => {
                 java_writer.inline_code_fmt(format_args!("{} == ", integer))?;
                 Ok("")
             }
-            AssertExpression::I64(long) => {
+            WastRet::Core(WastRetCore::I64(long)) => {
                 java_writer.inline_code_fmt(format_args!("{}L == ", long))?;
                 Ok("")
             }
-            AssertExpression::F32(NanPattern::CanonicalNan)
-            | AssertExpression::F32(NanPattern::ArithmeticNan) => {
+            WastRet::Core(WastRetCore::F32(
+                NanPattern::CanonicalNan | NanPattern::ArithmeticNan,
+            )) => {
                 java_writer.inline_code("Float.isNaN(")?;
                 Ok(")")
             }
-            AssertExpression::F32(NanPattern::Value(Float32 { bits })) => {
+            WastRet::Core(WastRetCore::F32(NanPattern::Value(Float32 { bits }))) => {
                 let float = f32::from_bits(*bits);
                 if float.is_normal() {
                     java_writer.inline_code_fmt(format_args!("{}f == ", float))?;
@@ -675,12 +698,13 @@ impl<'a> TestHarness<'a> {
                     Ok(")")
                 }
             }
-            AssertExpression::F64(NanPattern::CanonicalNan)
-            | AssertExpression::F64(NanPattern::ArithmeticNan) => {
+            WastRet::Core(WastRetCore::F64(
+                NanPattern::CanonicalNan | NanPattern::ArithmeticNan,
+            )) => {
                 java_writer.inline_code("Double.isNaN(")?;
                 Ok(")")
             }
-            AssertExpression::F64(NanPattern::Value(Float64 { bits })) => {
+            WastRet::Core(WastRetCore::F64(NanPattern::Value(Float64 { bits }))) => {
                 let double = f64::from_bits(*bits);
                 if double.is_normal() {
                     java_writer.inline_code_fmt(format_args!("{}d == ", double))?;
@@ -693,11 +717,11 @@ impl<'a> TestHarness<'a> {
                     Ok(")")
                 }
             }
-            AssertExpression::RefNull(_) => {
+            WastRet::Core(WastRetCore::RefNull(_)) => {
                 java_writer.inline_code("null == ")?;
                 Ok("")
             }
-            AssertExpression::RefExtern(idx) => {
+            WastRet::Core(WastRetCore::RefExtern(idx)) => {
                 java_writer
                     .inline_code_fmt(format_args!("java.lang.Integer.valueOf({}).equals(", idx))?;
                 Ok(")")

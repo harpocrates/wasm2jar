@@ -1,6 +1,6 @@
 use super::{
     BootstrapUtilities, Element, Error, ExportName, Function, FunctionTranslator, Global,
-    ImportName, MemberOrigin, Memory, Settings, Table, UtilityClass,
+    GlobalRepr, ImportName, Memory, MemoryRepr, Settings, Table, TableRepr, UtilityClass,
 };
 use crate::jvm;
 use crate::jvm::class_file;
@@ -8,20 +8,26 @@ use crate::jvm::class_graph::{
     AccessMode, ClassData, ClassGraph, ClassId, ConstantData, FieldData, JavaLibrary, MethodData,
     NestedClassData,
 };
-use crate::jvm::code::{BranchInstruction, CodeBuilder, CodeBuilderExts, Instruction};
+use crate::jvm::code::{
+    BranchInstruction, CodeBuilder, CodeBuilderExts, EqComparison, Instruction,
+};
 use crate::jvm::model::{Class, Field, Method};
 use crate::jvm::{
     BinaryName, ClassAccessFlags, FieldAccessFlags, FieldType, InnerClassAccessFlags,
     MethodAccessFlags, MethodDescriptor, Name, RefType, UnqualifiedName,
+};
+use crate::runtime::{
+    make_function_class, make_function_table_class, make_global_class, make_memory_class,
+    make_reference_table_class, WasmRuntime,
 };
 use crate::util::Width;
 use crate::wasm::{ref_type_from_general, FunctionType, StackType, TableType};
 use std::iter;
 use wasmparser::types::Types;
 use wasmparser::{
-    Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader,
+    ConstExpr, Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader,
     ExportSectionReader, ExternalKind, FunctionBody, FunctionSectionReader, GlobalSectionReader,
-    Import, ImportSectionReader, InitExpr, MemorySectionReader, Operator, Parser, Payload,
+    Import, ImportSectionReader, MemorySectionReader, Operator, Parser, Payload,
     TableSectionReader, Type, TypeRef, TypeSectionReader, Validator,
 };
 
@@ -34,8 +40,12 @@ pub struct ModuleTranslator<'a, 'g> {
     fields_generated: bool,
     class_graph: &'g ClassGraph<'g>,
     java: &'g JavaLibrary<'g>,
-
+    runtime: WasmRuntime<'g>,
     current_part: CurrentPart<'g>,
+
+    /// Populated when visiting the start section with the index of the "start" function. Note that
+    /// modules are not required to have a start function (so this may remain empty).
+    start_function: Option<usize>,
 
     /// Utility class (just a carrier for whatever helper methods we may want)
     utilities: UtilityClass<'g>,
@@ -47,10 +57,10 @@ pub struct ModuleTranslator<'a, 'g> {
     functions: Vec<Function<'a, 'g>>,
 
     /// Populated when we visit tables
-    tables: Vec<Table<'g>>,
+    tables: Vec<Table<'a, 'g>>,
 
     /// Populated when we visit memories
-    memories: Vec<Memory<'g>>,
+    memories: Vec<Memory<'a, 'g>>,
 
     /// Populated when we visit globals
     globals: Vec<Global<'a, 'g>>,
@@ -91,6 +101,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         ));
         let current_part = Self::new_part(&settings, class_id, class_graph, java, 0)?;
         let utilities = UtilityClass::new(&settings, class_id, class_graph, java)?;
+        let runtime = WasmRuntime::add_to_graph(class_graph, &java.classes);
 
         Ok(ModuleTranslator {
             settings,
@@ -100,8 +111,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             fields_generated: false,
             class_graph,
             java,
+            runtime,
             current_part,
             utilities,
+            start_function: None,
             types: vec![],
             functions: vec![],
             tables: vec![],
@@ -187,7 +200,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             Payload::GlobalSection(section) => self.visit_globals(section)?,
             Payload::ExportSection(section) => self.visit_exports(section)?,
             Payload::FunctionSection(section) => self.visit_function_declarations(section)?,
-            Payload::StartSection { func, range } => self.validator.start_section(func, &range)?,
+            Payload::StartSection { func, range } => {
+                self.start_function = Some(func as usize);
+                self.validator.start_section(func, &range)?;
+            }
             Payload::ElementSection(section) => self.visit_elements(section)?,
             Payload::DataCountSection { count, range } => {
                 self.validator.data_count_section(count, &range)?
@@ -236,6 +252,11 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
         // Look up the previously declared method and start implementing it
         let function = &self.functions[self.current_func_idx as usize];
+        log::trace!(
+            "Translating function {} (as {:?})",
+            self.current_func_idx,
+            function.method
+        );
         self.current_func_idx += 1;
         let mut code_builder = CodeBuilder::new(self.class_graph, self.java, function.method);
 
@@ -246,6 +267,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             &mut self.current_part.bootstrap,
             &mut code_builder,
             self.class.id,
+            &self.runtime,
             &self.functions,
             &self.tables,
             &self.memories,
@@ -269,21 +291,14 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         self.validator.global_section(&globals)?;
         for global in globals {
             let wasmparser::Global { ty, init_expr } = global?;
-            let origin = MemberOrigin {
-                imported: None,
-                exported: false,
-            };
-            let field_name = self
-                .settings
-                .wasm_global_name_prefix
-                .concat(&UnqualifiedName::number(self.globals.len()));
             let global = Global {
-                origin,
-                field_name,
                 field: None,
+                repr: GlobalRepr::UnboxedInternal,
                 global_type: StackType::from_general(ty.content_type)?,
                 mutable: ty.mutable,
                 initial: Some(init_expr),
+                import: None,
+                export: vec![],
             };
             self.globals.push(global);
         }
@@ -292,25 +307,27 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
     /// Generate the fields associated with globals
     fn generate_global_fields(&mut self) -> Result<(), Error> {
-        for global in &mut self.globals {
-            if !global.origin.is_internal() {
-                todo!("exported/imported global")
-            }
+        for (global_idx, global) in self.globals.iter_mut().enumerate() {
+            let access_flags = match global.repr {
+                GlobalRepr::BoxedExternal => FieldAccessFlags::FINAL,
+                GlobalRepr::UnboxedInternal if global.mutable => FieldAccessFlags::PRIVATE,
+                GlobalRepr::UnboxedInternal => FieldAccessFlags::PRIVATE | FieldAccessFlags::FINAL,
+            };
 
-            let mutable_flag = if global.mutable {
-                FieldAccessFlags::empty()
-            } else {
-                FieldAccessFlags::FINAL
+            let descriptor = match global.repr {
+                GlobalRepr::BoxedExternal => FieldType::object(self.runtime.classes.global),
+                GlobalRepr::UnboxedInternal => global.global_type.field_type(&self.java.classes),
             };
 
             // TODO: this only works for Java 11+. For other Java versions, private fields from
             // outer classes are not visible - getters/setters must be generated (private functions
             // _are_ visible)
+            let field_name = self.settings.wasm_global_name(global_idx);
             let field_id = self.class_graph.add_field(FieldData {
                 class: self.class.id,
-                access_flags: FieldAccessFlags::PRIVATE | mutable_flag,
-                name: global.field_name.clone(),
-                descriptor: global.global_type.field_type(&self.java.classes),
+                access_flags,
+                name: field_name,
+                descriptor,
             });
             self.class.add_field(Field {
                 id: field_id,
@@ -366,7 +383,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 method,
                 tailcall_method: None,
                 import: None,
-                export: None,
+                export: vec![],
             });
         }
         Ok(())
@@ -382,32 +399,32 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     }
 
     fn visit_import(&mut self, import: Import<'a>) -> Result<(), Error> {
-        let origin = MemberOrigin {
-            imported: Some(Some(import.module.to_owned())),
-            exported: false,
+        let class = self.class.id;
+        let import_name = ImportName {
+            module: import.module,
+            name: import.name,
         };
 
-        let name = UnqualifiedName::from_string(import.name.to_owned()).unwrap();
-        let class = self.class.id;
-
         match import.ty {
-            TypeRef::Table(table_type) => self.tables.push(Table {
-                origin,
-                field_name: name,
-                field: None,
-                table_type: TableType::from_general(table_type.element_type)?,
-                initial: table_type.initial,
-                maximum: table_type.maximum,
-            }),
+            TypeRef::Table(table_type) => {
+                self.tables.push(Table {
+                    field: None,
+                    repr: TableRepr::External,
+                    table_type,
+                    import: Some(import_name),
+                    export: vec![],
+                });
+            }
 
             TypeRef::Global(global_type) => {
                 self.globals.push(Global {
-                    origin,
-                    field_name: name,
                     field: None,
+                    repr: GlobalRepr::BoxedExternal,
                     global_type: StackType::from_general(global_type.content_type)?,
                     mutable: global_type.mutable,
                     initial: None,
+                    import: Some(import_name),
+                    export: vec![],
                 });
             }
 
@@ -438,10 +455,6 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     generic_signature: None,
                     constant_value: None,
                 });
-                let import_name = ImportName {
-                    module: import.module,
-                    name: import.name,
-                };
 
                 // Trampoline method, whose sole responsibility is to invoke the method handle
                 let method_id = self.class_graph.add_method(MethodData {
@@ -455,7 +468,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     method: method_id,
                     tailcall_method: None,
                     import: Some((import_name, import_field)),
-                    export: None,
+                    export: vec![],
                 });
                 let mut code = CodeBuilder::new(self.class_graph, self.java, method_id);
 
@@ -481,7 +494,17 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     generic_signature: None,
                 });
             }
-            TypeRef::Memory(_) => todo!("import memory"),
+
+            TypeRef::Memory(memory_type) => {
+                self.memories.push(Memory {
+                    field: None,
+                    repr: MemoryRepr::External,
+                    memory_type,
+                    import: Some(import_name),
+                    export: vec![],
+                });
+            }
+
             TypeRef::Tag(_) => todo!("import tag"),
         }
 
@@ -492,47 +515,59 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     fn visit_tables(&mut self, tables: TableSectionReader<'a>) -> Result<(), Error> {
         self.validator.table_section(&tables)?;
         for table in tables {
-            let table = table?;
-            let origin = MemberOrigin {
-                imported: None,
-                exported: false,
-            };
-            let field_name = self
-                .settings
-                .wasm_table_name_prefix
-                .concat(&UnqualifiedName::number(self.tables.len()));
-            self.tables.push(Table {
-                origin,
-                field_name,
+            let table_type = table?;
+            let table = Table {
                 field: None,
-                table_type: TableType::from_general(table.element_type)?,
-                initial: table.initial,
-                maximum: table.maximum,
-            });
+                repr: TableRepr::Internal,
+                table_type,
+                import: None,
+                export: vec![],
+            };
+            self.tables.push(table);
         }
         Ok(())
     }
 
     /// Generate the fields associated with tables
     fn generate_table_fields(&mut self) -> Result<(), Error> {
-        for table in &mut self.tables {
-            if !table.origin.is_internal() {
-                todo!("exported/imported table")
-            }
-
+        for (table_idx, table) in self.tables.iter_mut().enumerate() {
             // TODO: if the limits on the table constrain it to never grow, make the field final
+            let access_flags = match table.repr {
+                TableRepr::External => FieldAccessFlags::FINAL,
+                TableRepr::Internal => FieldAccessFlags::PRIVATE,
+            };
+
+            let descriptor = match (table.repr, table.table_type.element_type) {
+                (TableRepr::External, wasmparser::ValType::FuncRef) => {
+                    FieldType::object(self.runtime.classes.function_table)
+                }
+                (TableRepr::External, wasmparser::ValType::ExternRef) => {
+                    FieldType::object(self.runtime.classes.reference_table)
+                }
+                (TableRepr::Internal, wasmparser::ValType::FuncRef) => FieldType::array(
+                    FieldType::object(self.java.classes.lang.invoke.method_handle),
+                ),
+                (TableRepr::Internal, wasmparser::ValType::ExternRef) => {
+                    FieldType::array(FieldType::object(self.java.classes.lang.object))
+                }
+                _ => panic!(),
+            };
+
+            // TODO: this only works for Java 11+. For other Java versions, private fields from
+            // outer classes are not visible - getters/setters must be generated (private functions
+            // _are_ visible)
+            let field_name = self.settings.wasm_table_name(table_idx);
             let field_id = self.class_graph.add_field(FieldData {
                 class: self.class.id,
-                access_flags: FieldAccessFlags::PRIVATE,
-                name: table.field_name.clone(),
-                descriptor: FieldType::array(table.table_type.field_type(&self.java.classes)),
+                access_flags,
+                name: field_name,
+                descriptor,
             });
             self.class.add_field(Field {
                 id: field_id,
                 generic_signature: None,
                 constant_value: None,
             });
-
             table.field = Some(field_id);
         }
 
@@ -543,22 +578,15 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     fn visit_memories(&mut self, memories: MemorySectionReader<'a>) -> Result<(), Error> {
         self.validator.memory_section(&memories)?;
         for memory in memories {
-            let memory = memory?;
-            let origin = MemberOrigin {
-                imported: None,
-                exported: false,
-            };
-            let field_name = self
-                .settings
-                .wasm_memory_name_prefix
-                .concat(&UnqualifiedName::number(self.memories.len()));
-
-            self.memories.push(Memory {
-                origin,
-                field_name,
+            let memory_type = memory?;
+            let memory = Memory {
                 field: None,
-                memory_type: memory,
-            });
+                repr: MemoryRepr::Internal,
+                memory_type,
+                import: None,
+                export: vec![],
+            };
+            self.memories.push(memory);
         }
 
         Ok(())
@@ -566,28 +594,33 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
     /// Generate the fields associated with memories
     fn generate_memory_fields(&mut self) -> Result<(), Error> {
-        for memory in &mut self.memories {
-            if !memory.origin.is_internal() {
-                todo!("exported/imported memories")
-            } else if memory.memory_type.shared {
-                todo!("shared memory")
-            } else if memory.memory_type.memory64 {
-                todo!("64-bit memory")
-            } else {
-                // TODO: if the limits on the memory constrain it to never grow, make the field final
-                let field_id = self.class_graph.add_field(FieldData {
-                    class: self.class.id,
-                    access_flags: FieldAccessFlags::PRIVATE,
-                    name: memory.field_name.clone(),
-                    descriptor: FieldType::object(self.java.classes.nio.byte_buffer),
-                });
-                self.class.add_field(Field {
-                    id: field_id,
-                    generic_signature: None,
-                    constant_value: None,
-                });
-                memory.field = Some(field_id);
-            }
+        for (memory_idx, memory) in &mut self.memories.iter_mut().enumerate() {
+            let access_flags = match memory.repr {
+                MemoryRepr::External => FieldAccessFlags::FINAL,
+                MemoryRepr::Internal => FieldAccessFlags::PRIVATE,
+            };
+
+            let descriptor = match memory.repr {
+                MemoryRepr::External => FieldType::object(self.runtime.classes.memory),
+                MemoryRepr::Internal => FieldType::object(self.java.classes.nio.byte_buffer),
+            };
+
+            // TODO: this only works for Java 11+. For other Java versions, private fields from
+            // outer classes are not visible - getters/setters must be generated (private functions
+            // _are_ visible)
+            let field_name = self.settings.wasm_memory_name(memory_idx);
+            let field_id = self.class_graph.add_field(FieldData {
+                class: self.class.id,
+                access_flags,
+                name: field_name,
+                descriptor,
+            });
+            self.class.add_field(Field {
+                id: field_id,
+                generic_signature: None,
+                constant_value: None,
+            });
+            memory.field = Some(field_id);
         }
 
         Ok(())
@@ -608,8 +641,9 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                         .functions
                         .get_mut(export.index as usize)
                         .expect("Exporting function that doesn't exist");
-                    function.export =
-                        Some((export_name, self.settings.methods_for_function_exports));
+                    function
+                        .export
+                        .push((export_name, self.settings.methods_for_function_exports));
                 }
 
                 ExternalKind::Table => {
@@ -617,32 +651,26 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                         .tables
                         .get_mut(export.index as usize)
                         .expect("Exporting table that doesn't exist");
-                    let name: String = self.settings.renamer.rename_table(export.name);
-                    table.field_name =
-                        UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
-                    table.origin.exported = true;
+                    table.repr = TableRepr::External;
+                    table.export.push(export_name);
                 }
 
                 ExternalKind::Memory => {
                     let memory: &mut Memory = self
                         .memories
                         .get_mut(export.index as usize)
-                        .expect("Exporting memory that ddoesn't exist");
-                    let name: String = self.settings.renamer.rename_memory(export.name);
-                    memory.field_name =
-                        UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
-                    memory.origin.exported = true;
+                        .expect("Exporting memory that doesn't exist");
+                    memory.repr = MemoryRepr::External;
+                    memory.export.push(export_name);
                 }
 
                 ExternalKind::Global => {
                     let global: &mut Global = self
                         .globals
                         .get_mut(export.index as usize)
-                        .expect("Exporting global that ddoesn't exist");
-                    let name: String = self.settings.renamer.rename_global(export.name);
-                    global.field_name =
-                        UnqualifiedName::from_string(name).map_err(Error::MalformedName)?;
-                    global.origin.exported = true;
+                        .expect("Exporting global that doesn't exist");
+                    global.repr = GlobalRepr::BoxedExternal;
+                    global.export.push(export_name);
                 }
 
                 _ => unimplemented!(),
@@ -655,48 +683,48 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     fn generate_exports(&mut self) -> Result<(), Error> {
         let class = self.class.id;
         for function in &self.functions {
-            let export_name = if let Some((ExportName { name }, true)) = function.export {
-                name
-            } else {
-                continue;
-            };
+            for (ExportName { name }, generate_method) in &function.export {
+                if !generate_method {
+                    continue;
+                }
 
-            let export_descriptor = function.func_type.method_descriptor(&self.java.classes);
+                let export_descriptor = function.func_type.method_descriptor(&self.java.classes);
 
-            // Implementation function
-            let mut underlying_descriptor = export_descriptor.clone();
-            underlying_descriptor
-                .parameters
-                .push(FieldType::object(class));
+                // Implementation function
+                let mut underlying_descriptor = export_descriptor.clone();
+                underlying_descriptor
+                    .parameters
+                    .push(FieldType::object(class));
 
-            let name: String = self.settings.renamer.rename_function(export_name);
-            let method_id = self.class_graph.add_method(MethodData {
-                class,
-                name: UnqualifiedName::from_string(name).map_err(Error::MalformedName)?,
-                descriptor: export_descriptor.clone(),
-                access_flags: MethodAccessFlags::PUBLIC,
-            });
+                let name: String = self.settings.renamer.rename_function(name);
+                let method_id = self.class_graph.add_method(MethodData {
+                    class,
+                    name: UnqualifiedName::from_string(name).map_err(Error::MalformedName)?,
+                    descriptor: export_descriptor.clone(),
+                    access_flags: MethodAccessFlags::PUBLIC,
+                });
 
-            let mut code = CodeBuilder::new(self.class_graph, self.java, method_id);
+                let mut code = CodeBuilder::new(self.class_graph, self.java, method_id);
 
-            // Push the method arguments onto the stack
-            let mut offset = 1;
-            for parameter in &export_descriptor.parameters {
-                code.get_local(offset, parameter)?;
-                offset += parameter.width() as u16;
+                // Push the method arguments onto the stack
+                let mut offset = 1;
+                for parameter in &export_descriptor.parameters {
+                    code.get_local(offset, parameter)?;
+                    offset += parameter.width() as u16;
+                }
+                code.get_local(0, &FieldType::object(class))?;
+
+                // Call the implementation
+                code.invoke(function.method)?;
+                code.return_(export_descriptor.return_type)?;
+
+                self.class.add_method(Method {
+                    id: method_id,
+                    code_impl: Some(code.result()?),
+                    exceptions: vec![],
+                    generic_signature: None,
+                });
             }
-            code.get_local(0, &FieldType::object(class))?;
-
-            // Call the implementation
-            code.invoke(function.method)?;
-            code.return_(export_descriptor.return_type)?;
-
-            self.class.add_method(Method {
-                id: method_id,
-                code_impl: Some(code.result()?),
-                exceptions: vec![],
-                generic_signature: None,
-            });
         }
 
         Ok(())
@@ -730,6 +758,57 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         Ok(())
     }
 
+    /// Generate code to lookup an import
+    ///
+    /// Assumes that the top of the stack will contain the imports map.
+    fn lookup_import(code: &mut CodeBuilder, import: &ImportName) -> Result<(), Error> {
+        let module_found = code.fresh_label();
+        let entity_found = code.fresh_label();
+
+        // Get the module
+        code.const_string(import.module.to_string())?;
+        code.invoke(code.java.members.util.map.get)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_branch_instruction(BranchInstruction::IfNull(
+            EqComparison::NE,
+            module_found,
+            (),
+        ))?;
+        code.new(code.java.classes.lang.illegal_argument_exception)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.const_string(format!(
+            "Could not find module for import {}.{}",
+            import.module, import.name
+        ))?;
+        code.invoke(code.java.members.lang.illegal_argument_exception.init)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        code.place_label(module_found)?;
+        code.push_instruction(Instruction::CheckCast(RefType::Object(
+            code.java.classes.util.map,
+        )))?;
+
+        // Get the member
+        code.const_string(import.name.to_string())?;
+        code.invoke(code.java.members.util.map.get)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.push_branch_instruction(BranchInstruction::IfNull(
+            EqComparison::NE,
+            entity_found,
+            (),
+        ))?;
+        code.new(code.java.classes.lang.illegal_argument_exception)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.const_string(format!(
+            "Could not find {} in module {}",
+            import.name, import.module
+        ))?;
+        code.invoke(code.java.members.lang.illegal_argument_exception.init)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        code.place_label(entity_found)?;
+
+        Ok(())
+    }
+
     /// Generate a constructor
     pub fn generate_constructor(&mut self) -> Result<(), Error> {
         let constructor_id = self.class_graph.add_method(MethodData {
@@ -747,134 +826,6 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         jvm_code.push_instruction(Instruction::ALoad(0))?;
         jvm_code.invoke(jvm_code.java.members.lang.object.init)?;
 
-        // Initial table arrays
-        for table in &self.tables {
-            if let None = table.origin.imported {
-                if !table.origin.exported {
-                    jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.const_int(table.initial as i32)?; // TODO: error if `u32` is too big
-                    jvm_code.new_ref_array(table.table_type.ref_type(&jvm_code.java.classes))?;
-                    jvm_code.access_field(table.field.unwrap(), AccessMode::Write)?;
-                } else {
-                    todo!()
-                }
-            }
-        }
-
-        // Initialize memory
-        for memory in &self.memories {
-            if memory.origin.is_internal() {
-                if memory.memory_type.memory64 {
-                    todo!("64-bit memory")
-                } else {
-                    let initial: u64 = memory.memory_type.initial * 65536;
-                    jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.const_int(initial as i32)?; // TODO: error if too big
-                    jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.allocate)?; // TODO: add option for allocate direct
-                    jvm_code.access_field(
-                        jvm_code.java.members.nio.byte_order.little_endian,
-                        AccessMode::Read,
-                    )?;
-                    jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.order)?;
-                    jvm_code.access_field(memory.field.unwrap(), AccessMode::Write)?;
-                }
-            }
-        }
-
-        // Initialize globals
-        for global in &self.globals {
-            if let None = global.origin.imported {
-                if !global.origin.exported {
-                    if let Some(init_expr) = &global.initial {
-                        jvm_code.push_instruction(Instruction::ALoad(0))?;
-                        self.translate_init_expr(&mut jvm_code, init_expr)?;
-                        jvm_code.access_field(global.field.unwrap(), AccessMode::Write)?;
-                    }
-                } else {
-                    todo!()
-                }
-            }
-        }
-
-        // Initialize active elements
-        for element in &self.elements {
-            if let ElementKind::Active {
-                table_index,
-                init_expr,
-            } = element.kind
-            {
-                let offset_var = 2;
-                let table = &self.tables[table_index as usize];
-                if !table.origin.exported {
-                    // Load onto the stack the table array
-                    jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.access_field(table.field.unwrap(), AccessMode::Read)?;
-
-                    // Store the starting offset in a local variable
-                    self.translate_init_expr(&mut jvm_code, &init_expr)?;
-                    jvm_code.push_instruction(Instruction::IStore(offset_var))?;
-
-                    for item in &element.items {
-                        jvm_code.push_instruction(Instruction::Dup)?;
-                        jvm_code.push_instruction(Instruction::ILoad(offset_var))?;
-                        match item {
-                            ElementItem::Func(func_idx) => {
-                                let method = self.functions[*func_idx as usize].method;
-                                let method_handle = ConstantData::MethodHandle(method);
-                                jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
-                            }
-                            ElementItem::Expr(elem_expr) => {
-                                self.translate_init_expr(&mut jvm_code, &elem_expr)?
-                            }
-                        }
-                        jvm_code.push_instruction(Instruction::AAStore)?;
-                        jvm_code.push_instruction(Instruction::IInc(offset_var, 1))?;
-                    }
-
-                    // Kill the local variable, drop the array
-                    jvm_code.push_instruction(Instruction::Pop)?;
-                    jvm_code.kill_top_local(offset_var, Some(FieldType::int()))?;
-                } else {
-                    todo!()
-                }
-            }
-        }
-
-        // Initialize active data
-        for data in &self.datas {
-            if let DataKind::Active {
-                memory_index,
-                init_expr,
-            } = data.kind
-            {
-                let memory = &self.memories[memory_index as usize];
-                if memory.origin.is_internal() {
-                    // Load onto the stack the memory bytebuffer
-                    jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    jvm_code.access_field(memory.field.unwrap(), AccessMode::Read)?;
-
-                    // Set the starting offset for the buffer
-                    jvm_code.push_instruction(Instruction::Dup)?;
-                    self.translate_init_expr(&mut jvm_code, &init_expr)?;
-                    jvm_code.invoke(jvm_code.java.members.nio.buffer.position)?;
-                    jvm_code.push_instruction(Instruction::Pop)?;
-
-                    for chunk in data.data.chunks(u16::MAX as usize) {
-                        jvm_code
-                            .const_string(chunk.iter().map(|&c| c as char).collect::<String>())?;
-                        jvm_code.const_string("ISO-8859-1")?;
-                        jvm_code.invoke(jvm_code.java.members.lang.string.get_bytes)?;
-                        jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.put_bytearray)?;
-                    }
-
-                    // Kill the local variable, drop the bytebuffer
-                    jvm_code.push_instruction(Instruction::Pop)?;
-                } else {
-                    todo!("Initialize non-internal memory")
-                }
-            }
-        }
-
         // Read from imports
         jvm_code.push_instruction(Instruction::ALoad(0))?;
         jvm_code.push_instruction(Instruction::ALoad(1))?;
@@ -882,25 +833,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             if let Some((import_loc, import_field)) = &function.import {
                 jvm_code.push_instruction(Instruction::Dup2)?;
 
-                /* TODO: error handling for
-                 *
-                 *   - missing module or function in module
-                 *   - method handle that doesn't have the right expected type
-                 */
-
-                // Get the module
-                jvm_code.const_string(import_loc.module.to_string())?;
-                jvm_code.invoke(jvm_code.java.members.util.map.get)?;
-                jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
-                    jvm_code.java.classes.util.map,
-                )))?;
-
                 // Get the imported handle
-                jvm_code.const_string(import_loc.name.to_string())?;
-                jvm_code.invoke(jvm_code.java.members.util.map.get)?;
-                jvm_code.push_instruction(Instruction::CheckCast(RefType::Object(
-                    jvm_code.java.classes.lang.invoke.method_handle,
-                )))?;
+                Self::lookup_import(&mut jvm_code, &import_loc)?;
+                jvm_code.checkcast(self.runtime.classes.function)?;
+                jvm_code.access_field(self.runtime.members.function.handle, AccessMode::Read)?;
 
                 // Assign it to the right field
                 jvm_code.access_field(*import_field, AccessMode::Write)?;
@@ -908,7 +844,227 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 break;
             }
         }
+        for global in &self.globals {
+            if let Some(import_loc) = &global.import {
+                jvm_code.push_instruction(Instruction::Dup2)?;
+
+                // Get the imported global
+                Self::lookup_import(&mut jvm_code, &import_loc)?;
+                jvm_code.checkcast(self.runtime.classes.global)?;
+
+                // Assign it to the right field
+                jvm_code.access_field(global.field.unwrap(), AccessMode::Write)?;
+            } else {
+                break;
+            }
+        }
+        for memory in &self.memories {
+            if let Some(import_loc) = &memory.import {
+                jvm_code.push_instruction(Instruction::Dup2)?;
+
+                // Get the imported memory
+                Self::lookup_import(&mut jvm_code, &import_loc)?;
+                jvm_code.checkcast(self.runtime.classes.memory)?;
+
+                // Assign it to the right field
+                jvm_code.access_field(memory.field.unwrap(), AccessMode::Write)?;
+            } else {
+                break;
+            }
+        }
+        for table in &self.tables {
+            if let Some(import_loc) = &table.import {
+                jvm_code.push_instruction(Instruction::Dup2)?;
+
+                // Get the imported memory
+                Self::lookup_import(&mut jvm_code, &import_loc)?;
+                let table_type = match table.table_type.element_type {
+                    wasmparser::ValType::FuncRef => self.runtime.classes.function_table,
+                    wasmparser::ValType::ExternRef => self.runtime.classes.reference_table,
+                    _ => panic!(),
+                };
+                jvm_code.checkcast(table_type)?;
+
+                // Assign it to the right field
+                jvm_code.access_field(table.field.unwrap(), AccessMode::Write)?;
+            } else {
+                break;
+            }
+        }
         jvm_code.push_instruction(Instruction::Pop2)?;
+
+        // Initial table arrays
+        for table in &self.tables {
+            if table.import.is_none() {
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.const_int(table.table_type.initial as i32)?; // TODO: error if `u32` is too big
+                jvm_code.new_ref_array(table.element_type(&jvm_code.java.classes))?;
+
+                if let TableRepr::External = table.repr {
+                    let (table_class, table_init) = match table.table_type.element_type {
+                        wasmparser::ValType::FuncRef => (
+                            self.runtime.classes.function_table,
+                            self.runtime.members.function_table.init,
+                        ),
+                        wasmparser::ValType::ExternRef => (
+                            self.runtime.classes.reference_table,
+                            self.runtime.members.reference_table.init,
+                        ),
+                        _ => panic!(),
+                    };
+                    jvm_code.new(table_class)?;
+                    jvm_code.push_instruction(Instruction::DupX1)?;
+                    jvm_code.push_instruction(Instruction::Swap)?;
+                    jvm_code.invoke(table_init)?;
+                }
+
+                jvm_code.access_field(table.field.unwrap(), AccessMode::Write)?;
+            }
+        }
+
+        // Initialize memory
+        for memory in &self.memories {
+            if memory.import.is_none() {
+                if memory.memory_type.memory64 {
+                    todo!("64-bit memory")
+                }
+
+                let initial: u64 = memory.memory_type.initial * 65536;
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.const_int(initial as i32)?; // TODO: error if too big
+                jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.allocate)?; // TODO: add option for allocate direct
+                jvm_code.access_field(
+                    jvm_code.java.members.nio.byte_order.little_endian,
+                    AccessMode::Read,
+                )?;
+                jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.order)?;
+
+                if let MemoryRepr::External = memory.repr {
+                    jvm_code.new(self.runtime.classes.memory)?;
+                    jvm_code.push_instruction(Instruction::DupX1)?;
+                    jvm_code.push_instruction(Instruction::Swap)?;
+                    jvm_code.invoke(self.runtime.members.memory.init)?;
+                }
+
+                jvm_code.access_field(memory.field.unwrap(), AccessMode::Write)?;
+            }
+        }
+
+        // Initialize globals
+        for global in &self.globals {
+            if let Some(init_expr) = &global.initial {
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+
+                match global.repr {
+                    GlobalRepr::BoxedExternal => {
+                        jvm_code.new(self.runtime.classes.global)?;
+                        jvm_code.push_instruction(Instruction::Dup)?;
+
+                        self.translate_const_expr(&mut jvm_code, init_expr)?;
+                        match global.global_type {
+                            StackType::I32 => {
+                                jvm_code.invoke(self.java.members.lang.integer.value_of)?
+                            }
+                            StackType::I64 => {
+                                jvm_code.invoke(self.java.members.lang.long.value_of)?
+                            }
+                            StackType::F32 => {
+                                jvm_code.invoke(self.java.members.lang.float.value_of)?
+                            }
+                            StackType::F64 => {
+                                jvm_code.invoke(self.java.members.lang.double.value_of)?
+                            }
+                            StackType::FuncRef | StackType::ExternRef => (),
+                        }
+                        jvm_code.invoke(self.runtime.members.global.init)?;
+                    }
+                    GlobalRepr::UnboxedInternal => {
+                        self.translate_const_expr(&mut jvm_code, init_expr)?;
+                    }
+                }
+
+                jvm_code.access_field(global.field.unwrap(), AccessMode::Write)?;
+            }
+        }
+
+        // Initialize active elements
+        for element in &self.elements {
+            if let ElementKind::Active {
+                table_index,
+                offset_expr,
+            } = element.kind
+            {
+                let offset_var = 2;
+                let table = &self.tables[table_index as usize];
+
+                // Load onto the stack the table array
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                table.load_array(&self.runtime, &mut jvm_code)?;
+
+                // Store the starting offset in a local variable
+                self.translate_const_expr(&mut jvm_code, &offset_expr)?;
+                jvm_code.push_instruction(Instruction::IStore(offset_var))?;
+
+                for item in &element.items {
+                    jvm_code.push_instruction(Instruction::Dup)?;
+                    jvm_code.push_instruction(Instruction::ILoad(offset_var))?;
+                    match item {
+                        ElementItem::Func(func_idx) => {
+                            let method = self.functions[*func_idx as usize].method;
+                            let method_handle = ConstantData::MethodHandle(method);
+                            jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
+                        }
+                        ElementItem::Expr(elem_expr) => {
+                            self.translate_const_expr(&mut jvm_code, &elem_expr)?
+                        }
+                    }
+                    jvm_code.push_instruction(Instruction::AAStore)?;
+                    jvm_code.push_instruction(Instruction::IInc(offset_var, 1))?;
+                }
+
+                // Kill the local variable, drop the array
+                jvm_code.push_instruction(Instruction::Pop)?;
+                jvm_code.kill_top_local(offset_var, Some(FieldType::int()))?;
+            }
+        }
+
+        // Initialize active data
+        for data in &self.datas {
+            if let DataKind::Active {
+                memory_index,
+                offset_expr,
+            } = data.kind
+            {
+                let memory = &self.memories[memory_index as usize];
+
+                // Load onto the stack the memory bytebuffer
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.access_field(memory.field.unwrap(), AccessMode::Read)?;
+                match memory.repr {
+                    MemoryRepr::External => {
+                        jvm_code
+                            .access_field(self.runtime.members.memory.bytes, AccessMode::Read)?;
+                    }
+                    MemoryRepr::Internal => (),
+                }
+
+                // Set the starting offset for the buffer
+                jvm_code.push_instruction(Instruction::Dup)?;
+                self.translate_const_expr(&mut jvm_code, &offset_expr)?;
+                jvm_code.invoke(jvm_code.java.members.nio.buffer.position)?;
+                jvm_code.push_instruction(Instruction::Pop)?;
+
+                for chunk in data.data.chunks(u16::MAX as usize) {
+                    jvm_code.const_string(chunk.iter().map(|&c| c as char).collect::<String>())?;
+                    jvm_code.const_string("ISO-8859-1")?;
+                    jvm_code.invoke(jvm_code.java.members.lang.string.get_bytes)?;
+                    jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.put_bytearray)?;
+                }
+
+                // Kill the local variable, drop the bytebuffer
+                jvm_code.push_instruction(Instruction::Pop)?;
+            }
+        }
 
         // Exports object
         // TODO: make unmodifiable
@@ -933,44 +1089,102 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
         // Add function exports to the exports map
         for function in &self.functions {
-            let export_name = if let Some((ExportName { name }, _)) = function.export {
-                name
-            } else {
-                continue;
-            };
+            for (ExportName { name }, _) in &function.export {
+                jvm_code.push_instruction(Instruction::Dup)?;
+                jvm_code.const_string(name.to_string())?;
 
-            jvm_code.push_instruction(Instruction::Dup)?;
-            jvm_code.const_string(export_name.to_string())?;
+                // Implementation function
+                let method = function.method;
+                let method_handle = ConstantData::MethodHandle(method);
 
-            // Implementation function
-            let method = function.method;
-            let method_handle = ConstantData::MethodHandle(method);
+                // `new org.wasm2jar.Function(handle);`
+                jvm_code.new(self.runtime.classes.function)?;
+                jvm_code.push_instruction(Instruction::Dup)?;
 
-            // `MethodHandles.insertArguments(hdl, n - 1, new Object[1] { this })`
-            jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
-            jvm_code.const_int((method.descriptor.parameters.len() - 1) as i32)?;
-            jvm_code.const_int(1)?;
-            jvm_code.new_ref_array(RefType::Object(jvm_code.java.classes.lang.object))?;
-            jvm_code.dup()?;
-            jvm_code.const_int(0)?;
-            jvm_code.push_instruction(Instruction::ALoad(0))?;
-            jvm_code.push_instruction(Instruction::AAStore)?;
-            jvm_code.invoke(
-                jvm_code
-                    .java
-                    .members
-                    .lang
-                    .invoke
-                    .method_handles
-                    .insert_arguments,
-            )?;
+                // `MethodHandles.insertArguments(hdl, n - 1, new Object[1] { this })`
+                jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
+                jvm_code.const_int((method.descriptor.parameters.len() - 1) as i32)?;
+                jvm_code.const_int(1)?;
+                jvm_code.new_ref_array(RefType::Object(jvm_code.java.classes.lang.object))?;
+                jvm_code.dup()?;
+                jvm_code.const_int(0)?;
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.push_instruction(Instruction::AAStore)?;
+                jvm_code.invoke(
+                    jvm_code
+                        .java
+                        .members
+                        .lang
+                        .invoke
+                        .method_handles
+                        .insert_arguments,
+                )?;
+                jvm_code.invoke(self.runtime.members.function.init)?;
 
-            // Put the value in the map
-            jvm_code.invoke(jvm_code.java.members.util.map.put)?;
-            jvm_code.pop()?;
+                // Put the value in the map
+                jvm_code.invoke(jvm_code.java.members.util.map.put)?;
+                jvm_code.pop()?;
+            }
+        }
+
+        // Add global exports to the exports map
+        for global in &self.globals {
+            for ExportName { name } in &global.export {
+                jvm_code.push_instruction(Instruction::Dup)?;
+                jvm_code.const_string(name.to_string())?;
+
+                // Get global
+                let field = global.field.unwrap();
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.access_field(field, AccessMode::Read)?;
+
+                // Put the value in the map
+                jvm_code.invoke(jvm_code.java.members.util.map.put)?;
+                jvm_code.pop()?;
+            }
+        }
+
+        // Add table exports to the exports map
+        for table in &self.tables {
+            for ExportName { name } in &table.export {
+                jvm_code.push_instruction(Instruction::Dup)?;
+                jvm_code.const_string(name.to_string())?;
+
+                // Get table
+                let field = table.field.unwrap();
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.access_field(field, AccessMode::Read)?;
+
+                // Put the value in the map
+                jvm_code.invoke(jvm_code.java.members.util.map.put)?;
+                jvm_code.pop()?;
+            }
+        }
+
+        // Add memory exports to the exports map
+        for memory in &self.memories {
+            for ExportName { name } in &memory.export {
+                jvm_code.push_instruction(Instruction::Dup)?;
+                jvm_code.const_string(name.to_string())?;
+
+                // Get table
+                let field = memory.field.unwrap();
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.access_field(field, AccessMode::Read)?;
+
+                // Put the value in the map
+                jvm_code.invoke(jvm_code.java.members.util.map.put)?;
+                jvm_code.pop()?;
+            }
         }
 
         jvm_code.push_instruction(Instruction::PutField(exports_field))?;
+
+        // Main function, if there is one
+        if let Some(start_func_idx) = self.start_function {
+            jvm_code.push_instruction(Instruction::ALoad(0))?;
+            jvm_code.invoke(self.functions[start_func_idx].method)?;
+        }
 
         jvm_code.push_branch_instruction(BranchInstruction::Return)?;
 
@@ -987,10 +1201,12 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     }
 
     /// Translate a constant expression
-    fn translate_init_expr(
+    ///
+    /// Local 0 is the wasm object.
+    fn translate_const_expr(
         &self,
         jvm_code: &mut CodeBuilder<'g>,
-        init_expr: &InitExpr,
+        init_expr: &ConstExpr,
     ) -> Result<(), Error> {
         for operator in init_expr.get_operators_reader().into_iter() {
             match operator? {
@@ -1012,6 +1228,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                     jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
                 }
                 Operator::End => (),
+                Operator::GlobalGet { global_index } => {
+                    jvm_code.push_instruction(Instruction::ALoad(0))?;
+                    self.globals[global_index as usize].read(&self.runtime, jvm_code)?;
+                }
                 other => todo!(
                     "figure out which other expressions and valid, then rule out the rest {:?}",
                     other
@@ -1030,6 +1250,15 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         self.generate_exports()?;
         self.generate_constructor()?;
 
+        // Prepare runtime libraries
+        let runtime_classes = vec![
+            make_function_class(self.class_graph, self.java, &self.runtime)?,
+            make_global_class(self.class_graph, self.java, &self.runtime)?,
+            make_function_table_class(self.class_graph, self.java, &self.runtime)?,
+            make_reference_table_class(self.class_graph, self.java, &self.runtime)?,
+            make_memory_class(self.class_graph, self.java, &self.runtime)?,
+        ];
+
         // Assemble all the parts
         let mut parts = self.previous_parts;
         parts.push(self.current_part.result()?);
@@ -1038,6 +1267,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         let results: Vec<(BinaryName, class_file::ClassFile)> = iter::once(self.class)
             .chain(self.utilities.into_builder().into_iter())
             .chain(parts.into_iter())
+            .chain(runtime_classes.into_iter())
             .map(|builder| {
                 let name = builder.id.name.clone();
                 builder

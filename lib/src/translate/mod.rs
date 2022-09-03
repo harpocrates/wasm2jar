@@ -1,103 +1,26 @@
 mod errors;
 mod function;
+mod global;
+mod memory;
 mod module;
 mod renamer;
 mod settings;
+mod table;
 mod utility;
 
 pub use errors::*;
 pub use function::*;
+pub use global::*;
+pub use memory::*;
 pub use module::*;
 pub use renamer::*;
 pub use settings::*;
+pub use table::*;
 pub use utility::*;
 
 use crate::jvm::class_graph::{FieldId, MethodId};
-use crate::jvm::UnqualifiedName;
-use crate::wasm::{FunctionType, StackType, TableType};
-use wasmparser::{ElementItem, ElementKind, InitExpr, MemoryType};
-
-/// Visibility of different importable/exportable entities in the WASM module
-#[derive(Debug)]
-pub struct MemberOrigin {
-    /// If imported, which module is it imported from?
-    imported: Option<Option<String>>,
-
-    /// Is it exported?
-    exported: bool,
-}
-
-impl MemberOrigin {
-    /// A member is internal if it is not imported or exported
-    pub fn is_internal(&self) -> bool {
-        !self.exported && self.imported.is_none()
-    }
-}
-
-/// WASM table
-///
-/// Internal tables are represented as fields on the module that have array types. Since tables
-/// types are constrained, we have only two cases to handle:
-///
-///   * Function reference tables have type `[Ljava/lang/invoke/MethodHandle;`
-///   * External reference tables have type `[Ljava/lang/Object;`
-///
-/// External (imported or exported) tables require an extra layer of indirected. They are more
-/// complicated because they can be altered (even resized) from the outside or be aliased with
-/// different names (an imported table can be re-exported under a different name).
-pub struct Table<'g> {
-    /// Where is the table defined?
-    pub origin: MemberOrigin,
-
-    /// Name of the method in the class (if exported, this matches the export name)
-    pub field_name: UnqualifiedName,
-
-    /// Field in the class which stores the table
-    pub field: Option<FieldId<'g>>,
-
-    /// Table type
-    pub table_type: TableType,
-
-    /// Table initial size
-    pub initial: u32,
-
-    /// Table maximum size
-    pub maximum: Option<u32>,
-}
-
-pub struct Memory<'g> {
-    /// Where is the memory defined?
-    pub origin: MemberOrigin,
-
-    /// Name of the field in the class (if exported, this matches the export name)
-    pub field_name: UnqualifiedName,
-
-    /// Field in the class which stores the memory
-    pub field: Option<FieldId<'g>>,
-
-    /// Memory type
-    pub memory_type: MemoryType,
-}
-
-pub struct Global<'a, 'g> {
-    /// Where is the table defined?
-    pub origin: MemberOrigin,
-
-    /// Name of the field in the class (if exported, this matches the export name)
-    pub field_name: UnqualifiedName,
-
-    /// Field in the class which stores the global
-    pub field: Option<FieldId<'g>>,
-
-    /// Global type
-    pub global_type: StackType,
-
-    /// Is the global mutable?
-    pub mutable: bool,
-
-    /// Initial value
-    pub initial: Option<InitExpr<'a>>,
-}
+use crate::wasm::{FunctionType, TableType};
+use wasmparser::{ElementItem, ElementKind};
 
 pub struct Element<'a> {
     /// Type of element section
@@ -129,7 +52,7 @@ pub struct Function<'a, 'g> {
     pub tailcall_method: Option<MethodId<'g>>,
 
     /// If the function is imported, this contains the name under which it is imported along with
-    /// the field (no the main WASM object) holding the method handle
+    /// the field (on the main WASM object) holding the method handle.
     pub import: Option<(ImportName<'a>, FieldId<'g>)>,
 
     /// If the function is exported, this holds the export information
@@ -137,9 +60,10 @@ pub struct Function<'a, 'g> {
     /// The boolean indicates whether we should _also_ generate a public (non-static) method on the
     /// WASM module object. This doesn't fit in a generalized export framework, but it is very
     /// convenient for functions.
-    pub export: Option<(ExportName<'a>, bool)>,
+    pub export: Vec<(ExportName<'a>, bool)>,
 }
 
+#[derive(Debug)]
 pub struct ImportName<'a> {
     /// Name of the module from which the entity is imported
     pub module: &'a str,
@@ -148,6 +72,7 @@ pub struct ImportName<'a> {
     pub name: &'a str,
 }
 
+#[derive(Debug)]
 pub struct ExportName<'a> {
     /// Name off the exported entity
     pub name: &'a str,

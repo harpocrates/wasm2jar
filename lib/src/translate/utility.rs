@@ -2947,10 +2947,10 @@ impl<'g> BootstrapUtilities<'g> {
     }
 
     /// Get (and create if missing) a bootstrap method for a given table
-    pub fn get_table_bootstrap(
+    pub fn get_table_bootstrap<'a>(
         &mut self,
         table_index: u32,
-        table: &Table<'g>,
+        table: &Table<'a, 'g>,
         class_graph: &'g ClassGraph<'g>,
         utilities: &mut UtilityClass<'g>,
         java: &'g JavaLibrary<'g>,
@@ -2975,7 +2975,7 @@ impl<'g> BootstrapUtilities<'g> {
          */
         let max_table_size = ConstantData::Long(i64::min(
             i32::MAX as i64,
-            table.maximum.unwrap_or(u32::MAX) as i64,
+            table.table_type.maximum.unwrap_or(u32::MAX) as i64,
         ));
 
         Ok(class_graph.add_bootstrap_method(BootstrapMethodData {
@@ -2985,10 +2985,10 @@ impl<'g> BootstrapUtilities<'g> {
     }
 
     /// Get (and create if missing) a bootstrap method for a given memory
-    pub fn get_memory_bootstrap(
+    pub fn get_memory_bootstrap<'a>(
         &mut self,
         memory_index: u32,
-        memory: &Memory<'g>,
+        memory: &Memory<'a, 'g>,
         class_graph: &'g ClassGraph<'g>,
         utilities: &mut UtilityClass<'g>,
         java: &'g JavaLibrary<'g>,

@@ -9,7 +9,7 @@ categories = ["command-line-utilities", "wasm", "compilers"]
 
 [dependencies]
 wasm2jar = { path = "../../lib" }
-wast = "44.0.0"
+wast = "46.0.0"
 clap = "3.2.17"
 log = "0.4"
 env_logger = "0.9"

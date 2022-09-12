@@ -246,6 +246,14 @@ impl JavaHarness {
         )?;
         self.writer.newline()?;
         self.writer.inline_code(
+            "spectest.put(\"print_f32\", new org.wasm2jar.Function(lookup.findVirtual(java.io.PrintStream.class, \"print\", MethodType.methodType(void.class, float.class)).bindTo(System.out)));",
+        )?;
+        self.writer.newline()?;
+        self.writer.inline_code(
+            "spectest.put(\"print_f64\", new org.wasm2jar.Function(lookup.findVirtual(java.io.PrintStream.class, \"print\", MethodType.methodType(void.class, double.class)).bindTo(System.out)));",
+        )?;
+        self.writer.newline()?;
+        self.writer.inline_code(
             "spectest.put(\"print\", new org.wasm2jar.Function(lookup.findVirtual(java.io.PrintStream.class, \"print\", MethodType.methodType(void.class, String.class)).bindTo(System.out).bindTo(\"\")));",
         )?;
         self.writer.newline()?;
@@ -260,6 +268,10 @@ impl JavaHarness {
         self.writer.newline()?;
         self.writer.inline_code("spectest.put(\"memory\", new org.wasm2jar.Memory(java.nio.ByteBuffer.allocate(65536)));")?;
         self.writer.newline()?;
+        self.writer.inline_code(
+            "spectest.put(\"table\", new org.wasm2jar.FunctionTable(new MethodHandle[10]));",
+        )?;
+        self.writer.newline()?;
         self.writer.inline_code_fmt(format_args!(
             "{}.put(\"spectest\", spectest);",
             Self::IMPORTS_VAR_NAME
@@ -268,8 +280,6 @@ impl JavaHarness {
 
         //  "print_i32_f32": console.log.bind(console),
         //  "print_f64_f64": console.log.bind(console),
-        //  "print_f32": console.log.bind(console),
-        //  "print_f64": console.log.bind(console),
 
         for idx in 0..self.run_methods_so_far {
             self.writer.inline_code_fmt(format_args!(

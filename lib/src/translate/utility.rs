@@ -1389,7 +1389,7 @@ impl<'g> UtilityClass<'g> {
         // newMemory.put(oldMemory);
         code.push_instruction(Instruction::ALoad(new_memory_argument))?;
         code.push_instruction(Instruction::ALoad(old_memory_argument))?;
-        code.invoke(code.java.members.nio.byte_buffer.put_bytebuffer)?;
+        code.invoke(code.java.members.nio.byte_buffer.put_bytebuffer_relative)?;
 
         // return oldMemory.capacity() / 65536;
         code.push_instruction(Instruction::ALoad(old_memory_argument))?;
@@ -1457,6 +1457,9 @@ impl<'g> UtilityClass<'g> {
     ///   if (numToFill < 0) {
     ///     throw new IllegalArgumentException("memory.fill: negative number of bytes");
     ///   }
+    ///   if (Math.addExact(numToFill, from) >= buf.capacity()) {
+    ///     throw new IllegalArgumentException("memory.fill: out-of-bounds fill");
+    ///   }
     ///   buf.position(from);
     ///   byte fillerByte = (byte) filler;
     ///   while (numToFill > 0) {
@@ -1466,11 +1469,12 @@ impl<'g> UtilityClass<'g> {
     /// }
     /// ```
     fn generate_fill_bytebuffer_range<'a>(code: &mut CodeBuilder<'g>) -> Result<(), Error> {
-        let ok_case = code.fresh_label();
+        let ok_case1 = code.fresh_label();
+        let ok_case2 = code.fresh_label();
 
         // if (numToFill < 0) {
         code.push_instruction(Instruction::ILoad(2))?;
-        code.push_branch_instruction(BranchInstruction::If(OrdComparison::GE, ok_case, ()))?;
+        code.push_branch_instruction(BranchInstruction::If(OrdComparison::GE, ok_case1, ()))?;
 
         // throw new IllegalArgumentException("memory.fill: negative number of bytes");
         code.new(code.java.classes.lang.illegal_argument_exception)?;
@@ -1478,7 +1482,23 @@ impl<'g> UtilityClass<'g> {
         code.const_string("memory.fill: negative number of bytes")?;
         code.invoke(code.java.members.lang.illegal_argument_exception.init)?;
         code.push_branch_instruction(BranchInstruction::AThrow)?;
-        code.place_label(ok_case)?;
+        code.place_label(ok_case1)?;
+
+        // if (Math.addExact(numToFill, from) >= buf.capacity()) {
+        code.push_instruction(Instruction::ILoad(2))?;
+        code.push_instruction(Instruction::ILoad(0))?;
+        code.invoke(code.java.members.lang.math.add_exact)?;
+        code.push_instruction(Instruction::ALoad(3))?;
+        code.invoke(code.java.members.nio.buffer.capacity)?;
+        code.push_branch_instruction(BranchInstruction::IfICmp(OrdComparison::LE, ok_case2, ()))?;
+
+        // throw new IllegalArgumentException("memory.fill: negative number of bytes");
+        code.new(code.java.classes.lang.illegal_argument_exception)?;
+        code.push_instruction(Instruction::Dup)?;
+        code.const_string("memory.fill: out-of-bounds fill")?;
+        code.invoke(code.java.members.lang.illegal_argument_exception.init)?;
+        code.push_branch_instruction(BranchInstruction::AThrow)?;
+        code.place_label(ok_case2)?;
 
         // buf.position(from);
         code.push_instruction(Instruction::ALoad(3))?;

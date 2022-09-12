@@ -1,5 +1,5 @@
 use super::{
-    BootstrapUtilities, Element, Error, ExportName, Function, FunctionTranslator, Global,
+    BootstrapUtilities, Data, Element, Error, ExportName, Function, FunctionTranslator, Global,
     GlobalRepr, ImportName, Memory, MemoryRepr, Settings, Table, TableRepr, UtilityClass,
 };
 use crate::jvm;
@@ -21,14 +21,14 @@ use crate::runtime::{
     make_reference_table_class, WasmRuntime,
 };
 use crate::util::Width;
-use crate::wasm::{ref_type_from_general, FunctionType, StackType, TableType};
+use crate::wasm::{FunctionType, StackType, TableType};
 use std::iter;
 use wasmparser::types::Types;
 use wasmparser::{
-    ConstExpr, Data, DataKind, DataSectionReader, ElementItem, ElementKind, ElementSectionReader,
-    ExportSectionReader, ExternalKind, FunctionBody, FunctionSectionReader, GlobalSectionReader,
-    Import, ImportSectionReader, MemorySectionReader, Operator, Parser, Payload,
-    TableSectionReader, Type, TypeRef, TypeSectionReader, Validator,
+    ConstExpr, DataKind, DataSectionReader, ElementKind, ElementSectionReader, ExportSectionReader,
+    ExternalKind, FunctionBody, FunctionSectionReader, GlobalSectionReader, Import,
+    ImportSectionReader, MemorySectionReader, Parser, Payload, TableSectionReader, Type, TypeRef,
+    TypeSectionReader, Validator,
 };
 
 /// Main entry point for translating a WASM module
@@ -66,10 +66,10 @@ pub struct ModuleTranslator<'a, 'g> {
     globals: Vec<Global<'a, 'g>>,
 
     /// Populated when we visit elements
-    elements: Vec<Element<'a>>,
+    elements: Vec<Element<'a, 'g>>,
 
     /// Populated when we visit datas
-    datas: Vec<Data<'a>>,
+    datas: Vec<Data<'a, 'g>>,
 
     /// Every time we see a new function, this gets incremented
     current_func_idx: u32,
@@ -206,7 +206,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             }
             Payload::ElementSection(section) => self.visit_elements(section)?,
             Payload::DataCountSection { count, range } => {
-                self.validator.data_count_section(count, &range)?
+                self.validator.data_count_section(count, &range)?;
+                self.visit_data_declarations(count as usize)?;
             }
             Payload::DataSection(section) => self.visit_datas(section)?,
             Payload::CustomSection { .. } => (),
@@ -272,6 +273,8 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             &self.tables,
             &self.memories,
             &self.globals,
+            &self.datas,
+            &self.elements,
             function_body,
             validator,
         )?;
@@ -386,6 +389,36 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 export: vec![],
             });
         }
+        Ok(())
+    }
+
+    /// Visit data declarations
+    fn visit_data_declarations(&mut self, data_count: usize) -> Result<(), Error> {
+        for data_idx in 0..data_count {
+            let method = self.class_graph.add_method(MethodData {
+                class: self.class.id,
+                name: self.settings.wasm_data_getter_name(data_idx),
+                access_flags: MethodAccessFlags::STATIC,
+                descriptor: MethodDescriptor {
+                    parameters: vec![FieldType::object(self.class.id)],
+                    return_type: Some(FieldType::array(FieldType::byte())),
+                },
+            });
+            let field = self.class_graph.add_field(FieldData {
+                class: self.class.id,
+                name: self.settings.wasm_data_name(data_idx),
+                access_flags: FieldAccessFlags::PRIVATE,
+                descriptor: FieldType::array(FieldType::byte()),
+            });
+
+            self.datas.push(Data {
+                kind: None,
+                bytes: None,
+                method,
+                field,
+            });
+        }
+
         Ok(())
     }
 
@@ -597,7 +630,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         for (memory_idx, memory) in &mut self.memories.iter_mut().enumerate() {
             let access_flags = match memory.repr {
                 MemoryRepr::External => FieldAccessFlags::FINAL,
-                MemoryRepr::Internal => FieldAccessFlags::PRIVATE,
+                MemoryRepr::Internal => FieldAccessFlags::PUBLIC, // empty(), // FieldAccessFlags::PRIVATE,
             };
 
             let descriptor = match memory.repr {
@@ -730,20 +763,64 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         Ok(())
     }
 
+    /// Generate functions for summoning data and elements
+    fn generate_constant_segments(&mut self) -> Result<(), Error> {
+        for data in &self.datas {
+            self.class
+                .add_method(data.generate_method(self.class_graph, self.java)?);
+            self.class.add_field(Field::new(data.field));
+        }
+        for element in &self.elements {
+            self.class.add_method(element.generate_method(
+                self.class_graph,
+                self.java,
+                &self.runtime,
+                &self.functions,
+                &self.globals,
+            )?);
+            self.class.add_field(Field::new(element.field));
+        }
+
+        Ok(())
+    }
+
     /// Visit the elements section
     fn visit_elements(&mut self, elements: ElementSectionReader<'a>) -> Result<(), Error> {
         self.validator.element_section(&elements)?;
-        for element in elements.into_iter() {
+
+        for (element_idx, element) in elements.into_iter().enumerate() {
             let element = element?;
             let items = element
                 .items
                 .get_items_reader()?
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()?;
+            let element_type = TableType::from_general(element.ty)?;
+
+            let method = self.class_graph.add_method(MethodData {
+                class: self.class.id,
+                name: self.settings.wasm_element_getter_name(element_idx),
+                access_flags: MethodAccessFlags::STATIC,
+                descriptor: MethodDescriptor {
+                    parameters: vec![FieldType::object(self.class.id)],
+                    return_type: Some(FieldType::array(
+                        element_type.field_type(&self.java.classes),
+                    )),
+                },
+            });
+            let field = self.class_graph.add_field(FieldData {
+                class: self.class.id,
+                name: self.settings.wasm_element_name(element_idx),
+                access_flags: FieldAccessFlags::PRIVATE,
+                descriptor: FieldType::array(element_type.field_type(&self.java.classes)),
+            });
+
             self.elements.push(Element {
                 kind: element.kind,
-                element_type: TableType::from_general(element.ty)?,
+                element_type,
                 items,
+                method,
+                field,
             });
         }
         Ok(())
@@ -752,8 +829,18 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     /// Visit the datas section
     fn visit_datas(&mut self, datas: DataSectionReader<'a>) -> Result<(), Error> {
         self.validator.data_section(&datas)?;
-        for data in datas.into_iter() {
-            self.datas.push(data?);
+
+        // This will be non-zero if there was a data declaration section and 0 otherwise
+        let expected_datas = datas.get_count() as usize;
+        if self.datas.is_empty() && expected_datas != 0 {
+            self.visit_data_declarations(expected_datas)?;
+        }
+
+        // Fill in data about the segments
+        for (segment, data) in datas.into_iter().zip(self.datas.iter_mut()) {
+            let segment = segment?;
+            data.kind = Some(segment.kind);
+            data.bytes = Some(segment.data);
         }
         Ok(())
     }
@@ -994,37 +1081,33 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 offset_expr,
             } = element.kind
             {
-                let offset_var = 2;
                 let table = &self.tables[table_index as usize];
+
+                // Load onto the stack the element array
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.invoke(element.method)?;
+
+                // Offset in the element from which to start copying
+                jvm_code.const_int(0)?;
 
                 // Load onto the stack the table array
                 jvm_code.push_instruction(Instruction::ALoad(0))?;
                 table.load_array(&self.runtime, &mut jvm_code)?;
 
-                // Store the starting offset in a local variable
+                // Offset in the table where to begin writing
                 self.translate_const_expr(&mut jvm_code, &offset_expr)?;
-                jvm_code.push_instruction(Instruction::IStore(offset_var))?;
 
-                for item in &element.items {
-                    jvm_code.push_instruction(Instruction::Dup)?;
-                    jvm_code.push_instruction(Instruction::ILoad(offset_var))?;
-                    match item {
-                        ElementItem::Func(func_idx) => {
-                            let method = self.functions[*func_idx as usize].method;
-                            let method_handle = ConstantData::MethodHandle(method);
-                            jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
-                        }
-                        ElementItem::Expr(elem_expr) => {
-                            self.translate_const_expr(&mut jvm_code, &elem_expr)?
-                        }
-                    }
-                    jvm_code.push_instruction(Instruction::AAStore)?;
-                    jvm_code.push_instruction(Instruction::IInc(offset_var, 1))?;
-                }
+                // Number of elements to write
+                jvm_code.const_int(element.items.len() as i32)?;
 
-                // Kill the local variable, drop the array
-                jvm_code.push_instruction(Instruction::Pop)?;
-                jvm_code.kill_top_local(offset_var, Some(FieldType::int()))?;
+                // `System.arraycopy(element, 0, table, start_off, element.length)`
+                jvm_code.invoke(jvm_code.java.members.lang.system.arraycopy)?;
+            }
+
+            // Drop non-passive elements
+            if let ElementKind::Passive = element.kind {
+            } else {
+                element.drop_element(&mut jvm_code, 0)?;
             }
         }
 
@@ -1033,20 +1116,13 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             if let DataKind::Active {
                 memory_index,
                 offset_expr,
-            } = data.kind
+            } = data.kind.unwrap()
             {
                 let memory = &self.memories[memory_index as usize];
 
                 // Load onto the stack the memory bytebuffer
                 jvm_code.push_instruction(Instruction::ALoad(0))?;
-                jvm_code.access_field(memory.field.unwrap(), AccessMode::Read)?;
-                match memory.repr {
-                    MemoryRepr::External => {
-                        jvm_code
-                            .access_field(self.runtime.members.memory.bytes, AccessMode::Read)?;
-                    }
-                    MemoryRepr::Internal => (),
-                }
+                memory.load_bytebuffer(&self.runtime, &mut jvm_code)?;
 
                 // Set the starting offset for the buffer
                 jvm_code.push_instruction(Instruction::Dup)?;
@@ -1054,15 +1130,21 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.invoke(jvm_code.java.members.nio.buffer.position)?;
                 jvm_code.push_instruction(Instruction::Pop)?;
 
-                for chunk in data.data.chunks(u16::MAX as usize) {
-                    jvm_code.const_string(chunk.iter().map(|&c| c as char).collect::<String>())?;
-                    jvm_code.const_string("ISO-8859-1")?;
-                    jvm_code.invoke(jvm_code.java.members.lang.string.get_bytes)?;
-                    jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.put_bytearray)?;
-                }
+                // Get the data as a bytebuffer and put that
+                jvm_code.push_instruction(Instruction::ALoad(0))?;
+                jvm_code.invoke(data.method)?;
+                jvm_code.invoke(jvm_code.java.members.nio.byte_buffer.put_bytearray_relative)?;
 
                 // Kill the local variable, drop the bytebuffer
                 jvm_code.push_instruction(Instruction::Pop)?;
+
+                data.drop_data(&mut jvm_code, 0)?;
+            }
+
+            // Drop non-passive data
+            if let DataKind::Passive = data.kind.unwrap() {
+            } else {
+                data.drop_data(&mut jvm_code, 0)?;
             }
         }
 
@@ -1208,38 +1290,14 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         jvm_code: &mut CodeBuilder<'g>,
         init_expr: &ConstExpr,
     ) -> Result<(), Error> {
-        for operator in init_expr.get_operators_reader().into_iter() {
-            match operator? {
-                Operator::I32Const { value } => jvm_code.const_int(value)?,
-                Operator::I64Const { value } => jvm_code.const_long(value)?,
-                Operator::F32Const { value } => {
-                    jvm_code.const_float(f32::from_bits(value.bits()))?
-                }
-                Operator::F64Const { value } => {
-                    jvm_code.const_double(f64::from_bits(value.bits()))?
-                }
-                Operator::RefNull { ty } => {
-                    let ref_type = ref_type_from_general(ty, &jvm_code.java.classes)?;
-                    jvm_code.const_null(ref_type)?;
-                }
-                Operator::RefFunc { function_index } => {
-                    let method = self.functions[function_index as usize].method;
-                    let method_handle = ConstantData::MethodHandle(method);
-                    jvm_code.push_instruction(Instruction::Ldc(method_handle))?;
-                }
-                Operator::End => (),
-                Operator::GlobalGet { global_index } => {
-                    jvm_code.push_instruction(Instruction::ALoad(0))?;
-                    self.globals[global_index as usize].read(&self.runtime, jvm_code)?;
-                }
-                other => todo!(
-                    "figure out which other expressions and valid, then rule out the rest {:?}",
-                    other
-                ),
-            }
-        }
-
-        Ok(())
+        super::translate_const_expr(
+            &self.functions,
+            &self.globals,
+            &self.runtime,
+            0,
+            jvm_code,
+            init_expr,
+        )
     }
 
     /// Emit the final classes
@@ -1248,6 +1306,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
     /// the "part" inner classes.
     pub fn result(mut self) -> Result<Vec<(BinaryName, class_file::ClassFile)>, Error> {
         self.generate_exports()?;
+        self.generate_constant_segments()?;
         self.generate_constructor()?;
 
         // Prepare runtime libraries

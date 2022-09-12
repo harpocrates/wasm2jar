@@ -1,6 +1,6 @@
-use super::{ExportName, ImportName};
+use super::{Element, ExportName, ImportName};
 use crate::jvm::class_graph::{AccessMode, ClassId, FieldId, JavaClasses};
-use crate::jvm::code::{CodeBuilder, CodeBuilderExts};
+use crate::jvm::code::{CodeBuilder, CodeBuilderExts, Instruction};
 use crate::jvm::{Error, RefType};
 use crate::runtime::WasmRuntime;
 use wasmparser::TableType;
@@ -73,6 +73,34 @@ impl<'a, 'g> Table<'a, 'g> {
             };
             code.access_field(array_field, AccessMode::Read)?;
         }
+
+        Ok(())
+    }
+
+    /// Initialize table from an element
+    ///
+    /// Assumes the top of the stack is the number of elements to intiialize, followed by an offset
+    /// into the element from which to start copying, followed by an offset in the table where to
+    /// start writing.
+    pub fn init(
+        &self,
+        runtime: &WasmRuntime<'g>,
+        code: &mut CodeBuilder<'g>,
+        this_off: u16,
+        len_off: u16,
+        src_off: u16,
+        dst_off: u16,
+        element: &Element<'a, 'g>,
+    ) -> Result<(), Error> {
+        // `System.arraycopy(wasm_elem(), src, table, dst, len)`
+        code.push_instruction(Instruction::ALoad(this_off))?;
+        code.invoke(element.method)?;
+        code.push_instruction(Instruction::ILoad(src_off))?;
+        code.push_instruction(Instruction::ALoad(this_off))?;
+        self.load_array(runtime, code)?;
+        code.push_instruction(Instruction::ILoad(dst_off))?;
+        code.push_instruction(Instruction::ILoad(len_off))?;
+        code.invoke(code.java.members.lang.system.arraycopy)?;
 
         Ok(())
     }

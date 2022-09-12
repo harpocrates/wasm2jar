@@ -12,6 +12,7 @@ use wasm2jar::jvm::Name;
 use wasm2jar::{jvm, translate};
 use wast::component::Component;
 use wast::core::Module;
+use wast::lexer::Lexer;
 use wast::parser::{self, ParseBuffer};
 use wast::token::{Float32, Float64, Id, Span};
 use wast::{QuoteWat, Wast, WastDirective, Wat};
@@ -63,7 +64,9 @@ impl<'a> TestHarness<'a> {
     {
         let wast_file = wast_file.as_ref();
         let wast_source = &fs::read_to_string(wast_file)?;
-        let buf = ParseBuffer::new(wast_source)?;
+        let mut lexer = Lexer::new(wast_source);
+        lexer.allow_confusing_unicode(true); // For `names.wast` in the spec tests
+        let buf = ParseBuffer::new_with_lexer(lexer)?;
         let Wast { directives } = parser::parse::<Wast>(&buf)?;
 
         let mut harness = TestHarness {
@@ -319,9 +322,38 @@ impl<'a> TestHarness<'a> {
                 harness.close_curly_block()?;
             }
 
-            WastDirective::AssertUnlinkable { .. } => {
-                return Err(TestError::IncompleteHarness("assert_unlinkable"))
+            WastDirective::AssertUnlinkable {
+                span,
+                module,
+                message: _,
+            } => {
+                let span_str = self.pretty_span(span);
+
+                let harness = self.get_java_writer()?;
+                harness.newline()?;
+                harness.inline_code("try")?;
+                harness.open_curly_block()?;
+
+                self.java_execute(wast::WastExecute::Wat(module))?;
+                let harness = self.get_java_writer()?;
+                harness.inline_code(";")?;
+                harness.newline()?;
+                harness
+                    .inline_code_fmt(format_args!("{} = true;", JavaHarness::FAILURE_VAR_NAME))?;
+                harness.newline()?;
+                harness.inline_code_fmt(format_args!(
+                    "System.out.println(\"Unexpected success at {}\");",
+                    &span_str
+                ))?;
+
+                harness.close_curly_block()?;
+
+                // TODO: check message?
+                harness.inline_code("catch (Throwable e)")?;
+                harness.open_curly_block()?;
+                harness.close_curly_block()?;
             }
+
             WastDirective::Register { name, module, .. } => {
                 let harness = self.get_java_writer()?;
                 let module = match module {

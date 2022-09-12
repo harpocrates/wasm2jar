@@ -146,11 +146,13 @@ impl UnqualifiedName {
     pub const ADDEXACT: Self = Self::name("addExact");
     pub const ALLOCATE: Self = Self::name("allocate");
     pub const ALLOCATEDIRECT: Self = Self::name("allocateDirect");
+    pub const ARRAY: Self = Self::name("array");
     pub const ARRAYCONSTRUCTOR: Self = Self::name("arrayConstructor");
     pub const ARRAYCOPY: Self = Self::name("arraycopy");
     pub const ARRAYELEMENTGETTER: Self = Self::name("arrayElementGetter");
     pub const ARRAYELEMENTSETTER: Self = Self::name("arrayElementSetter");
     pub const ARRAYLENGTH: Self = Self::name("arrayLength");
+    pub const ASREADONLYBUFFER: Self = Self::name("asReadOnlyBuffer");
     pub const ASTYPE: Self = Self::name("asType");
     pub const BIGENDIAN: Self = Self::name("BIG_ENDIAN");
     pub const BITCOUNT: Self = Self::name("bitCount");
@@ -233,6 +235,7 @@ impl UnqualifiedName {
     pub const TYPE: Self = Self::name("type");
     pub const UPPERCASE_TYPE: Self = Self::name("TYPE");
     pub const VALUEOF: Self = Self::name("valueOf");
+    pub const WRAP: Self = Self::name("wrap");
 
     // Special unqualified names - only these are allowed to have angle brackets in them
     pub const INIT: Self = Self::name("<init>");
@@ -289,6 +292,7 @@ impl UnqualifiedName {
     pub const UNREACHABLE: Self = Self::name("unreachable");
 
     pub const DOLLAR: Self = Self::name("$");
+    pub const UNDERSCORE: Self = Self::name("_");
 }
 
 impl BinaryName {

@@ -1,6 +1,6 @@
 use super::{
-    BootstrapUtilities, Error, Function, Global, Memory, Settings, Table, UtilityClass,
-    UtilityMethod,
+    BootstrapUtilities, Data, Element, Error, Function, Global, Memory, Settings, Table,
+    UtilityClass, UtilityMethod,
 };
 use crate::jvm::class_graph::ClassId;
 use crate::jvm::code::{
@@ -55,6 +55,12 @@ pub struct FunctionTranslator<'a, 'b, 'g> {
     /// Globals
     wasm_globals: &'b [Global<'a, 'g>],
 
+    /// Datas
+    wasm_datas: &'b [Data<'a, 'g>],
+
+    /// Elements
+    wasm_elements: &'b [Element<'a, 'g>],
+
     /// Local variables
     jvm_locals: LocalsLayout<'g>,
 
@@ -87,6 +93,8 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         wasm_tables: &'b [Table<'a, 'g>],
         wasm_memories: &'b [Memory<'a, 'g>],
         wasm_globals: &'b [Global<'a, 'g>],
+        wasm_datas: &'b [Data<'a, 'g>],
+        wasm_elements: &'b [Element<'a, 'g>],
         wasm_function: FunctionBody<'a>,
         wasm_validator: FuncValidator<ValidatorResources>,
     ) -> Result<Self, Error> {
@@ -111,6 +119,8 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             wasm_tables,
             wasm_memories,
             wasm_globals,
+            wasm_datas,
+            wasm_elements,
             wasm_validator,
             wasm_prev_operand_stack_height: 0,
             wasm_function,
@@ -285,8 +295,11 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             // Table instructions
             Operator::TableGet { table } => self.visit_table_get(table)?,
             Operator::TableSet { table } => self.visit_table_set(table)?,
-            Operator::TableInit { .. } => todo!("table.init"),
-            Operator::TableCopy { .. } => todo!("table.copy"),
+            Operator::TableInit { segment, table } => self.visit_table_init(segment, table)?,
+            Operator::TableCopy {
+                src_table,
+                dst_table,
+            } => self.visit_table_copy(src_table, dst_table)?,
             Operator::TableGrow { table } => self.visit_table_grow(table)?,
             Operator::TableSize { table } => self.visit_table_size(table)?,
             Operator::TableFill { table } => self.visit_table_fill(table)?,
@@ -366,11 +379,11 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             }
             Operator::MemorySize { mem, .. } => self.visit_memory_size(mem)?, // TODO: what is `mem_byte` for?
             Operator::MemoryGrow { mem, .. } => self.visit_memory_grow(mem)?,
-            Operator::MemoryInit { .. } => todo!("memory.init"),
-            Operator::MemoryCopy { .. } => todo!("memory.copy"),
+            Operator::MemoryInit { segment, mem } => self.visit_memory_init(mem, segment)?,
+            Operator::MemoryCopy { dst, src } => self.visit_memory_copy(src, dst)?,
             Operator::MemoryFill { mem } => self.visit_memory_fill(mem)?,
-            Operator::DataDrop { .. } => todo!("data.drop"),
-            Operator::ElemDrop { .. } => todo!("elem.drop"),
+            Operator::DataDrop { segment } => self.visit_data_drop(segment)?,
+            Operator::ElemDrop { segment } => self.visit_element_drop(segment)?,
 
             // Numeric Instructions
             Operator::I32Const { value } => self.jvm_code.const_int(value)?,
@@ -1555,6 +1568,98 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         Ok(())
     }
 
+    /// Visit a table intialization operator
+    fn visit_table_init(&mut self, element: u32, table: u32) -> Result<(), Error> {
+        let element = &self.wasm_elements[element as usize];
+        let table = &self.wasm_tables[table as usize];
+        let this_off = self.jvm_locals.lookup_this()?.0;
+
+        // Put the length, source index, and destination index in variables
+        let len_off = self.jvm_locals.push_local(FieldType::int())?;
+        let src_off = self.jvm_locals.push_local(FieldType::int())?;
+        let dst_off = self.jvm_locals.push_local(FieldType::int())?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(len_off))?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(src_off))?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(dst_off))?;
+
+        table.init(
+            &self.runtime,
+            &mut self.jvm_code,
+            this_off,
+            len_off,
+            src_off,
+            dst_off,
+            element,
+        )?;
+
+        // Clear the locals
+        self.jvm_locals.pop_local()?;
+        self.jvm_locals.pop_local()?;
+        self.jvm_locals.pop_local()?;
+        self.jvm_code
+            .kill_top_local(dst_off, Some(FieldType::int()))?;
+        self.jvm_code
+            .kill_top_local(src_off, Some(FieldType::int()))?;
+        self.jvm_code
+            .kill_top_local(len_off, Some(FieldType::int()))?;
+
+        Ok(())
+    }
+
+    /// Visit a table copy operator
+    fn visit_table_copy(&mut self, src_table: u32, dst_table: u32) -> Result<(), Error> {
+        let src_table = &self.wasm_tables[src_table as usize];
+        let dst_table = &self.wasm_tables[dst_table as usize];
+        let this_off = self.jvm_locals.lookup_this()?.0;
+
+        // Number of entries to copy
+        let len_idx = self.jvm_locals.push_local(FieldType::int())?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(len_idx))?;
+
+        // Copy from this offset
+        let src_off_idx = self.jvm_locals.push_local(FieldType::int())?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(src_off_idx))?;
+
+        // Copy to this offset
+        let dst_off_idx = self.jvm_locals.push_local(FieldType::int())?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(dst_off_idx))?;
+
+        // System.arraycopy()
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        src_table.load_array(self.runtime, self.jvm_code)?;
+        self.jvm_code
+            .push_instruction(Instruction::ILoad(src_off_idx))?;
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        dst_table.load_array(self.runtime, self.jvm_code)?;
+        self.jvm_code
+            .push_instruction(Instruction::ILoad(dst_off_idx))?;
+        self.jvm_code
+            .push_instruction(Instruction::ILoad(len_idx))?;
+        self.jvm_code
+            .invoke(self.jvm_code.java.members.lang.system.arraycopy)?;
+
+        // Clean up temporary locals
+        self.jvm_locals.pop_local()?;
+        self.jvm_locals.pop_local()?;
+        self.jvm_locals.pop_local()?;
+        self.jvm_code
+            .kill_top_local(dst_off_idx, Some(FieldType::int()))?;
+        self.jvm_code
+            .kill_top_local(src_off_idx, Some(FieldType::int()))?;
+        self.jvm_code
+            .kill_top_local(len_idx, Some(FieldType::int()))?;
+
+        Ok(())
+    }
+
     /// Visit a table grow operator
     fn visit_table_grow(&mut self, table_idx: u32) -> Result<(), Error> {
         let table = &self.wasm_tables[table_idx as usize];
@@ -1652,6 +1757,109 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             ty,
         )?;
         self.jvm_locals.pop_local()?;
+
+        Ok(())
+    }
+
+    fn visit_memory_init(&mut self, mem: u32, segment: u32) -> Result<(), Error> {
+        let memory = &self.wasm_memories[mem as usize];
+        let data = &self.wasm_datas[segment as usize];
+        let this_off = self.jvm_locals.lookup_this()?.0;
+
+        // Put the length, source index, and destination index in variables
+        let len_off = self.jvm_locals.push_local(FieldType::int())?;
+        let src_off = self.jvm_locals.push_local(FieldType::int())?;
+        let dst_off = self.jvm_locals.push_local(FieldType::int())?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(len_off))?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(src_off))?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(dst_off))?;
+
+        memory.init(
+            &self.runtime,
+            &mut self.jvm_code,
+            this_off,
+            len_off,
+            src_off,
+            dst_off,
+            data,
+        )?;
+
+        // Clear the locals
+        self.jvm_locals.pop_local()?;
+        self.jvm_locals.pop_local()?;
+        self.jvm_locals.pop_local()?;
+
+        Ok(())
+    }
+
+    fn visit_data_drop(&mut self, data: u32) -> Result<(), Error> {
+        let data = &self.wasm_datas[data as usize];
+        let this_off = self.jvm_locals.lookup_this()?.0;
+
+        data.drop_data(&mut self.jvm_code, this_off)?;
+
+        Ok(())
+    }
+
+    fn visit_element_drop(&mut self, element: u32) -> Result<(), Error> {
+        let element = &self.wasm_elements[element as usize];
+        let this_off = self.jvm_locals.lookup_this()?.0;
+
+        element.drop_element(&mut self.jvm_code, this_off)?;
+
+        Ok(())
+    }
+
+    fn visit_memory_copy(&mut self, src_memory: u32, dst_memory: u32) -> Result<(), Error> {
+        let src_memory = &self.wasm_memories[src_memory as usize];
+        let dst_memory = &self.wasm_memories[dst_memory as usize];
+        let this_off = self.jvm_locals.lookup_this()?.0;
+
+        // Number of entries to copy
+        let len_idx = self.jvm_locals.push_local(FieldType::int())?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(len_idx))?;
+
+        // Copy from this offset
+        let src_off_idx = self.jvm_locals.push_local(FieldType::int())?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(src_off_idx))?;
+
+        // Copy to this offset
+        let dst_off_idx = self.jvm_locals.push_local(FieldType::int())?;
+        self.jvm_code
+            .push_instruction(Instruction::IStore(dst_off_idx))?;
+
+        // System.arraycopy()
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        src_memory.load_bytebuffer(self.runtime, self.jvm_code)?;
+        self.jvm_code
+            .push_instruction(Instruction::ILoad(dst_off_idx))?;
+        self.jvm_code
+            .push_instruction(Instruction::ALoad(this_off))?;
+        dst_memory.load_bytebuffer(self.runtime, self.jvm_code)?;
+        self.jvm_code
+            .push_instruction(Instruction::ILoad(src_off_idx))?;
+        self.jvm_code
+            .push_instruction(Instruction::ILoad(len_idx))?;
+        self.jvm_code
+            .invoke(self.jvm_code.java.members.nio.byte_buffer.put_bytebuffer)?;
+        self.jvm_code.push_instruction(Instruction::Pop)?;
+
+        // Clean up temporary locals
+        let _ = self.jvm_locals.pop_local()?;
+        let _ = self.jvm_locals.pop_local()?;
+        let _ = self.jvm_locals.pop_local()?;
+        self.jvm_code
+            .kill_top_local(dst_off_idx, Some(FieldType::int()))?;
+        self.jvm_code
+            .kill_top_local(src_off_idx, Some(FieldType::int()))?;
+        self.jvm_code
+            .kill_top_local(len_idx, Some(FieldType::int()))?;
 
         Ok(())
     }

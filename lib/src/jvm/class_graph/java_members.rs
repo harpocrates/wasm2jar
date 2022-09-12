@@ -272,6 +272,8 @@ pub struct BufferMembers<'g> {
 pub struct ByteBufferMembers<'g> {
     pub allocate: MethodId<'g>,
     pub allocate_direct: MethodId<'g>,
+    pub wrap: MethodId<'g>,
+    pub array: MethodId<'g>,
     pub capacity: MethodId<'g>,
     pub get_byte: MethodId<'g>,
     pub put_byte: MethodId<'g>,
@@ -285,11 +287,14 @@ pub struct ByteBufferMembers<'g> {
     pub put_long: MethodId<'g>,
     pub get_double: MethodId<'g>,
     pub put_double: MethodId<'g>,
-    pub put_bytebuffer: MethodId<'g>,
     pub put_bytearray: MethodId<'g>,
+    pub put_bytebuffer: MethodId<'g>,
+    pub put_bytebuffer_relative: MethodId<'g>,
+    pub put_bytearray_relative: MethodId<'g>,
     pub put_byte_relative: MethodId<'g>,
     pub position: MethodId<'g>,
     pub order: MethodId<'g>,
+    pub as_read_only_buffer: MethodId<'g>,
 }
 
 /// Members of `java.nio.ByteOrder`
@@ -1609,6 +1614,24 @@ impl<'g> ByteBufferMembers<'g> {
         };
         let allocate = add_allocate(UnqualifiedName::ALLOCATE);
         let allocate_direct = add_allocate(UnqualifiedName::ALLOCATEDIRECT);
+        let wrap = class_graph.add_method(MethodData {
+            class,
+            name: UnqualifiedName::WRAP,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+            descriptor: MethodDescriptor {
+                parameters: vec![FieldType::array(FieldType::byte())],
+                return_type: Some(FieldType::object(classes.nio.byte_buffer)),
+            },
+        });
+        let array = class_graph.add_method(MethodData {
+            class,
+            name: UnqualifiedName::ARRAY,
+            access_flags: MethodAccessFlags::PUBLIC,
+            descriptor: MethodDescriptor {
+                parameters: vec![],
+                return_type: Some(FieldType::array(FieldType::byte())),
+            },
+        });
         let capacity = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::CAPACITY,
@@ -1655,6 +1678,35 @@ impl<'g> ByteBufferMembers<'g> {
         let put_long = add_put(UnqualifiedName::PUTLONG, FieldType::long());
         let put_double = add_put(UnqualifiedName::PUTDOUBLE, FieldType::double());
 
+        let put_bytearray = class_graph.add_method(MethodData {
+            class,
+            name: UnqualifiedName::PUT,
+            access_flags: MethodAccessFlags::PUBLIC,
+            descriptor: MethodDescriptor {
+                parameters: vec![
+                    FieldType::int(),
+                    FieldType::array(FieldType::byte()),
+                    FieldType::int(),
+                    FieldType::int(),
+                ],
+                return_type: Some(FieldType::object(classes.nio.byte_buffer)),
+            },
+        });
+        let put_bytebuffer = class_graph.add_method(MethodData {
+            class,
+            name: UnqualifiedName::PUT,
+            access_flags: MethodAccessFlags::PUBLIC,
+            descriptor: MethodDescriptor {
+                parameters: vec![
+                    FieldType::int(),
+                    FieldType::object(classes.nio.byte_buffer),
+                    FieldType::int(),
+                    FieldType::int(),
+                ],
+                return_type: Some(FieldType::object(classes.nio.byte_buffer)),
+            },
+        });
+
         let add_relative_put = |typ: FieldType<ClassId<'g>>| -> MethodId<'g> {
             class_graph.add_method(MethodData {
                 class,
@@ -1666,8 +1718,8 @@ impl<'g> ByteBufferMembers<'g> {
                 },
             })
         };
-        let put_bytebuffer = add_relative_put(FieldType::object(classes.nio.byte_buffer));
-        let put_bytearray = add_relative_put(FieldType::array(FieldType::byte()));
+        let put_bytebuffer_relative = add_relative_put(FieldType::object(classes.nio.byte_buffer));
+        let put_bytearray_relative = add_relative_put(FieldType::array(FieldType::byte()));
         let put_byte_relative = add_relative_put(FieldType::byte());
 
         let position = class_graph.add_method(MethodData {
@@ -1688,10 +1740,21 @@ impl<'g> ByteBufferMembers<'g> {
                 return_type: Some(FieldType::object(classes.nio.byte_buffer)),
             },
         });
+        let as_read_only_buffer = class_graph.add_method(MethodData {
+            class,
+            name: UnqualifiedName::ASREADONLYBUFFER,
+            access_flags: MethodAccessFlags::PUBLIC,
+            descriptor: MethodDescriptor {
+                parameters: vec![],
+                return_type: Some(FieldType::object(classes.nio.byte_buffer)),
+            },
+        });
 
         ByteBufferMembers {
             allocate,
             allocate_direct,
+            wrap,
+            array,
             capacity,
             get_byte,
             put_byte,
@@ -1705,11 +1768,14 @@ impl<'g> ByteBufferMembers<'g> {
             put_long,
             get_double,
             put_double,
-            put_bytebuffer,
             put_bytearray,
+            put_bytebuffer,
+            put_bytebuffer_relative,
+            put_bytearray_relative,
             put_byte_relative,
             position,
             order,
+            as_read_only_buffer,
         }
     }
 }

@@ -25,6 +25,12 @@ pub struct Settings {
     /// Memory name prefix (eg. `memory`)
     pub wasm_memory_name_prefix: UnqualifiedName,
 
+    /// Data name prefix (eg. `data`)
+    pub wasm_data_name_prefix: UnqualifiedName,
+
+    /// Data name prefix (eg. `element`)
+    pub wasm_element_name_prefix: UnqualifiedName,
+
     /// Utilities class strategy
     pub utilities_strategy: UtilitiesStrategy,
 
@@ -144,6 +150,8 @@ impl Settings {
             wasm_global_name_prefix: make_name("global")?,
             wasm_table_name_prefix: make_name("table")?,
             wasm_memory_name_prefix: make_name("memory")?,
+            wasm_data_name_prefix: make_name("data")?,
+            wasm_element_name_prefix: make_name("element")?,
             utilities_strategy,
             part_short_class_name: make_name("Part")?,
             funcref_array_table_field_name: make_name("funcref_tables")?,
@@ -181,6 +189,30 @@ impl Settings {
     pub fn wasm_table_name(&self, import_idx: usize) -> UnqualifiedName {
         self.wasm_table_name_prefix
             .concat(&UnqualifiedName::number(import_idx))
+    }
+
+    pub fn wasm_data_getter_name(&self, data_idx: usize) -> UnqualifiedName {
+        UnqualifiedName::GET
+            .concat(&UnqualifiedName::UNDERSCORE)
+            .concat(&self.wasm_data_name_prefix)
+            .concat(&UnqualifiedName::number(data_idx))
+    }
+
+    pub fn wasm_data_name(&self, data_idx: usize) -> UnqualifiedName {
+        self.wasm_data_name_prefix
+            .concat(&UnqualifiedName::number(data_idx))
+    }
+
+    pub fn wasm_element_getter_name(&self, element_idx: usize) -> UnqualifiedName {
+        UnqualifiedName::GET
+            .concat(&UnqualifiedName::UNDERSCORE)
+            .concat(&self.wasm_element_name_prefix)
+            .concat(&UnqualifiedName::number(element_idx))
+    }
+
+    pub fn wasm_element_name(&self, element_idx: usize) -> UnqualifiedName {
+        self.wasm_element_name_prefix
+            .concat(&UnqualifiedName::number(element_idx))
     }
 }
 

@@ -271,37 +271,8 @@ impl Serialize for Constant {
         match self {
             // Despite the name, this is _not_ exactly UTF-8, but it is similar
             Constant::Utf8(string) => {
-                let mut buffer: Vec<u8> = vec![];
-                for c in string.chars() {
-                    // Handle the exception for how `\u{0000}` is represented
-                    let len: usize = if c == '\u{0000}' { 2 } else { c.len_utf8() };
-                    let code: u32 = c as u32;
-
-                    match len {
-                        1 => buffer.push(code as u8),
-                        2 => {
-                            buffer.push((code >> 6 & 0x1F) as u8 | 0b1100_0000);
-                            buffer.push((code & 0x3F) as u8 | 0b1000_0000);
-                        }
-                        3 => {
-                            buffer.push((code >> 12 & 0x0F) as u8 | 0b1110_0000);
-                            buffer.push((code >> 6 & 0x3F) as u8 | 0b1000_0000);
-                            buffer.push((code & 0x3F) as u8 | 0b1000_0000);
-                        }
-
-                        // Supplementary characters: main divergence from unicode
-                        _ => {
-                            buffer.push(0b1110_1101);
-                            buffer.push(((code >> 16 & 0x0F) as u8 - 1) | 0b1010_0000);
-                            buffer.push((code >> 10 & 0x3F) as u8 | 0b1000_0000);
-
-                            buffer.push(0b1110_1101);
-                            buffer.push(((code >> 6 & 0x1F) as u8 - 1) | 0b1011_0000);
-                            buffer.push((code & 0x3F) as u8 | 0b1000_0000);
-                        }
-                    }
-                }
                 1u8.serialize(writer)?;
+                let mut buffer: Vec<u8> = encode_utf8(string);
                 (buffer.len() as u16).serialize(writer)?;
                 writer.write_all(&mut buffer)?;
             }
@@ -371,6 +342,40 @@ impl Serialize for Constant {
         };
         Ok(())
     }
+}
+
+fn encode_utf8(string: &str) -> Vec<u8> {
+    let mut buffer: Vec<u8> = vec![];
+    for c in string.chars() {
+        // Handle the exception for how `\u{0000}` is represented
+        let len: usize = if c == '\u{0000}' { 2 } else { c.len_utf8() };
+        let code: u32 = c as u32;
+
+        match len {
+            1 => buffer.push(code as u8),
+            2 => {
+                buffer.push((code >> 6 & 0x1F) as u8 | 0b1100_0000);
+                buffer.push((code & 0x3F) as u8 | 0b1000_0000);
+            }
+            3 => {
+                buffer.push((code >> 12 & 0x0F) as u8 | 0b1110_0000);
+                buffer.push((code >> 6 & 0x3F) as u8 | 0b1000_0000);
+                buffer.push((code & 0x3F) as u8 | 0b1000_0000);
+            }
+
+            // Supplementary characters: main divergence from unicode
+            _ => {
+                buffer.push(0b1110_1101);
+                buffer.push(((code >> 16 & 0x0F) as u8).wrapping_sub(1) | 0b1010_0000);
+                buffer.push((code >> 10 & 0x3F) as u8 | 0b1000_0000);
+
+                buffer.push(0b1110_1101);
+                buffer.push(((code >> 6 & 0x1F) as u8) | 0b1011_0000);
+                buffer.push((code & 0x3F) as u8 | 0b1000_0000);
+            }
+        }
+    }
+    buffer
 }
 
 /// Almost all constants have width 1, except for `Constant::Long` and `Constant::Double`. Quoting

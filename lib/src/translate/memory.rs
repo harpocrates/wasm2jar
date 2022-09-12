@@ -1,4 +1,4 @@
-use super::{ExportName, ImportName};
+use super::{Data, ExportName, ImportName};
 use crate::jvm::class_graph::{AccessMode, FieldId};
 use crate::jvm::code::{CodeBuilder, CodeBuilderExts, Instruction};
 use crate::jvm::{BaseType, Error, FieldType};
@@ -46,6 +46,21 @@ impl<'a, 'g> Memory<'a, 'g> {
             .is_some()
     }
 
+    /// Load the memory bytebuffer onto the stack
+    ///
+    /// Assumes the stack starts with having the main WASM module object on it
+    pub fn load_bytebuffer(
+        &self,
+        runtime: &WasmRuntime<'g>,
+        code: &mut CodeBuilder<'g>,
+    ) -> Result<(), Error> {
+        code.access_field(self.field.unwrap(), AccessMode::Read)?;
+        if let MemoryRepr::External = self.repr {
+            code.access_field(runtime.members.memory.bytes, AccessMode::Read)?;
+        }
+        Ok(())
+    }
+
     /// Load a value from memory onto the stack
     ///
     /// Assumes the top of the stack is the offset into the memory
@@ -65,13 +80,7 @@ impl<'a, 'g> Memory<'a, 'g> {
 
         // Load the memory
         code.push_instruction(Instruction::ALoad(this_off))?;
-        code.access_field(self.field.unwrap(), AccessMode::Read)?;
-        match self.repr {
-            MemoryRepr::External => {
-                code.access_field(runtime.members.memory.bytes, AccessMode::Read)?;
-            }
-            MemoryRepr::Internal => (),
-        }
+        self.load_bytebuffer(runtime, code)?;
 
         // Re-order the stack and call the get function
         code.push_instruction(Instruction::Swap)?;
@@ -104,13 +113,7 @@ impl<'a, 'g> Memory<'a, 'g> {
         if ty.width() == 1 && memarg.offset == 0 {
             // Load the memory
             code.push_instruction(Instruction::ALoad(this_off))?;
-            code.access_field(self.field.unwrap(), AccessMode::Read)?;
-            match self.repr {
-                MemoryRepr::External => {
-                    code.access_field(runtime.members.memory.bytes, AccessMode::Read)?;
-                }
-                MemoryRepr::Internal => (),
-            }
+            self.load_bytebuffer(runtime, code)?;
 
             // Re-order the stack
             code.push_instruction(Instruction::DupX2)?;
@@ -127,13 +130,7 @@ impl<'a, 'g> Memory<'a, 'g> {
 
             // Load the memory
             code.push_instruction(Instruction::ALoad(this_off))?;
-            code.access_field(self.field.unwrap(), AccessMode::Read)?;
-            match self.repr {
-                MemoryRepr::External => {
-                    code.access_field(runtime.members.memory.bytes, AccessMode::Read)?;
-                }
-                MemoryRepr::Internal => (),
-            }
+            self.load_bytebuffer(runtime, code)?;
 
             // Re-order the stack
             code.push_instruction(Instruction::Swap)?;
@@ -152,6 +149,38 @@ impl<'a, 'g> Memory<'a, 'g> {
             t => panic!("Cannot store {:?}", t),
         };
         code.invoke(put_func)?;
+        code.push_instruction(Instruction::Pop)?;
+
+        Ok(())
+    }
+
+    /// Initialize memory from a data segment
+    ///
+    /// Assumes the top of the stack is the number of bytes to intiialize, followed by an offset
+    /// into the data segment from which to start copying, followed by an offset in memory where to
+    /// start writing.
+    pub fn init(
+        &self,
+        runtime: &WasmRuntime<'g>,
+        code: &mut CodeBuilder<'g>,
+        this_off: u16,
+        len_off: u16,
+        src_off: u16,
+        dst_off: u16,
+        data: &Data<'a, 'g>,
+    ) -> Result<(), Error> {
+        // Load the memory
+        code.push_instruction(Instruction::ALoad(this_off))?;
+        self.load_bytebuffer(runtime, code)?;
+
+        // `memory_bytebuffer.put(dst, wasm_elem(), src, len)`
+        code.push_instruction(Instruction::ILoad(dst_off))?;
+        code.push_instruction(Instruction::ALoad(this_off))?;
+        code.invoke(data.method)?;
+        code.push_instruction(Instruction::ILoad(src_off))?;
+        code.push_instruction(Instruction::ILoad(len_off))?;
+        code.invoke(code.java.members.nio.byte_buffer.put_bytearray)?;
+
         code.push_instruction(Instruction::Pop)?;
 
         Ok(())

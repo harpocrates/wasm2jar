@@ -354,9 +354,10 @@ impl<C: ParseDescriptor> ParseDescriptor for FieldType<C> {
     fn parse_from(source: &mut Peekable<Chars>) -> Result<Self> {
         match source.peek().copied() {
             None => Err(Error::new(ErrorKind::UnexpectedEof, "Missing field type")),
-            Some('B') | Some('C') | Some('D') | Some('F') | Some('I') | Some('J') | Some('S')
-            | Some('Z') => BaseType::parse_from(source).map(FieldType::Base),
-            Some('L') | Some('[') => RefType::parse_from(source).map(FieldType::Ref),
+            Some('B' | 'C' | 'D' | 'F' | 'I' | 'J' | 'S' | 'Z') => {
+                BaseType::parse_from(source).map(FieldType::Base)
+            }
+            Some('L' | '[') => RefType::parse_from(source).map(FieldType::Ref),
             Some(c) => {
                 let msg = format!("Invalid reference type character '{}'", c);
                 Err(Error::new(ErrorKind::InvalidInput, msg))

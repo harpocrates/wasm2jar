@@ -269,10 +269,9 @@ pub enum Constant {
 impl Serialize for Constant {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
         match self {
-            // Despite the name, this is _not_ exactly UTF-8, but it is similar
             Constant::Utf8(string) => {
                 1u8.serialize(writer)?;
-                let mut buffer: Vec<u8> = encode_utf8(string);
+                let mut buffer: Vec<u8> = encode_modified_utf8(string);
                 (buffer.len() as u16).serialize(writer)?;
                 writer.write_all(&mut buffer)?;
             }
@@ -344,7 +343,19 @@ impl Serialize for Constant {
     }
 }
 
-fn encode_utf8(string: &str) -> Vec<u8> {
+/// Modified UTF-8 format used in class files.
+///
+/// See [this `DataInput` section for details][0]. Quoting from that section:
+///
+/// > The differences between this format and the standard UTF-8 format are the following:
+/// >
+/// >  * The null byte `\u0000` is encoded in 2-byte format rather than 1-byte, so that the encoded
+/// >    strings never have embedded nulls.
+/// >  * Only the 1-byte, 2-byte, and 3-byte formats are used.
+/// >  * Supplementary characters are represented in the form of surrogate pairs.
+///
+/// [0]: https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/io/DataInput.html#modified-utf-8
+pub fn encode_modified_utf8(string: &str) -> Vec<u8> {
     let mut buffer: Vec<u8> = vec![];
     for c in string.chars() {
         // Handle the exception for how `\u{0000}` is represented
@@ -366,7 +377,7 @@ fn encode_utf8(string: &str) -> Vec<u8> {
             // Supplementary characters: main divergence from unicode
             _ => {
                 buffer.push(0b1110_1101);
-                buffer.push(((code >> 16 & 0x0F) as u8).wrapping_sub(1) | 0b1010_0000);
+                buffer.push(((code >> 16 & 0x0F) as u8).wrapping_sub(1) & 0x0F | 0b1010_0000);
                 buffer.push((code >> 10 & 0x3F) as u8 | 0b1000_0000);
 
                 buffer.push(0b1110_1101);
@@ -376,6 +387,55 @@ fn encode_utf8(string: &str) -> Vec<u8> {
         }
     }
     buffer
+}
+
+#[cfg(test)]
+mod encode_modified_utf8_tests {
+    use super::*;
+
+    #[test]
+    fn containing_null_byte() {
+        assert_eq!(encode_modified_utf8("a\x00a"), vec![97, 192, 128, 97]);
+    }
+
+    #[test]
+    fn simple_ascii() {
+        assert_eq!(encode_modified_utf8("foo"), vec![102, 111, 111]);
+        assert_eq!(
+            encode_modified_utf8("hel10_World"),
+            vec![104, 101, 108, 49, 48, 95, 87, 111, 114, 108, 100]
+        );
+    }
+
+    #[test]
+    fn two_and_three_byte_encodings() {
+        assert_eq!(
+            encode_modified_utf8("ĄǍǞǠǺȀȂȦȺӐӒ"),
+            vec![
+                196, 132, 199, 141, 199, 158, 199, 160, 199, 186, 200, 128, 200, 130, 200, 166,
+                200, 186, 211, 144, 211, 146
+            ]
+        );
+        assert_eq!(
+            encode_modified_utf8("ऄअॲঅਅઅଅஅఅಅഅะະ༁ཨ"),
+            vec![
+                224, 164, 132, 224, 164, 133, 224, 165, 178, 224, 166, 133, 224, 168, 133, 224,
+                170, 133, 224, 172, 133, 224, 174, 133, 224, 176, 133, 224, 178, 133, 224, 180,
+                133, 224, 184, 176, 224, 186, 176, 224, 188, 129, 224, 189, 168
+            ]
+        );
+    }
+
+    #[test]
+    fn supplementary_characters() {
+        assert_eq!(
+            encode_modified_utf8("\u{10000}\u{dffff}\u{10FFFF}"),
+            vec![
+                237, 160, 128, 237, 176, 128, 237, 172, 191, 237, 191, 191, 237, 175, 191, 237,
+                191, 191
+            ]
+        );
+    }
 }
 
 /// Almost all constants have width 1, except for `Constant::Long` and `Constant::Double`. Quoting

@@ -183,6 +183,7 @@ impl UnqualifiedName {
     pub const FLOOR: Self = Self::name("floor");
     pub const GET: Self = Self::name("get");
     pub const GETBYTES: Self = Self::name("getBytes");
+    pub const GETCLASS: Self = Self::name("getClass");
     pub const GETDOUBLE: Self = Self::name("getDouble");
     pub const GETFLOAT: Self = Self::name("getFloat");
     pub const GETINT: Self = Self::name("getInt");
@@ -195,6 +196,7 @@ impl UnqualifiedName {
     pub const INTBITSTOFLOAT: Self = Self::name("intBitsToFloat");
     pub const INTVALUE: Self = Self::name("intValue");
     pub const INVOKEEXACT: Self = Self::name("invokeExact");
+    pub const ISASSIGNABLEFROM: Self = Self::name("isAssignableFrom");
     pub const LENGTH: Self = Self::name("length");
     pub const LITTLEENDIAN: Self = Self::name("LITTLE_ENDIAN");
     pub const LONGBITSTODOUBLE: Self = Self::name("longBitsToDouble");

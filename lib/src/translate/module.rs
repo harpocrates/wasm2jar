@@ -9,7 +9,7 @@ use crate::jvm::class_graph::{
     NestedClassData,
 };
 use crate::jvm::code::{
-    BranchInstruction, CodeBuilder, CodeBuilderExts, EqComparison, Instruction,
+    BranchInstruction, CodeBuilder, CodeBuilderExts, EqComparison, Instruction, OrdComparison,
 };
 use crate::jvm::model::{Class, Field, Method};
 use crate::jvm::{
@@ -925,6 +925,45 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.checkcast(self.runtime.classes.function)?;
                 jvm_code.access_field(self.runtime.members.function.handle, AccessMode::Read)?;
 
+                // Check that it has the right signature (TODO: this doesn't check multi-return)
+                let right_type = jvm_code.fresh_label();
+                jvm_code.dup()?;
+                jvm_code.invoke(self.java.members.lang.invoke.method_handle.r#type)?;
+                let expected_descriptor = function.func_type.method_descriptor(&self.java.classes);
+                match expected_descriptor.return_type {
+                    Some(ret_class) => jvm_code.const_class(ret_class)?,
+                    None => jvm_code
+                        .access_field(self.java.members.lang.void.r#type, AccessMode::Read)?,
+                }
+                let local_idx = 2;
+                jvm_code.zero_local(local_idx, FieldType::int())?;
+                jvm_code.const_int(expected_descriptor.parameters.len() as i32)?;
+                jvm_code.new_ref_array(RefType::Object(self.java.classes.lang.class))?;
+                for parameter in expected_descriptor.parameters {
+                    jvm_code.dup()?;
+                    jvm_code.get_local(local_idx, &FieldType::int())?;
+                    jvm_code.const_class(parameter)?;
+                    jvm_code.push_instruction(Instruction::AAStore)?;
+                    jvm_code.push_instruction(Instruction::IInc(local_idx, 1))?;
+                }
+                jvm_code.kill_top_local(local_idx, Some(FieldType::int()))?;
+                jvm_code.invoke(self.java.members.lang.invoke.method_type.method_type)?;
+                jvm_code.invoke(self.java.members.lang.object.equals)?;
+                jvm_code.push_branch_instruction(BranchInstruction::If(
+                    OrdComparison::NE,
+                    right_type,
+                    (),
+                ))?;
+                jvm_code.new(self.java.classes.lang.illegal_argument_exception)?;
+                jvm_code.push_instruction(Instruction::Dup)?;
+                jvm_code.const_string(format!(
+                    "Invalid import type for function import {}.{} (expected {:?})",
+                    import_loc.module, import_loc.name, function.func_type,
+                ))?;
+                jvm_code.invoke(self.java.members.lang.illegal_argument_exception.init)?;
+                jvm_code.push_branch_instruction(BranchInstruction::AThrow)?;
+                jvm_code.place_label(right_type)?;
+
                 // Assign it to the right field
                 jvm_code.access_field(*import_field, AccessMode::Write)?;
             } else {
@@ -938,6 +977,36 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 // Get the imported global
                 Self::lookup_import(&mut jvm_code, &import_loc)?;
                 jvm_code.checkcast(self.runtime.classes.global)?;
+
+                // Check that it has the right signature
+                let right_type = jvm_code.fresh_label();
+                jvm_code.dup()?;
+                jvm_code.access_field(self.runtime.members.global.value, AccessMode::Read)?;
+                jvm_code.invoke(self.java.members.lang.object.get_class)?;
+                let expected_class = match global.global_type {
+                    StackType::I32 => self.java.classes.lang.integer,
+                    StackType::I64 => self.java.classes.lang.long,
+                    StackType::F32 => self.java.classes.lang.float,
+                    StackType::F64 => self.java.classes.lang.double,
+                    StackType::FuncRef => self.java.classes.lang.invoke.method_handle,
+                    StackType::ExternRef => self.java.classes.lang.object,
+                };
+                jvm_code.const_class(FieldType::object(expected_class))?;
+                jvm_code.invoke(self.java.members.lang.class.is_assignable_from)?;
+                jvm_code.push_branch_instruction(BranchInstruction::If(
+                    OrdComparison::NE,
+                    right_type,
+                    (),
+                ))?;
+                jvm_code.new(self.java.classes.lang.illegal_argument_exception)?;
+                jvm_code.push_instruction(Instruction::Dup)?;
+                jvm_code.const_string(format!(
+                    "Invalid import type for global import {}.{} (expected {:?})",
+                    import_loc.module, import_loc.name, global.global_type,
+                ))?;
+                jvm_code.invoke(self.java.members.lang.illegal_argument_exception.init)?;
+                jvm_code.push_branch_instruction(BranchInstruction::AThrow)?;
+                jvm_code.place_label(right_type)?;
 
                 // Assign it to the right field
                 jvm_code.access_field(global.field.unwrap(), AccessMode::Write)?;

@@ -71,7 +71,51 @@ impl JavaHarness {
             .inline_code_fmt(format_args!("public class {}", &harness.class_name))?;
         harness.writer.open_curly_block()?;
 
+        // Helper method: `getFunc`
         harness.writer.newline()?;
+        harness
+            .writer
+            .inline_code("static MethodHandle getFunc(Map<String, Object> exports, String name)")?;
+        harness.writer.open_curly_block()?;
+        harness
+            .writer
+            .inline_code("return ((org.wasm2jar.Function)exports.get(name)).handle;")?;
+        harness.writer.close_curly_block()?;
+        harness.writer.newline()?;
+
+        // Helper method: `getGlobal`
+        harness
+            .writer
+            .inline_code("static Object getGlobal(Map<String, Object> exports, String name)")?;
+        harness.writer.open_curly_block()?;
+        harness
+            .writer
+            .inline_code("return ((org.wasm2jar.Global)exports.get(name)).value;")?;
+        harness.writer.close_curly_block()?;
+        harness.writer.newline()?;
+
+        // Helper method: `printI32F32`
+        harness
+            .writer
+            .inline_code("public static void printI32F32(int i, float f)")?;
+        harness.writer.open_curly_block()?;
+        harness
+            .writer
+            .inline_code("System.out.println(\"print_i32_f32: \" + i + \" \" + f);")?;
+        harness.writer.close_curly_block()?;
+        harness.writer.newline()?;
+
+        // Helper method: `printF64F64`
+        harness
+            .writer
+            .inline_code("public static void printF64F64(double d1, double d2)")?;
+        harness.writer.open_curly_block()?;
+        harness
+            .writer
+            .inline_code("System.out.println(\"print_f64_f64: \" + d1 + \" \" + d2);")?;
+        harness.writer.close_curly_block()?;
+        harness.writer.newline()?;
+
         harness.start_new_test_method()?;
 
         Ok(harness)
@@ -257,11 +301,25 @@ impl JavaHarness {
             "spectest.put(\"print\", new org.wasm2jar.Function(lookup.findVirtual(java.io.PrintStream.class, \"print\", MethodType.methodType(void.class, String.class)).bindTo(System.out).bindTo(\"\")));",
         )?;
         self.writer.newline()?;
+        self.writer.inline_code_fmt(format_args!(
+            "spectest.put(\"print_i32_f32\", new org.wasm2jar.Function(lookup.findStatic({}.class, \"printI32F32\", MethodType.methodType(void.class, int.class, float.class))));",
+            self.class_name,
+        ))?;
+        self.writer.newline()?;
+        self.writer.inline_code_fmt(format_args!(
+            "spectest.put(\"print_f64_f64\", new org.wasm2jar.Function(lookup.findStatic({}.class, \"printF64F64\", MethodType.methodType(void.class, double.class, double.class))));",
+            self.class_name,
+        ))?;
+
+        self.writer.newline()?;
         self.writer
             .inline_code("spectest.put(\"global_i32\", new org.wasm2jar.Global(666));")?;
         self.writer.newline()?;
         self.writer
             .inline_code("spectest.put(\"global_i64\", new org.wasm2jar.Global(666L));")?;
+        self.writer.newline()?;
+        self.writer
+            .inline_code("spectest.put(\"global_f32\", new org.wasm2jar.Global(666f));")?;
         self.writer.newline()?;
         self.writer
             .inline_code("spectest.put(\"global_f64\", new org.wasm2jar.Global(666d));")?;
@@ -301,5 +359,30 @@ impl JavaHarness {
         self.writer.close()?;
 
         Ok(self.class_name)
+    }
+
+    pub fn escape_str(value: &str) -> String {
+        let mut output = String::new();
+        output.push('"');
+        let mut code_points = [0; 2];
+        for c in value.chars() {
+            match c {
+                '\t' => output.push_str("\\t"),
+                '\r' => output.push_str("\\r"),
+                '\n' => output.push_str("\\n"),
+                '\\' | '\'' | '"' => {
+                    output.push('\\');
+                    output.push(c);
+                }
+                '\x20'..='\x7e' => output.push(c),
+                _ => {
+                    for code_point in c.encode_utf16(&mut code_points) {
+                        output.push_str(&format!("\\u{:04x}", code_point));
+                    }
+                }
+            }
+        }
+        output.push('"');
+        output
     }
 }

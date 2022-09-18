@@ -16,6 +16,7 @@ pub struct JavaMembers<'g> {
 pub struct LangMembers<'g> {
     pub object: ObjectMembers<'g>,
     pub char_sequence: CharSequenceMembers<'g>,
+    pub class: ClassMembers<'g>,
     pub string: StringMembers<'g>,
     pub number: NumberMembers<'g>,
     pub integer: IntegerMembers<'g>,
@@ -39,6 +40,7 @@ pub struct LangMembers<'g> {
 /// Members of `java.lang.Object`
 pub struct ObjectMembers<'g> {
     pub equals: MethodId<'g>,
+    pub get_class: MethodId<'g>,
     pub hash_code: MethodId<'g>,
     pub init: MethodId<'g>,
 }
@@ -46,6 +48,11 @@ pub struct ObjectMembers<'g> {
 /// Members of `java.lang.CharSequence`
 pub struct CharSequenceMembers<'g> {
     pub length: MethodId<'g>,
+}
+
+/// Members of `java.lang.Class`
+pub struct ClassMembers<'g> {
+    pub is_assignable_from: MethodId<'g>,
 }
 
 /// Members of `java.lang.String`
@@ -346,6 +353,7 @@ impl<'g> LangMembers<'g> {
     ) -> LangMembers<'g> {
         let object = ObjectMembers::add_to_graph(class_graph, classes);
         let char_sequence = CharSequenceMembers::add_to_graph(class_graph, classes);
+        let class = ClassMembers::add_to_graph(class_graph, classes);
         let string = StringMembers::add_to_graph(class_graph, classes);
         let number = NumberMembers::add_to_graph(class_graph, classes);
         let integer = IntegerMembers::add_to_graph(class_graph, classes);
@@ -368,6 +376,7 @@ impl<'g> LangMembers<'g> {
         LangMembers {
             object,
             char_sequence,
+            class,
             string,
             number,
             integer,
@@ -405,6 +414,15 @@ impl<'g> ObjectMembers<'g> {
                 return_type: Some(FieldType::boolean()),
             },
         });
+        let get_class = class_graph.add_method(MethodData {
+            class,
+            access_flags: MethodAccessFlags::PUBLIC,
+            name: UnqualifiedName::GETCLASS,
+            descriptor: MethodDescriptor {
+                parameters: vec![],
+                return_type: Some(FieldType::object(classes.lang.class)),
+            },
+        });
         let hash_code = class_graph.add_method(MethodData {
             class,
             access_flags: MethodAccessFlags::PUBLIC,
@@ -425,6 +443,7 @@ impl<'g> ObjectMembers<'g> {
         });
         ObjectMembers {
             equals,
+            get_class,
             hash_code,
             init,
         }
@@ -447,6 +466,25 @@ impl<'g> CharSequenceMembers<'g> {
             },
         });
         CharSequenceMembers { length }
+    }
+}
+
+impl<'g> ClassMembers<'g> {
+    pub fn add_to_graph(
+        class_graph: &ClassGraph<'g>,
+        classes: &JavaClasses<'g>,
+    ) -> ClassMembers<'g> {
+        let class = classes.lang.class;
+        let is_assignable_from = class_graph.add_method(MethodData {
+            class,
+            name: UnqualifiedName::ISASSIGNABLEFROM,
+            access_flags: MethodAccessFlags::PUBLIC,
+            descriptor: MethodDescriptor {
+                parameters: vec![FieldType::object(class)],
+                return_type: Some(FieldType::boolean()),
+            },
+        });
+        ClassMembers { is_assignable_from }
     }
 }
 

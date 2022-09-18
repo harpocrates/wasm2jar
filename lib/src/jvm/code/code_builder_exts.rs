@@ -300,7 +300,7 @@ impl<'g> CodeBuilderExts<'g> for CodeBuilder<'g> {
                 let type_static_field = match base_type {
                     BaseType::Int => self.java.members.lang.integer.r#type,
                     BaseType::Long => self.java.members.lang.long.r#type,
-                    BaseType::Float => self.java.members.lang.long.r#type,
+                    BaseType::Float => self.java.members.lang.float.r#type,
                     BaseType::Double => self.java.members.lang.double.r#type,
                     BaseType::Boolean => self.java.members.lang.boolean.r#type,
                     other => todo!("const_class for {:?}", other),

@@ -398,7 +398,8 @@ impl<'a> TestHarness<'a> {
         self.latest_module = Some(name.clone());
 
         // Translate the module
-        let settings = translate::Settings::new(&name, None)?;
+        let mut settings = translate::Settings::new(&name, None)?;
+        settings.methods_for_function_exports = false;
         let mut module = module;
         let wasm_bytes: Vec<u8> = module.encode()?;
 
@@ -575,9 +576,9 @@ impl<'a> TestHarness<'a> {
                     Some(id) => format!("mod_{}", id.name()),
                 };
                 java_writer.inline_code_fmt(format_args!(
-                    "((org.wasm2jar.Global){name}.exports.get(\"{field}\")).value",
+                    "getGlobal({name}.exports, {global})",
                     name = name,
-                    field = global
+                    global = JavaHarness::escape_str(global),
                 ))?;
             }
         }
@@ -585,7 +586,7 @@ impl<'a> TestHarness<'a> {
         Ok(())
     }
 
-    /// Print a WAST invoke into a Java method call
+    /// WAST invoke is transformed into invoking the method handle
     pub fn java_invoke<W: io::Write>(
         invoke: &wast::WastInvoke,
         java_writer: &mut JavaWriter<W>,
@@ -596,9 +597,9 @@ impl<'a> TestHarness<'a> {
         };
 
         java_writer.inline_code_fmt(format_args!(
-            "((org.wasm2jar.Function){name}.exports.get(\"{method}\")).handle.invoke(",
+            "getFunc({name}.exports, {func}).invoke(",
             name = name,
-            method = invoke.name,
+            func = JavaHarness::escape_str(&invoke.name),
         ))?;
         let mut needs_comma = false;
         for arg in &invoke.args {

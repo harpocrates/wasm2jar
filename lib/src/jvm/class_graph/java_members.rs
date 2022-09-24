@@ -979,7 +979,7 @@ impl<'g> MathMembers<'g> {
                     name,
                     access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                     descriptor: MethodDescriptor {
-                        parameters: vec![operator_type.clone(), operator_type.clone()],
+                        parameters: vec![operator_type, operator_type],
                         return_type: Some(operator_type),
                     },
                 })
@@ -995,7 +995,7 @@ impl<'g> MathMembers<'g> {
                     name,
                     access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
                     descriptor: MethodDescriptor {
-                        parameters: vec![operator_type.clone()],
+                        parameters: vec![operator_type],
                         return_type: Some(operator_type),
                     },
                 })

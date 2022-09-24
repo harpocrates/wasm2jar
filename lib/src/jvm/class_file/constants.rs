@@ -101,7 +101,7 @@ impl<'g> ConstantsPool<'g> {
         } else {
             let owned = cow.into_owned();
             let constant = Constant::Utf8(owned.clone());
-            let idx = Utf8ConstantIndex(self.push_constant(constant)?);
+            let idx = self.push_constant(constant)?;
             self.utf8s.insert(owned, idx);
             Ok(idx)
         }
@@ -116,7 +116,7 @@ impl<'g> ConstantsPool<'g> {
             Ok(*idx)
         } else {
             let constant = Constant::String(utf8);
-            let idx = StringConstantIndex(self.push_constant(constant)?);
+            let idx = self.push_constant(constant)?;
             self.strings.insert(utf8, idx);
             Ok(idx)
         }
@@ -133,7 +133,7 @@ impl<'g> ConstantsPool<'g> {
             Ok(*idx)
         } else {
             let constant = Constant::NameAndType { name, descriptor };
-            let idx = NameAndTypeConstantIndex(self.push_constant(constant)?);
+            let idx = self.push_constant(constant)?;
             self.name_and_types.insert(name_and_type_key, idx);
             Ok(idx)
         }
@@ -173,7 +173,7 @@ impl<'g> ConstantsPool<'g> {
                 bootstrap_method,
                 method_descriptor,
             };
-            let idx = InvokeDynamicConstantIndex(self.push_constant(constant)?);
+            let idx = self.push_constant(constant)?;
             self.invoke_dynamics.insert(indy_key, idx);
             Ok(idx)
         }
@@ -190,6 +190,12 @@ impl<'g> ConstantsPool<'g> {
     }
 }
 
+impl<'g> Default for ConstantsPool<'g> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug)]
 pub struct ConstantPoolOverflow {
     pub constant: Constant,
@@ -200,7 +206,7 @@ pub struct ConstantPoolOverflow {
 ///
 /// Note: some constant types added after Java 8 are not included (since we don't generate them)
 ///
-/// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-4.html#jvms-4.4
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-4.html#jvms-4.4
 #[derive(Debug, Clone)]
 pub enum Constant {
     /// Class or an interface
@@ -271,9 +277,9 @@ impl Serialize for Constant {
         match self {
             Constant::Utf8(string) => {
                 1u8.serialize(writer)?;
-                let mut buffer: Vec<u8> = encode_modified_utf8(string);
+                let buffer: Vec<u8> = encode_modified_utf8(string);
                 (buffer.len() as u16).serialize(writer)?;
-                writer.write_all(&mut buffer)?;
+                writer.write_all(&buffer)?;
             }
             Constant::Integer(integer) => {
                 3u8.serialize(writer)?;
@@ -456,115 +462,43 @@ impl Width for Constant {
     }
 }
 
+/// Index into a constant pool.
+///
+/// Note that the constant pool indexing starts at one, not zero.
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
 pub struct ConstantIndex(pub u16);
 
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct Utf8ConstantIndex(pub ConstantIndex);
-
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct StringConstantIndex(pub ConstantIndex);
-
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct NameAndTypeConstantIndex(ConstantIndex);
-
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct MethodTypeConstantIndex(ConstantIndex);
-
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct ClassConstantIndex(ConstantIndex);
-
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct FieldRefConstantIndex(ConstantIndex);
-
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct MethodRefConstantIndex(ConstantIndex);
-
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct InvokeDynamicConstantIndex(ConstantIndex);
-
-impl Into<ConstantIndex> for Utf8ConstantIndex {
-    fn into(self) -> ConstantIndex {
-        self.0
-    }
+impl ConstantIndex {
+    /// The zero-index is special because the constant pool starts indexing at one. Consequently,
+    /// this index serves as a sort of "null" index (see the superclass name for a use).
+    pub const ZERO: ConstantIndex = ConstantIndex(0);
 }
-impl Into<ConstantIndex> for StringConstantIndex {
-    fn into(self) -> ConstantIndex {
-        self.0
-    }
-}
-impl Into<ConstantIndex> for NameAndTypeConstantIndex {
-    fn into(self) -> ConstantIndex {
-        self.0
-    }
-}
-impl Into<ConstantIndex> for MethodTypeConstantIndex {
-    fn into(self) -> ConstantIndex {
-        self.0
-    }
-}
-impl Into<ConstantIndex> for ClassConstantIndex {
-    fn into(self) -> ConstantIndex {
-        self.0
-    }
-}
-impl Into<ConstantIndex> for FieldRefConstantIndex {
-    fn into(self) -> ConstantIndex {
-        self.0
-    }
-}
-impl Into<ConstantIndex> for MethodRefConstantIndex {
-    fn into(self) -> ConstantIndex {
-        self.0
-    }
-}
-impl Into<ConstantIndex> for InvokeDynamicConstantIndex {
-    fn into(self) -> ConstantIndex {
-        self.0
-    }
-}
+
+/// Constant index pointing to a [`Constant::String`]
+pub type Utf8ConstantIndex = ConstantIndex;
+
+/// Constant index pointing to a [`Constant::String`]
+pub type StringConstantIndex = ConstantIndex;
+
+/// Constant index pointing to a [`Constant::NameAndType`]
+pub type NameAndTypeConstantIndex = ConstantIndex;
+
+/// Constant index pointing to a [`Constant::MethodType`]
+pub type MethodTypeConstantIndex = ConstantIndex;
+
+/// Constant index pointing to a [`Constant::Class`]
+pub type ClassConstantIndex = ConstantIndex;
+
+/// Constant index pointing to a [`Constant::FieldRef`]
+pub type FieldRefConstantIndex = ConstantIndex;
+
+/// Constant index pointing to a [`Constant::MethodRef`]
+pub type MethodRefConstantIndex = ConstantIndex;
+
+/// Constant index pointing to a [`Constant::InvokeDynamic`]
+pub type InvokeDynamicConstantIndex = ConstantIndex;
 
 impl Serialize for ConstantIndex {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.serialize(writer)
-    }
-}
-impl Serialize for Utf8ConstantIndex {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.serialize(writer)
-    }
-}
-impl Serialize for StringConstantIndex {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.serialize(writer)
-    }
-}
-impl Serialize for NameAndTypeConstantIndex {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.serialize(writer)
-    }
-}
-impl Serialize for MethodTypeConstantIndex {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.serialize(writer)
-    }
-}
-impl Serialize for ClassConstantIndex {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.serialize(writer)
-    }
-}
-impl Serialize for FieldRefConstantIndex {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.serialize(writer)
-    }
-}
-impl Serialize for MethodRefConstantIndex {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.serialize(writer)
-    }
-}
-impl Serialize for InvokeDynamicConstantIndex {
     fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
         self.0.serialize(writer)
     }
@@ -572,7 +506,7 @@ impl Serialize for InvokeDynamicConstantIndex {
 
 /// Type of method handle
 ///
-/// [0]: https://docs.oracle.com/javase/specs/jvms/se15/html/jvms-5.html#jvms-5.4.3.5-220
+/// [0]: https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-5.html#jvms-5.4.3.5-220
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum HandleKind {
     GetField,
@@ -629,7 +563,7 @@ impl<'g> ConstantsWriter<'g, ClassConstantIndex> for RefType<ClassId<'g>> {
                 other => constants.get_utf8(other.render())?,
             };
             let constant = Constant::Class(name);
-            let idx = ClassConstantIndex(constants.push_constant(constant)?);
+            let idx = constants.push_constant(constant)?;
             constants.classes.insert(*self, idx);
             Ok(idx)
         }
@@ -664,7 +598,7 @@ impl<'g> ConstantsWriter<'g, MethodRefConstantIndex> for MethodId<'g> {
                 name_and_type: name_and_type_idx,
                 is_interface: self.class.is_interface(),
             };
-            let idx = MethodRefConstantIndex(constants.push_constant(constant)?);
+            let idx = constants.push_constant(constant)?;
             constants.methodrefs.insert(*self, idx);
             Ok(idx)
         }
@@ -685,7 +619,7 @@ impl<'g> ConstantsWriter<'g, FieldRefConstantIndex> for FieldId<'g> {
             let desc_utf8 = constants.get_utf8(&self.descriptor.render())?;
             let name_and_type_idx = constants.get_name_and_type(field_utf8, desc_utf8)?;
             let constant = Constant::FieldRef(class_idx, name_and_type_idx);
-            let idx = FieldRefConstantIndex(constants.push_constant(constant)?);
+            let idx = constants.push_constant(constant)?;
             constants.fieldrefs.insert(*self, idx);
             Ok(idx)
         }
@@ -702,9 +636,9 @@ impl<'g> ConstantsWriter<'g, ConstantIndex> for ConstantData<'g> {
             ConstantData::String(string) => {
                 let str_utf8 = constants.get_utf8(&**string)?;
                 let str_idx = constants.get_string(str_utf8)?;
-                Ok(str_idx.into())
+                Ok(str_idx)
             }
-            ConstantData::Class(class) => Ok(class.constant_index(constants)?.into()),
+            ConstantData::Class(class) => Ok(class.constant_index(constants)?),
             ConstantData::Integer(integer) => {
                 if let Some(idx) = constants.integers.get(integer) {
                     Ok(*idx)
@@ -751,7 +685,7 @@ impl<'g> ConstantsWriter<'g, ConstantIndex> for ConstantData<'g> {
                     (AccessMode::Write, true) => HandleKind::PutStatic,
                     (AccessMode::Write, false) => HandleKind::PutField,
                 };
-                constants.get_method_handle(handle, field_idx.into())
+                constants.get_method_handle(handle, field_idx)
             }
             ConstantData::MethodHandle(method) => {
                 let method_idx = method.constant_index(constants)?;
@@ -761,7 +695,7 @@ impl<'g> ConstantsWriter<'g, ConstantIndex> for ConstantData<'g> {
                     InvokeType::Interface(_) => HandleKind::InvokeInterface,
                     InvokeType::Virtual => HandleKind::InvokeVirtual,
                 };
-                constants.get_method_handle(handle, method_idx.into())
+                constants.get_method_handle(handle, method_idx)
             }
             ConstantData::MethodType(method) => {
                 let descriptor = constants.get_utf8(method.render())?;

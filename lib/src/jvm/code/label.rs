@@ -35,7 +35,7 @@ impl SynLabelGenerator {
 
 impl LabelGenerator<SynLabel> for SynLabelGenerator {
     fn fresh_label(&mut self) -> SynLabel {
-        let to_return = self.0.clone();
+        let to_return = self.0;
         self.0 = self.0.next();
         to_return
     }

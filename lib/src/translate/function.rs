@@ -150,7 +150,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             // WASM locals are zero initialized
             let local_type = StackType::from_general(local_type)?;
             let field_type = local_type.field_type(&self.jvm_code.java.classes);
-            let idx = self.jvm_locals.push_local(field_type.clone())?;
+            let idx = self.jvm_locals.push_local(field_type)?;
             self.jvm_code.zero_local(idx, field_type)?;
         }
 
@@ -1031,8 +1031,6 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
                     self.wasm_validator.operand_stack_height(),
                     "Stack does not have the expected height",
                 );
-
-                ()
             }
         }
 
@@ -1233,7 +1231,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         } else {
             self.jvm_code.push_instruction(Instruction::Pop)?;
         }
-        if let Some(ref_ty) = ref_ty_hint.clone() {
+        if let Some(ref_ty) = ref_ty_hint {
             self.jvm_code.generalize_top_stack_type(ref_ty)?;
         }
         self.jvm_code
@@ -1306,9 +1304,9 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let bootstrap_method = self.bootstrap_utilities.get_table_bootstrap(
             table_idx,
             table,
-            &self.jvm_code.class_graph,
-            &mut self.utilities,
-            &self.jvm_code.java,
+            self.jvm_code.class_graph,
+            self.utilities,
+            self.jvm_code.java,
         )?;
 
         self.jvm_code
@@ -1508,7 +1506,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let this_off = self.jvm_locals.lookup_this()?.0;
         self.jvm_code
             .push_instruction(Instruction::ALoad(this_off))?;
-        global.read(self.runtime, &mut self.jvm_code)?;
+        global.read(self.runtime, self.jvm_code)?;
 
         Ok(())
     }
@@ -1519,7 +1517,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let global_field_type = global.global_type.field_type(&self.jvm_code.java.classes);
 
         // Stash the value being set in a local
-        let temp_index = self.jvm_locals.push_local(global_field_type.clone())?;
+        let temp_index = self.jvm_locals.push_local(global_field_type)?;
         self.jvm_code.set_local(temp_index, &global_field_type)?;
 
         // Write to the field
@@ -1527,7 +1525,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         self.jvm_code
             .push_instruction(Instruction::ALoad(this_off))?;
         self.jvm_code.get_local(temp_index, &global_field_type)?;
-        global.write(self.runtime, &mut self.jvm_code)?;
+        global.write(self.runtime, self.jvm_code)?;
 
         // Clear the local
         self.jvm_code
@@ -1586,8 +1584,8 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             .push_instruction(Instruction::IStore(dst_off))?;
 
         table.init(
-            &self.runtime,
-            &mut self.jvm_code,
+            self.runtime,
+            self.jvm_code,
             this_off,
             len_off,
             src_off,
@@ -1721,9 +1719,9 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let bootstrap_method = self.bootstrap_utilities.get_table_bootstrap(
             table_idx,
             table,
-            &self.jvm_code.class_graph,
-            &mut self.utilities,
-            &self.jvm_code.java,
+            self.jvm_code.class_graph,
+            self.utilities,
+            self.jvm_code.java,
         )?;
 
         self.jvm_code
@@ -1737,7 +1735,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
     fn visit_memory_load(&mut self, memarg: MemArg, ty: BaseType) -> Result<(), Error> {
         let memory = &self.wasm_memories[memarg.memory as usize];
         let this_off = self.jvm_locals.lookup_this()?.0;
-        memory.load(&self.runtime, &mut self.jvm_code, this_off, memarg, ty)?;
+        memory.load(self.runtime, self.jvm_code, this_off, memarg, ty)?;
 
         Ok(())
     }
@@ -1748,14 +1746,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
 
         // TODO: this is unused if the type has width 1
         let temp_off = self.jvm_locals.push_local(FieldType::Base(ty))?;
-        memory.store(
-            &self.runtime,
-            &mut self.jvm_code,
-            this_off,
-            temp_off,
-            memarg,
-            ty,
-        )?;
+        memory.store(self.runtime, self.jvm_code, this_off, temp_off, memarg, ty)?;
         self.jvm_locals.pop_local()?;
 
         Ok(())
@@ -1778,8 +1769,8 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             .push_instruction(Instruction::IStore(dst_off))?;
 
         memory.init(
-            &self.runtime,
-            &mut self.jvm_code,
+            self.runtime,
+            self.jvm_code,
             this_off,
             len_off,
             src_off,
@@ -1799,7 +1790,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let data = &self.wasm_datas[data as usize];
         let this_off = self.jvm_locals.lookup_this()?.0;
 
-        data.drop_data(&mut self.jvm_code, this_off)?;
+        data.drop_data(self.jvm_code, this_off)?;
 
         Ok(())
     }
@@ -1808,7 +1799,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let element = &self.wasm_elements[element as usize];
         let this_off = self.jvm_locals.lookup_this()?.0;
 
-        element.drop_element(&mut self.jvm_code, this_off)?;
+        element.drop_element(self.jvm_code, this_off)?;
 
         Ok(())
     }
@@ -1914,9 +1905,9 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         let bootstrap_method = self.bootstrap_utilities.get_memory_bootstrap(
             memory_idx,
             memory,
-            &self.jvm_code.class_graph,
-            &mut self.utilities,
-            &self.jvm_code.java,
+            self.jvm_code.class_graph,
+            self.utilities,
+            self.jvm_code.java,
         )?;
 
         self.jvm_code

@@ -67,14 +67,14 @@ impl<'g> Code<'g> {
         let mut jump_targets: HashSet<SynLabel> = HashSet::new();
         let mut latest_offset = Offset(0);
         for block_label in &self.block_order {
-            let block = &blocks[&block_label];
+            let block = &blocks[block_label];
             label_offsets.insert(*block_label, latest_offset);
             jump_targets.extend(block.branch_end.jump_targets().targets());
             latest_offset.0 += block.width();
         }
 
         // Check if we've got an overflow
-        if let Err(_) = u16::try_from(latest_offset.0) {
+        if u16::try_from(latest_offset.0).is_err() {
             return Err(Error::MethodCodeOverflow(latest_offset));
         }
 
@@ -99,7 +99,7 @@ impl<'g> Code<'g> {
             let block_offset_from_start = label_offsets[block_label];
 
             // If this block is ever jumped to, construct a stack map frame for it
-            if jump_targets.contains(&block_label) {
+            if jump_targets.contains(block_label) {
                 frames.push((
                     block_offset_from_start,
                     basic_block

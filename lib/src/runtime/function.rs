@@ -52,7 +52,7 @@ pub fn make_function_class<'g>(
     class.add_field(Field::new(runtime.members.function.handle));
 
     // Constructor
-    let mut code = CodeBuilder::new(&class_graph, &java, runtime.members.function.init);
+    let mut code = CodeBuilder::new(class_graph, java, runtime.members.function.init);
     code.push_instruction(ALoad(0))?;
     code.push_instruction(Invoke(InvokeType::Special, java.members.lang.object.init))?;
     code.push_instruction(ALoad(0))?;

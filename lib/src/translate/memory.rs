@@ -39,11 +39,10 @@ pub enum MemoryRepr {
 
 impl<'a, 'g> Memory<'a, 'g> {
     pub fn is_resizable(&self) -> bool {
-        !self
-            .memory_type
+        self.memory_type
             .maximum
             .filter(|e| e == &self.memory_type.initial)
-            .is_some()
+            .is_none()
     }
 
     /// Load the memory bytebuffer onto the stack

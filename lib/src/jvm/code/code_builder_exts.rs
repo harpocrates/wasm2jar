@@ -96,6 +96,7 @@ pub trait CodeBuilderExts<'g> {
     fn access_field(&mut self, field: FieldId<'g>, access_mode: AccessMode) -> Result<(), Error>;
 
     /// Construct a new object of the given type
+    #[allow(clippy::wrong_self_convention, clippy::new_ret_no_self)]
     fn new(&mut self, class: ClassId<'g>) -> Result<(), Error>;
 
     /// Do a `checkcast` on the given type

@@ -35,7 +35,7 @@ impl<'g> VerifierFrame<'g> {
         &mut self,
         general_type: RefType<ClassId<'g>>,
     ) -> Result<(), VerifierErrorKind> {
-        let general_type = VType::Object(general_type.clone());
+        let general_type = VType::Object(general_type);
         let specific_type = pop_offset_vec(&mut self.stack)?;
         let is_valid_weakening = VerificationType::is_assignable(&specific_type, &general_type);
         if is_valid_weakening {
@@ -178,31 +178,29 @@ impl Frame<ClassConstantIndex, BytecodeIndex> {
                             }
                         }
                     }
-                } else {
-                    if this_locals_len - prev_locals_len < 4 {
-                        let mut this_iter = self.locals.iter().map(|(_, _, t)| t);
-                        let mut prev_is_prefix_of_this = true;
-                        for (_, _, t1) in previous_frame.locals.iter() {
-                            let t2 = this_iter.next().unwrap();
-                            if t1 != t2 {
-                                prev_is_prefix_of_this = false;
-                                break;
-                            }
+                } else if this_locals_len - prev_locals_len < 4 {
+                    let mut this_iter = self.locals.iter().map(|(_, _, t)| t);
+                    let mut prev_is_prefix_of_this = true;
+                    for (_, _, t1) in previous_frame.locals.iter() {
+                        let t2 = this_iter.next().unwrap();
+                        if t1 != t2 {
+                            prev_is_prefix_of_this = false;
+                            break;
                         }
+                    }
 
-                        if prev_is_prefix_of_this {
-                            return StackMapFrame::AppendLocalsNoStack {
-                                offset_delta,
-                                locals: this_iter.cloned().collect(),
-                            };
-                        }
+                    if prev_is_prefix_of_this {
+                        return StackMapFrame::AppendLocalsNoStack {
+                            offset_delta,
+                            locals: this_iter.copied().collect(),
+                        };
                     }
                 }
             }
             1 if self.locals == previous_frame.locals => {
                 return StackMapFrame::SameLocalsOneStack {
                     offset_delta,
-                    stack: self.stack.iter().map(|(_, _, t)| t.clone()).next().unwrap(),
+                    stack: self.stack.iter().map(|(_, _, t)| *t).next().unwrap(),
                 }
             }
             _ => (),
@@ -215,8 +213,8 @@ impl Frame<ClassConstantIndex, BytecodeIndex> {
     pub fn full_stack_map_frame(&self, offset_delta: u16) -> StackMapFrame {
         StackMapFrame::Full {
             offset_delta,
-            stack: self.stack.iter().map(|(_, _, t)| t.clone()).collect(),
-            locals: self.locals.iter().map(|(_, _, t)| t.clone()).collect(),
+            stack: self.stack.iter().map(|(_, _, t)| *t).collect(),
+            locals: self.locals.iter().map(|(_, _, t)| *t).collect(),
         }
     }
 }
@@ -305,7 +303,7 @@ fn verify_instruction<'g>(
             stack.push(Double);
         }
         ALoad(offset) => {
-            let typ = get_local(locals, *offset)?.clone();
+            let typ = get_local(locals, *offset)?;
             stack.push(typ);
         }
 
@@ -413,10 +411,7 @@ fn verify_instruction<'g>(
                             ..arr
                         })),
                     };
-                    if !VerificationType::is_assignable(
-                        &elem_type,
-                        &VType::from(expected_elem_type),
-                    ) {
+                    if !VerificationType::is_assignable(&elem_type, &expected_elem_type) {
                         return Err(VerifierErrorKind::InvalidType);
                     }
                 }
@@ -460,14 +455,14 @@ fn verify_instruction<'g>(
 
         Dup => {
             let arg1 = pop_offset_vec_expecting_width(stack, 1)?;
-            stack.push(arg1.clone());
+            stack.push(arg1);
             stack.push(arg1);
         }
 
         DupX1 => {
             let arg1 = pop_offset_vec_expecting_width(stack, 1)?;
             let arg2 = pop_offset_vec_expecting_width(stack, 1)?;
-            stack.push(arg1.clone());
+            stack.push(arg1);
             stack.push(arg2);
             stack.push(arg1);
         }
@@ -479,7 +474,7 @@ fn verify_instruction<'g>(
                 // Form 1
                 1 => {
                     let arg3 = pop_offset_vec_expecting_width(stack, 1)?;
-                    stack.push(arg1.clone());
+                    stack.push(arg1);
                     stack.push(arg3);
                     stack.push(arg2);
                     stack.push(arg1);
@@ -487,7 +482,7 @@ fn verify_instruction<'g>(
 
                 // Form 2
                 2 => {
-                    stack.push(arg1.clone());
+                    stack.push(arg1);
                     stack.push(arg2);
                     stack.push(arg1);
                 }
@@ -502,15 +497,15 @@ fn verify_instruction<'g>(
                 // Form 1
                 1 => {
                     let arg2 = pop_offset_vec_expecting_width(stack, 1)?;
-                    stack.push(arg2.clone());
-                    stack.push(arg1.clone());
+                    stack.push(arg2);
+                    stack.push(arg1);
                     stack.push(arg2);
                     stack.push(arg1);
                 }
 
                 // Form 2
                 2 => {
-                    stack.push(arg1.clone());
+                    stack.push(arg1);
                     stack.push(arg1);
                 }
 
@@ -525,8 +520,8 @@ fn verify_instruction<'g>(
                 // Form 1
                 1 => {
                     let arg3 = pop_offset_vec_expecting_width(stack, 1)?;
-                    stack.push(arg2.clone());
-                    stack.push(arg1.clone());
+                    stack.push(arg2);
+                    stack.push(arg1);
                     stack.push(arg3);
                     stack.push(arg2);
                     stack.push(arg1);
@@ -534,7 +529,7 @@ fn verify_instruction<'g>(
 
                 // Form 2
                 2 => {
-                    stack.push(arg1.clone());
+                    stack.push(arg1);
                     stack.push(arg2);
                     stack.push(arg1);
                 }
@@ -553,8 +548,8 @@ fn verify_instruction<'g>(
                         // Form 1
                         1 => {
                             let arg4 = pop_offset_vec_expecting_width(stack, 1)?;
-                            stack.push(arg2.clone());
-                            stack.push(arg1.clone());
+                            stack.push(arg2);
+                            stack.push(arg1);
                             stack.push(arg4);
                             stack.push(arg3);
                             stack.push(arg2);
@@ -563,8 +558,8 @@ fn verify_instruction<'g>(
 
                         // Form 3
                         2 => {
-                            stack.push(arg2.clone());
-                            stack.push(arg1.clone());
+                            stack.push(arg2);
+                            stack.push(arg1);
                             stack.push(arg3);
                             stack.push(arg2);
                             stack.push(arg1);
@@ -580,7 +575,7 @@ fn verify_instruction<'g>(
                         // Form 2
                         1 => {
                             let arg3 = pop_offset_vec_expecting_width(stack, 1)?;
-                            stack.push(arg1.clone());
+                            stack.push(arg1);
                             stack.push(arg3);
                             stack.push(arg2);
                             stack.push(arg1);
@@ -588,7 +583,7 @@ fn verify_instruction<'g>(
 
                         // Form 4
                         2 => {
-                            stack.push(arg1.clone());
+                            stack.push(arg1);
                             stack.push(arg2);
                             stack.push(arg1);
                         }
@@ -731,11 +726,11 @@ fn verify_instruction<'g>(
         }
 
         GetStatic(field) => {
-            let field_type = field.descriptor.clone();
+            let field_type = field.descriptor;
             stack.push(field_type.into());
         }
         PutStatic(field) => {
-            let field_type = field.descriptor.clone();
+            let field_type = field.descriptor;
             let arg_type = pop_offset_vec(stack)?;
             if !VerificationType::is_assignable(&arg_type, &VType::from(field_type)) {
                 return Err(VerifierErrorKind::InvalidType);
@@ -743,7 +738,7 @@ fn verify_instruction<'g>(
         }
 
         GetField(field) => {
-            let field_type = field.descriptor.clone();
+            let field_type = field.descriptor;
             let object_type = RefType::Object(field.class);
             let object_type_found = pop_offset_vec(stack)?;
             if !VerificationType::is_assignable(
@@ -755,7 +750,7 @@ fn verify_instruction<'g>(
             stack.push(field_type.into());
         }
         PutField(field) => {
-            let field_type = field.descriptor.clone();
+            let field_type = field.descriptor;
             let object_type = RefType::Object(field.class);
             let arg_type = pop_offset_vec(stack)?;
             let object_type_found = pop_offset_vec(stack)?;
@@ -779,7 +774,7 @@ fn verify_instruction<'g>(
                 let found_arg_type = pop_offset_vec(stack)?;
                 let compatible = VerificationType::is_assignable(
                     &found_arg_type,
-                    &VType::from(expected_arg_type.clone()),
+                    &VType::from(*expected_arg_type),
                 );
                 if !compatible {
                     log::error!(
@@ -796,14 +791,14 @@ fn verify_instruction<'g>(
                 // Initialize
                 match pop_offset_vec(stack)? {
                     UninitializedThis => {
-                        replace_all(stack, &UninitializedThis, || Object(this_class.clone()));
-                        replace_all(locals, &UninitializedThis, || Object(this_class.clone()));
+                        replace_all(stack, &UninitializedThis, || Object(*this_class));
+                        replace_all(locals, &UninitializedThis, || Object(*this_class));
                     }
 
                     uninitialized @ Uninitialized(ref initialized_ref_type) => {
                         let reftype = initialized_ref_type.verification_type;
-                        replace_all(stack, &uninitialized, || Object(reftype.clone()));
-                        replace_all(locals, &uninitialized, || Object(reftype.clone()));
+                        replace_all(stack, &uninitialized, || Object(reftype));
+                        replace_all(locals, &uninitialized, || Object(reftype));
                     }
 
                     _ => return Err(VerifierErrorKind::InvalidType),
@@ -840,8 +835,8 @@ fn verify_instruction<'g>(
                 }
 
                 // Push the return type
-                if let Some(ref return_type) = desc.return_type {
-                    stack.push(VType::from(return_type.clone()));
+                if let Some(return_type) = desc.return_type {
+                    stack.push(VType::from(return_type));
                 }
             }
         }
@@ -852,7 +847,7 @@ fn verify_instruction<'g>(
                 let found_arg_type = pop_offset_vec(stack)?;
                 let compatible = VerificationType::is_assignable(
                     &found_arg_type,
-                    &VType::from(expected_arg_type.clone()),
+                    &VType::from(*expected_arg_type),
                 );
                 if !compatible {
                     return Err(VerifierErrorKind::InvalidType);
@@ -974,7 +969,7 @@ fn verify_branch_instruction<'g, Lbl, LblWide, LblNext>(
         AReturn => {
             let atype = pop_offset_vec(stack)?;
             let is_compatible_return = if let Some(ret_type) = this_method_return_type {
-                VerificationType::is_assignable(&atype, &VType::from(ret_type.clone()))
+                VerificationType::is_assignable(&atype, &VType::from(*ret_type))
             } else {
                 false
             };
@@ -992,10 +987,7 @@ fn verify_branch_instruction<'g, Lbl, LblWide, LblNext>(
             match atype {
                 VType::Null => (),
                 VType::Object(RefType::Object(exception_type))
-                    if ClassGraph::is_throwable(exception_type) =>
-                {
-                    ()
-                }
+                    if ClassGraph::is_throwable(exception_type) => {}
                 _ => return Err(VerifierErrorKind::InvalidType),
             }
             stack.clear();

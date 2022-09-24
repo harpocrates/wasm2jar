@@ -542,10 +542,8 @@ impl<'a> TestHarness<'a> {
                     return Err(TestError::JavaFailed(run_output));
                 }
             }
-        } else {
-            if let Some((_, scope_has_changed)) = self.latest_java_harness.as_mut() {
-                *scope_has_changed = true;
-            }
+        } else if let Some((_, scope_has_changed)) = self.latest_java_harness.as_mut() {
+            *scope_has_changed = true;
         }
 
         Ok(())
@@ -599,7 +597,7 @@ impl<'a> TestHarness<'a> {
         java_writer.inline_code_fmt(format_args!(
             "getFunc({name}.exports, {func}).invoke(",
             name = name,
-            func = JavaHarness::escape_str(&invoke.name),
+            func = JavaHarness::escape_str(invoke.name),
         ))?;
         let mut needs_comma = false;
         for arg in &invoke.args {

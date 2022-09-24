@@ -87,7 +87,7 @@ pub fn make_function_table_class<'g>(
     class.add_field(Field::new(runtime.members.function_table.table));
 
     // Constructor
-    let mut code = CodeBuilder::new(&class_graph, &java, runtime.members.function_table.init);
+    let mut code = CodeBuilder::new(class_graph, java, runtime.members.function_table.init);
     code.push_instruction(ALoad(0))?;
     code.push_instruction(Invoke(InvokeType::Special, java.members.lang.object.init))?;
     code.push_instruction(ALoad(0))?;
@@ -113,7 +113,7 @@ pub fn make_reference_table_class<'g>(
     class.add_field(Field::new(runtime.members.reference_table.table));
 
     // Constructor
-    let mut code = CodeBuilder::new(&class_graph, &java, runtime.members.reference_table.init);
+    let mut code = CodeBuilder::new(class_graph, java, runtime.members.reference_table.init);
     code.push_instruction(ALoad(0))?;
     code.push_instruction(Invoke(InvokeType::Special, java.members.lang.object.init))?;
     code.push_instruction(ALoad(0))?;

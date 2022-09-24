@@ -58,9 +58,7 @@ impl<Frame, Insn: Width, BrInsn: Width> BasicBlock<Frame, Insn, BrInsn> {
     }
 }
 
-impl<'g, Frame>
-    BasicBlock<Frame, VerifierInstruction<'g>, BranchInstruction<SynLabel, SynLabel, SynLabel>>
-{
+impl<'g, Frame, Lbl> BasicBlock<Frame, VerifierInstruction<'g>, BranchInstruction<Lbl, Lbl, Lbl>> {
     /// Serialize the instructions inside a block
     ///
     /// This is the point at which instructions referencing the constant pool get fully resolved
@@ -72,7 +70,7 @@ impl<'g, Frame>
         bootstrap_methods: &mut HashMap<BootstrapMethodId<'g>, u16>,
         offset_from_start: Offset,
     ) -> Result<
-        BasicBlock<Frame, SerializableInstruction, BranchInstruction<SynLabel, SynLabel, SynLabel>>,
+        BasicBlock<Frame, SerializableInstruction, BranchInstruction<Lbl, Lbl, Lbl>>,
         ConstantPoolOverflow,
     > {
         let constants = &std::cell::RefCell::new(constants);
@@ -101,9 +99,9 @@ impl<'g, Frame>
                             let name_and_type_idx = constants
                                 .borrow_mut()
                                 .get_name_and_type(method_utf8, desc_utf8)?;
-                            Ok(constants
+                            constants
                                 .borrow_mut()
-                                .get_invoke_dynamic(bootstrap_method as u16, name_and_type_idx)?)
+                                .get_invoke_dynamic(bootstrap_method as u16, name_and_type_idx)
                         },
                     )
                 },

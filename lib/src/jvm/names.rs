@@ -89,7 +89,7 @@ impl Name for BinaryName {
         if name.is_empty() {
             Err(format!("Binary name '{}' is empty", name))
         } else {
-            name.split('/').map(UnqualifiedName::check_valid).collect()
+            name.split('/').try_for_each(UnqualifiedName::check_valid)
         }
     }
 

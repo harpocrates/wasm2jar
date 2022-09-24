@@ -135,6 +135,12 @@ impl JavaRenamer {
     }
 }
 
+impl Default for JavaRenamer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Renamer for JavaRenamer {
     fn rename_function(&mut self, name: &str) -> String {
         self.rename(name)

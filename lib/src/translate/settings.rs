@@ -122,14 +122,14 @@ impl Settings {
         component_model: false,
     };
 
-    pub fn new<'g>(
+    pub fn new(
         output_full_class_name: &str,
         external_utilities: Option<&str>,
     ) -> Result<Settings, Error> {
         let mut wasm_features = Self::SUPPORTED_WASM_FEATURES;
         wasm_features.deterministic_only = false;
 
-        fn make_name<'g, N: Name>(name: impl Into<String>) -> Result<N, Error> {
+        fn make_name<N: Name>(name: impl Into<String>) -> Result<N, Error> {
             N::from_string(name.into()).map_err(Error::MalformedName)
         }
 

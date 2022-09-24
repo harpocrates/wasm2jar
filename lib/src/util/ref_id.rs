@@ -47,13 +47,13 @@ impl<'a, T: ?Sized> Deref for RefId<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &'a T {
-        &self.0
+        self.0
     }
 }
 
 impl<'a, T: ?Sized> Borrow<T> for RefId<'a, T> {
     fn borrow(&self) -> &T {
-        &*self.0
+        self.0
     }
 }
 /*

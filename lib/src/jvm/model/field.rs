@@ -48,7 +48,7 @@ impl<'g> Field<'g> {
         }
 
         // `ConstantValue` attribute
-        if let Some(_) = self.constant_value {
+        if self.constant_value.is_some() {
             todo!();
         }
 

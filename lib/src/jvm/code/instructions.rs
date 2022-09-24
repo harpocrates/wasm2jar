@@ -21,7 +21,6 @@ use crate::jvm::{BaseType, RefType};
 use crate::util::Width;
 use byteorder::WriteBytesExt;
 use std::convert::TryFrom;
-use std::io::Result;
 use std::ops::Not;
 
 /// Non-branching JVM bytecode instruction
@@ -45,12 +44,18 @@ pub enum Instruction<Class, Constant, Field, Method, IndyMethod> {
     DConst1,
     BiPush(i8),
     SiPush(i16),
-    Ldc(Constant), // covers both `ldc` and `ldc_w`
+    /// Covers both `ldc` and `ldc_w`
+    Ldc(Constant),
     Ldc2(Constant),
-    ILoad(u16), // covers `iload`, `iload{0,3}`, and `wide iload`
+    /// Covers `iload`, `iload{0,3}`, and `wide iload`
+    ILoad(u16),
+    /// Covers `lload`, `lload{0,3}`, and `wide lload`
     LLoad(u16),
+    /// Covers `fload`, `fload{0,3}`, and `wide fload`
     FLoad(u16),
+    /// Covers `dload`, `dload{0,3}`, and `wide dload`
     DLoad(u16),
+    /// Covers `aload`, `aload{0,3}`, and `wide aload`
     ALoad(u16),
     IALoad,
     LALoad,
@@ -60,10 +65,15 @@ pub enum Instruction<Class, Constant, Field, Method, IndyMethod> {
     BALoad,
     CALoad,
     SALoad,
-    IStore(u16), // covers `istore`, `istore{0,3}`, and `wide istore`
+    /// Covers `istore`, `istore{0,3}`, and `wide istore`
+    IStore(u16),
+    /// Covers `lstore`, `lstore{0,3}`, and `wide lstore`
     LStore(u16),
+    /// Covers `fstore`, `fstore{0,3}`, and `wide fstore`
     FStore(u16),
+    /// Covers `dstore`, `dstore{0,3}`, and `wide dstore`
     DStore(u16),
+    /// Covers `astore`, `astore{0,3}`, and `wide astore`
     AStore(u16),
     IAStore,
     LAStore,
@@ -106,15 +116,18 @@ pub enum Instruction<Class, Constant, Field, Method, IndyMethod> {
     LNeg,
     FNeg,
     DNeg,
-    ISh(ShiftType), // covers `ishr`, `ishl`, and `iushr`
-    LSh(ShiftType), // covers `lshr`, `lshl`, and `lushr`
+    /// Covers `ishr`, `ishl`, and `iushr`
+    ISh(ShiftType),
+    /// Covers `lshr`, `lshl`, and `lushr`
+    LSh(ShiftType),
     IAnd,
     LAnd,
     IOr,
     LOr,
     IXor,
     LXor,
-    IInc(u16, i16), // covers `iinc` and `wide iinc`
+    /// Covers `iinc` and `wide iinc`
+    IInc(u16, i16),
     I2L,
     I2F,
     I2D,
@@ -131,8 +144,10 @@ pub enum Instruction<Class, Constant, Field, Method, IndyMethod> {
     I2C,
     I2S,
     LCmp,
-    FCmp(CompareMode), // covers `fcmpl` and `fcmpg`
-    DCmp(CompareMode), // covers `dcmpl` and `dcmpg`
+    /// Covers `fcmpl` and `fcmpg`
+    FCmp(CompareMode),
+    /// Covers `dcmpl` and `dcmpg`
+    DCmp(CompareMode),
     GetStatic(Field),
     PutStatic(Field),
     GetField(Field),
@@ -167,14 +182,15 @@ impl<Class, Constant, Field, Method, IndyMethod> Default
 impl<Class, Constant, Field, Method, IndyMethod>
     Instruction<Class, Constant, Field, Method, IndyMethod>
 {
+    /// Transform the instruction by mapping over each of the generic arguments
     pub fn map<Class2, Constant2, Field2, Method2, IndyMethod2, E>(
         &self,
-        map_class: impl FnOnce(&Class) -> std::result::Result<Class2, E>,
-        map_constant: impl FnOnce(&Constant) -> std::result::Result<Constant2, E>,
-        map_field: impl FnOnce(&Field) -> std::result::Result<Field2, E>,
-        map_method: impl FnOnce(&Method) -> std::result::Result<Method2, E>,
-        map_indy_method: impl FnOnce(&IndyMethod) -> std::result::Result<IndyMethod2, E>,
-    ) -> std::result::Result<Instruction<Class2, Constant2, Field2, Method2, IndyMethod2>, E> {
+        map_class: impl FnOnce(&Class) -> Result<Class2, E>,
+        map_constant: impl FnOnce(&Constant) -> Result<Constant2, E>,
+        map_field: impl FnOnce(&Field) -> Result<Field2, E>,
+        map_method: impl FnOnce(&Method) -> Result<Method2, E>,
+        map_indy_method: impl FnOnce(&IndyMethod) -> Result<IndyMethod2, E>,
+    ) -> Result<Instruction<Class2, Constant2, Field2, Method2, IndyMethod2>, E> {
         use Instruction::*;
         Ok(match self {
             Nop => Nop,
@@ -478,7 +494,7 @@ impl<Class, Field, Method, IndyMethod> Width
 }
 
 impl Serialize for SerializableInstruction {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
         /* The load/store instructions follow the same pattern:
          *
          *   - short form (0-3) have special bytes
@@ -490,7 +506,7 @@ impl Serialize for SerializableInstruction {
             short_form_start: u8,
             normal_form: u8,
             writer: &mut W,
-        ) -> Result<()> {
+        ) -> std::io::Result<()> {
             match u8::try_from(idx) {
                 Ok(n @ 0..=3) => (short_form_start + n).serialize(writer),
                 Ok(n) => {
@@ -884,7 +900,9 @@ impl<Lbl: Copy, LblWide: Copy, LblNext: Copy> BranchInstruction<Lbl, LblWide, Lb
             BranchInstruction::FallThrough(_) => JumpTargets::None,
         }
     }
+}
 
+impl<Lbl, LblWide, LblNext> BranchInstruction<Lbl, LblWide, LblNext> {
     /// If the instruction requires padding, set that padding. Otherwise, passes through the
     /// instruction unchanged.
     pub fn set_padding(&mut self, padding: u8) {
@@ -983,7 +1001,7 @@ impl<Lbl, LblWide, LblFall> Width for BranchInstruction<Lbl, LblWide, LblFall> {
 }
 
 impl Serialize for BranchInstruction<i16, i32, ()> {
-    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> Result<()> {
+    fn serialize<W: WriteBytesExt>(&self, writer: &mut W) -> std::io::Result<()> {
         match self {
             BranchInstruction::If(comp, lbl, ()) => {
                 let opcode: u8 = match comp {
@@ -1094,7 +1112,7 @@ impl<A> JumpTargets<A, A> {
             JumpTargets::None => &[],
             JumpTargets::Regular(a) => std::slice::from_ref(a),
             JumpTargets::Wide(a) => std::slice::from_ref(a),
-            JumpTargets::WideMany(a_many) => &a_many,
+            JumpTargets::WideMany(a_many) => a_many,
         }
     }
 }

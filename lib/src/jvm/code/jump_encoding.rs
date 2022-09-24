@@ -87,7 +87,7 @@ pub fn widen_oversized_jumps<Frame: Clone, Insn: Default + Width, Lbl: Copy + Eq
         .iter()
         .filter_map(|(block_lbl, block)| match block.branch_end.jump_targets() {
             JumpTargets::Regular(to_block_lbl) => {
-                let (mut from_index, mut from_offset) = label_index_and_offset[&block_lbl];
+                let (mut from_index, mut from_offset) = label_index_and_offset[block_lbl];
                 from_index += 1;
                 from_offset.0 += block.instructions.offset_len().0;
                 let (to_index, to_offset) = label_index_and_offset[&to_block_lbl];
@@ -333,7 +333,7 @@ mod test {
     /// Make basic blocks map
     fn make_basic_block(blocks: &[(SynLabel, &Block)]) -> HashMap<SynLabel, Block> {
         blocks
-            .into_iter()
+            .iter()
             .cloned()
             .map(|(lbl, block)| (lbl, block.clone()))
             .collect()

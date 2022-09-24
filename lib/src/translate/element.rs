@@ -76,7 +76,7 @@ impl<'a, 'g> Element<'a, 'g> {
                 }
                 ElementItem::Expr(elem_expr) => {
                     super::translate_const_expr(
-                        functions, globals, runtime, this_off, &mut code, &elem_expr,
+                        functions, globals, runtime, this_off, &mut code, elem_expr,
                     )?;
                 }
             }

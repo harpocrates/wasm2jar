@@ -69,6 +69,11 @@ impl<T: Sized + Width> OffsetVec<T> {
         self.entries.len()
     }
 
+    /// Does the `OffsetVec` have any entires?
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Current offset size of the `OffsetVec` (aka. offset of the next element
     /// to be added)
     pub fn offset_len(&self) -> Offset {
@@ -139,7 +144,7 @@ impl<T: Sized + Width> OffsetVec<T> {
         self.entries.get(index).map(|(offset, t)| (*offset, t))
     }
 
-    pub fn iter<'a>(&'a self) -> OffsetVecIter<'a, T> {
+    pub fn iter(&self) -> OffsetVecIter<T> {
         self.into_iter()
     }
 }

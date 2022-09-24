@@ -2,7 +2,7 @@ use crate::jvm::class_file;
 use crate::jvm::class_file::{
     BootstrapMethod, BootstrapMethods, ClassConstantIndex, ClassFile, ConstantIndex,
     ConstantPoolOverflow, ConstantsPool, ConstantsWriter, InnerClass, InnerClasses, NestHost,
-    NestMembers, Utf8ConstantIndex, Version,
+    NestMembers, Version,
 };
 use crate::jvm::class_graph::{ClassId, ConstantData, NestData};
 use crate::jvm::model::{Field, Method};
@@ -139,7 +139,7 @@ impl<'g> Class<'g> {
                     .constant_index(&mut constants_pool)?;
                 let inner_name = match &nested_data.simple_name {
                     Some(name) => constants_pool.get_utf8(name.as_str())?,
-                    None => Utf8ConstantIndex(ConstantIndex(0)),
+                    None => ConstantIndex::ZERO,
                 };
                 inner_classes.push(InnerClass {
                     inner_class,

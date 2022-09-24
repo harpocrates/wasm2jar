@@ -143,15 +143,15 @@ fn main() -> io::Result<()> {
 
         // Print out the test result
         let mut s = stdout.lock();
-        s.write(b" - ")?;
+        s.write_all(b" - ")?;
         s.set_color(ColorSpec::new().set_bold(true))?;
-        s.write(test.to_string_lossy().as_bytes())?;
+        s.write_all(test.to_string_lossy().as_bytes())?;
         s.set_color(ColorSpec::new().set_dimmed(true))?;
-        s.write(b" [")?;
+        s.write_all(b" [")?;
         s.set_color(ColorSpec::new().set_fg(Some(color)))?;
-        s.write(summary)?;
+        s.write_all(summary)?;
         s.set_color(ColorSpec::new().set_dimmed(true))?;
-        s.write(b"]\n")?;
+        s.write_all(b"]\n")?;
         s.reset()?;
         s.flush()?;
     }
@@ -159,21 +159,21 @@ fn main() -> io::Result<()> {
     // Only print a summary when there is something to summarize
     if count_ok + count_fail + count_error > 1 {
         let mut s = stdout.lock();
-        s.write(b"\n")?;
-        s.write(b"Summary:\n")?;
-        for (color, count, message) in vec![
+        s.write_all(b"\n")?;
+        s.write_all(b"Summary:\n")?;
+        for (color, count, message) in [
             (Color::Green, count_ok, "OK"),
             (Color::Yellow, count_error, "ERROR"),
             (Color::Red, count_fail, "FAILED"),
         ] {
             if count > 0 {
-                s.write(b" - ")?;
-                s.write(count.to_string().as_bytes())?;
-                s.write(b" ")?;
+                s.write_all(b" - ")?;
+                s.write_all(count.to_string().as_bytes())?;
+                s.write_all(b" ")?;
                 s.set_color(ColorSpec::new().set_fg(Some(color)))?;
-                s.write(message.as_bytes())?;
+                s.write_all(message.as_bytes())?;
                 s.reset()?;
-                s.write(b"\n")?;
+                s.write_all(b"\n")?;
                 s.flush()?;
             }
         }

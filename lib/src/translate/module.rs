@@ -921,7 +921,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.push_instruction(Instruction::Dup2)?;
 
                 // Get the imported handle
-                Self::lookup_import(&mut jvm_code, &import_loc)?;
+                Self::lookup_import(&mut jvm_code, import_loc)?;
                 jvm_code.checkcast(self.runtime.classes.function)?;
                 jvm_code.access_field(self.runtime.members.function.handle, AccessMode::Read)?;
 
@@ -975,7 +975,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.push_instruction(Instruction::Dup2)?;
 
                 // Get the imported global
-                Self::lookup_import(&mut jvm_code, &import_loc)?;
+                Self::lookup_import(&mut jvm_code, import_loc)?;
                 jvm_code.checkcast(self.runtime.classes.global)?;
 
                 // Check that it has the right signature
@@ -1019,7 +1019,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.push_instruction(Instruction::Dup2)?;
 
                 // Get the imported memory
-                Self::lookup_import(&mut jvm_code, &import_loc)?;
+                Self::lookup_import(&mut jvm_code, import_loc)?;
                 jvm_code.checkcast(self.runtime.classes.memory)?;
 
                 // Assign it to the right field
@@ -1033,7 +1033,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.push_instruction(Instruction::Dup2)?;
 
                 // Get the imported memory
-                Self::lookup_import(&mut jvm_code, &import_loc)?;
+                Self::lookup_import(&mut jvm_code, import_loc)?;
                 let table_type = match table.table_type.element_type {
                     wasmparser::ValType::FuncRef => self.runtime.classes.function_table,
                     wasmparser::ValType::ExternRef => self.runtime.classes.reference_table,

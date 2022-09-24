@@ -44,6 +44,7 @@ use crate::util::RefId;
 use elsa::map::FrozenMap;
 use elsa::FrozenVec;
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
@@ -72,6 +73,12 @@ impl<'g> ClassGraphArenas<'g> {
             field_arena: Arena::new(),
             bootstrap_method_arena: Arena::new(),
         }
+    }
+}
+
+impl<'g> Default for ClassGraphArenas<'g> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -115,12 +122,12 @@ impl<'g> ClassGraph<'g> {
 
             // Cursed (unsound) covariance of arrays
             (RefType::ObjectArray(arr1), RefType::ObjectArray(arr2)) => {
-                if arr1.additional_dimensions < arr2.additional_dimensions {
-                    false
-                } else if arr1.additional_dimensions == arr2.additional_dimensions {
-                    Self::is_object_type_assignable(arr1.element_type, arr2.element_type)
-                } else {
-                    Self::is_array_type_assignable(&arr2.element_type.name)
+                match arr1.additional_dimensions.cmp(&arr2.additional_dimensions) {
+                    Ordering::Less => false,
+                    Ordering::Equal => {
+                        Self::is_object_type_assignable(arr1.element_type, arr2.element_type)
+                    }
+                    Ordering::Greater => Self::is_array_type_assignable(&arr2.element_type.name),
                 }
             }
 
@@ -191,9 +198,9 @@ impl<'g> ClassGraph<'g> {
         false
     }
 
-    // TODO: remove uses of this
+    /// Lookup a class by its binary name
     pub fn lookup_class(&'g self, name: &BinaryName) -> Option<ClassId<'g>> {
-        self.classes.get(name).map(|cid| RefId(cid))
+        self.classes.get(name).map(RefId)
     }
 
     /// Add a new class to the class graph
@@ -246,6 +253,7 @@ impl<'g> ClassGraph<'g> {
         }
     }
 
+    /// Add a new bootstrap method
     pub fn add_bootstrap_method(
         &self,
         bootstrap_method: BootstrapMethodData<'g>,
@@ -255,7 +263,7 @@ impl<'g> ClassGraph<'g> {
 
     /// Add standard types to the class graph
     pub fn insert_java_library_types(&self) -> java_lib_types::JavaLibrary<'g> {
-        java_lib_types::JavaLibrary::add_to_graph(&self)
+        java_lib_types::JavaLibrary::add_to_graph(self)
     }
 }
 

@@ -129,7 +129,7 @@ impl<'g> CodeBuilder<'g> {
 
         // The block is only referred to
         if let Some(frame) = self.unplaced_labels.get(&label) {
-            return Some(&frame);
+            return Some(frame);
         }
 
         // The block is the one we are currently processing
@@ -253,7 +253,7 @@ impl<'g> CodeBuilder<'g> {
             // Update all the local state in the builder
             self.code.block_order.push(block_label);
             self.current_block = next_curr_block_opt;
-            if let Some(_) = self.code.blocks.insert(block_label, basic_block) {
+            if self.code.blocks.insert(block_label, basic_block).is_some() {
                 return Err(Error::DuplicateLabel(block_label));
             }
         }
@@ -294,7 +294,7 @@ impl<'g> CodeBuilder<'g> {
             let _ = self.unplaced_labels.remove(&label);
             self.code.block_order.push(block_label);
             self.current_block = next_curr_block_opt;
-            if let Some(_) = self.code.blocks.insert(block_label, basic_block) {
+            if self.code.blocks.insert(block_label, basic_block).is_some() {
                 return Err(Error::DuplicateLabel(block_label));
             }
         } else {

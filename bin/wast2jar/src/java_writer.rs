@@ -22,7 +22,7 @@ impl<W: io::Write> JavaWriter<W> {
     fn ensure_line_indented(&mut self) -> io::Result<()> {
         if !self.line_in_progress {
             for _ in 0..self.open_blocks {
-                self.inner.write(b"   ")?;
+                self.inner.write_all(b"   ")?;
             }
             self.line_in_progress = true;
         }
@@ -39,13 +39,13 @@ impl<W: io::Write> JavaWriter<W> {
     /// Append a snippet of inline code (no newlines - use `newline` for that)
     pub fn inline_code(&mut self, code: impl AsRef<str>) -> io::Result<()> {
         self.ensure_line_indented()?;
-        self.inner.write(code.as_ref().as_bytes())?;
+        self.inner.write_all(code.as_ref().as_bytes())?;
         Ok(())
     }
 
     /// Start a new line
     pub fn newline(&mut self) -> io::Result<()> {
-        self.inner.write(b"\n")?;
+        self.inner.write_all(b"\n")?;
         self.line_in_progress = false;
         Ok(())
     }

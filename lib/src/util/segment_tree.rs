@@ -1,12 +1,14 @@
 use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::ops::RangeInclusive;
 
 /// Simplified segment tree
 ///
 /// Intervals get cloned once per inner node on which they get stored. Note however, that you can
 /// wrap any interval in an `Rc` or a reference and still have an interval (but one that can be
 /// cheaply cloned).
+#[derive(Debug)]
 pub struct SegmentTree<I: Interval + Clone>(Option<SegmentNode<I>>);
 
 impl<I: Interval + Clone> SegmentTree<I> {
@@ -132,6 +134,7 @@ impl<I: Interval + Clone> SegmentTree<I> {
 }
 
 /// Internal node in the segment tree
+#[derive(Debug)]
 enum SegmentNode<I: Interval> {
     Leaf {
         /// Single endpoint contained in the segment
@@ -191,7 +194,7 @@ impl<I: Interval + Clone> SegmentNode<I> {
 
 /// Closed interval
 pub trait Interval {
-    type Endpoint: Ord + Copy;
+    type Endpoint: Ord + Copy + std::fmt::Debug;
 
     /// Start of the interval (inclusive)
     fn from(&self) -> Self::Endpoint;
@@ -241,5 +244,80 @@ impl<I: Interval> Interval for Rc<I> {
     fn until(&self) -> Self::Endpoint {
         let interval: &I = self.borrow();
         interval.until()
+    }
+}
+
+impl<Idx: Copy + Ord + std::fmt::Debug> Interval for RangeInclusive<Idx> {
+    type Endpoint = Idx;
+
+    fn from(&self) -> Idx {
+        *self.start()
+    }
+
+    fn until(&self) -> Idx {
+        *self.end()
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::ops::RangeInclusive;
+    use std::collections::HashSet;
+    use std::hash::Hash;
+
+    fn intervals_set<I: Hash + Interval + Clone + Eq + PartialEq>(tree: &SegmentTree<I>, point: I::Endpoint) -> HashSet<I> {
+        tree.intervals_containing(&point).into_iter().cloned().collect()
+    }
+
+    #[test]
+    fn no_intervals() {
+        let tree: SegmentTree<RangeInclusive<i32>> = SegmentTree::new(vec![]);
+        assert!(intervals_set(&tree, 0).is_empty());
+        assert!(intervals_set(&tree, 1).is_empty());
+        assert!(intervals_set(&tree, 2).is_empty());
+    }
+
+    #[test]
+    fn single_interval() {
+        let tree: SegmentTree<RangeInclusive<i32>> = SegmentTree::new(vec![1..=3]);
+        assert!(intervals_set(&tree, 0).is_empty());
+        assert_eq!(intervals_set(&tree, 1), HashSet::from([1..=3]));
+        assert_eq!(intervals_set(&tree, 2), HashSet::from([1..=3]));
+        assert_eq!(intervals_set(&tree, 3), HashSet::from([1..=3]));
+        assert!(intervals_set(&tree, 4).is_empty());
+    }
+
+    #[test]
+    fn two_overlapping_intervals() {
+        let tree: SegmentTree<RangeInclusive<i32>> = SegmentTree::new(vec![1..=3, 2..=4]);
+        assert!(intervals_set(&tree, 0).is_empty());
+        assert_eq!(intervals_set(&tree, 1), HashSet::from([1..=3]));
+        assert_eq!(intervals_set(&tree, 2), HashSet::from([1..=3, 2..=4]));
+        assert_eq!(intervals_set(&tree, 3), HashSet::from([1..=3, 2..=4]));
+        assert_eq!(intervals_set(&tree, 4), HashSet::from([2..=4]));
+        assert!(intervals_set(&tree, 5).is_empty());
+    }
+
+
+    //cargo test util::segment_tree::test::multiple_overlapping_intervals -- --show-output
+    #[test]
+    fn multiple_overlapping_intervals() {
+        let tree: SegmentTree<RangeInclusive<i32>> = SegmentTree::new(vec![0..=2, 2..=4, 4..=6, 2..=8, 0..=10]);
+        println!("{:#?}", tree);
+        assert!(intervals_set(&tree, -1).is_empty());
+     //   assert_eq!(intervals_set(&tree, 0), HashSet::from([0..=2, 0..=10]));
+        assert_eq!(intervals_set(&tree, 1), HashSet::from([0..=2, 0..=10]));
+        assert_eq!(intervals_set(&tree, 2), HashSet::from([0..=2, 0..=10, 2..=4, 2..=8]));
+        assert_eq!(intervals_set(&tree, 3), HashSet::from([0..=10, 2..=4, 2..=8]));
+        assert_eq!(intervals_set(&tree, 4), HashSet::from([0..=10, 2..=4, 2..=8, 4..=6]));
+        assert_eq!(intervals_set(&tree, 5), HashSet::from([0..=10, 2..=8, 4..=6]));
+        assert_eq!(intervals_set(&tree, 6), HashSet::from([0..=10, 2..=8, 4..=6]));
+        assert_eq!(intervals_set(&tree, 7), HashSet::from([0..=10, 2..=8]));
+        assert_eq!(intervals_set(&tree, 8), HashSet::from([0..=10, 2..=8]));
+        assert_eq!(intervals_set(&tree, 9), HashSet::from([0..=10]));
+        assert_eq!(intervals_set(&tree, 10), HashSet::from([0..=10]));
+        assert!(intervals_set(&tree, 11).is_empty());
     }
 }

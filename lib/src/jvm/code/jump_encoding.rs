@@ -47,11 +47,12 @@
 //!
 
 use crate::jvm::code::{BasicBlock, BranchInstruction, JumpTargets, LabelGenerator};
-use crate::util::{Interval, Offset, OffsetVec, RefId, SegmentTree, Width};
+use crate::util::{Offset, OffsetVec, RefId, SegmentTree, Width};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::Hash;
+use std::ops::Bound;
 use std::ops::{RangeBounds, RangeInclusive};
 
 /// Range of relative jump offsets supported by `goto` and `if*` branch instructions
@@ -282,15 +283,13 @@ impl<Lbl> JumpInterval<Lbl> {
     }
 }
 
-impl<Lbl> Interval for JumpInterval<Lbl> {
-    type Endpoint = usize;
-
-    fn from(&self) -> usize {
-        *self.jump_range.start()
+impl<Lbl> RangeBounds<usize> for &'_ JumpInterval<Lbl> {
+    fn start_bound(&self) -> Bound<&usize> {
+        Bound::Included(self.jump_range.start())
     }
 
-    fn until(&self) -> usize {
-        *self.jump_range.end()
+    fn end_bound(&self) -> Bound<&usize> {
+        Bound::Included(self.jump_range.end())
     }
 }
 
@@ -701,9 +700,9 @@ mod test {
         let l13 = label_generator_copy.fresh_label();
 
         let new_b3 = &mut b3.clone();
-        new_b3.branch_end = BranchInstruction::IfACmp(EqComparison::NE, l11, l10);
-        let b10 = &empty_block(BranchInstruction::Goto(l5));
-        let b11 = &empty_block(BranchInstruction::GotoW(l7));
+        new_b3.branch_end = BranchInstruction::IfACmp(EqComparison::NE, l13, l12);
+        let b12 = &empty_block(BranchInstruction::Goto(l5));
+        let b13 = &empty_block(BranchInstruction::GotoW(l7));
 
         let new_b4 = &mut b4.clone();
         new_b4.instructions.push(Instruction::Nop);
@@ -711,15 +710,15 @@ mod test {
         new_b4.branch_end = BranchInstruction::GotoW(l2);
 
         let new_b5 = &mut b5.clone();
-        new_b5.branch_end = BranchInstruction::IfICmp(OrdComparison::LE, l13, l12);
-        let b12 = &empty_block(BranchInstruction::Goto(l6));
-        let b13 = &empty_block(BranchInstruction::GotoW(l3));
+        new_b5.branch_end = BranchInstruction::IfICmp(OrdComparison::LE, l11, l10);
+        let b10 = &empty_block(BranchInstruction::Goto(l6));
+        let b11 = &empty_block(BranchInstruction::GotoW(l3));
 
         assert_jump_rewrite(
             block_order,
             blocks,
             label_generator,
-            &[l0, l1, l2, l3, l10, l11, l4, l5, l12, l13, l6, l7, l8, l9],
+            &[l0, l1, l2, l3, l12, l13, l4, l5, l10, l11, l6, l7, l8, l9],
             &make_basic_block(&[
                 (l0, b0),
                 (l1, b1),

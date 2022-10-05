@@ -2,7 +2,7 @@ use super::*;
 use crate::jvm::class_file::{
     BytecodeIndex, ClassConstantIndex, ConstantPoolOverflow, ConstantsPool, StackMapFrame,
 };
-use crate::jvm::class_graph::{ClassGraph, ClassId, ConstantData, JavaClasses};
+use crate::jvm::class_graph::{Assignable, ClassId, ConstantData, JavaClasses};
 use crate::jvm::code::{BranchInstruction, Instruction, InvokeType, SynLabel, VerifierInstruction};
 use crate::jvm::descriptors::RenderDescriptor;
 use crate::jvm::{
@@ -90,8 +90,9 @@ impl<'g> VerifierFrame<'g> {
         &mut self,
         insn: &BranchInstruction<Lbl, LblWide, LblNext>,
         this_method_return_type: &Option<FieldType<ClassId<'g>>>,
+        java: &JavaClasses<'g>,
     ) -> Result<(), VerifierErrorKind> {
-        verify_branch_instruction(self, this_method_return_type, insn)
+        verify_branch_instruction(self, this_method_return_type, insn, java)
     }
 
     /// Update the maximum locals and stack
@@ -912,6 +913,7 @@ fn verify_branch_instruction<'g, Lbl, LblWide, LblNext>(
     frame: &mut VerifierFrame<'g>,
     this_method_return_type: &Option<FieldType<ClassId<'g>>>,
     insn: &BranchInstruction<Lbl, LblWide, LblNext>,
+    java: &JavaClasses<'g>,
 ) -> Result<(), VerifierErrorKind> {
     use BranchInstruction::*;
     use VerificationType::*;
@@ -987,7 +989,7 @@ fn verify_branch_instruction<'g, Lbl, LblWide, LblNext>(
             match atype {
                 VType::Null => (),
                 VType::Object(RefType::Object(exception_type))
-                    if ClassGraph::is_throwable(exception_type) => {}
+                    if exception_type.is_assignable(&java.lang.throwable) => {}
                 _ => return Err(VerifierErrorKind::InvalidType),
             }
             stack.clear();

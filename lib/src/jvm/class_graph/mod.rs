@@ -44,16 +44,16 @@ use crate::util::RefId;
 use elsa::map::FrozenMap;
 use elsa::FrozenVec;
 use std::borrow::Cow;
-use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use typed_arena::Arena;
 
+mod assignable;
 mod java_classes;
 mod java_lib_types;
 mod java_members;
 
+pub use assignable::Assignable;
 pub use java_classes::*;
 pub use java_lib_types::*;
 pub use java_members::*;
@@ -100,102 +100,6 @@ impl<'g> ClassGraph<'g> {
             arenas,
             classes: FrozenMap::new(),
         }
-    }
-
-    /// Query if one type is assignable to another
-    ///
-    /// This matches the semantics of the prolog predicate `isJavaAssignable(sub_type, super_type)`
-    /// in the JVM verifier specification.
-    pub fn is_java_assignable(
-        sub_type: &RefType<ClassId<'g>>,
-        super_type: &RefType<ClassId<'g>>,
-    ) -> bool {
-        match (sub_type, super_type) {
-            // Special superclass and interfaces of all arrays
-            (
-                RefType::PrimitiveArray(_) | RefType::ObjectArray(_),
-                RefType::Object(object_type),
-            ) => Self::is_array_type_assignable(&object_type.name),
-
-            // Primitive arrays must match in dimension and type
-            (RefType::PrimitiveArray(arr1), RefType::PrimitiveArray(arr2)) => arr1 == arr2,
-
-            // Cursed (unsound) covariance of arrays
-            (RefType::ObjectArray(arr1), RefType::ObjectArray(arr2)) => {
-                match arr1.additional_dimensions.cmp(&arr2.additional_dimensions) {
-                    Ordering::Less => false,
-                    Ordering::Equal => {
-                        Self::is_object_type_assignable(arr1.element_type, arr2.element_type)
-                    }
-                    Ordering::Greater => Self::is_array_type_assignable(&arr2.element_type.name),
-                }
-            }
-
-            // Object-to-object assignability holds if there is a path through super type edges
-            (RefType::Object(elem_type1), RefType::Object(elem_type2)) => {
-                Self::is_object_type_assignable(*elem_type1, *elem_type2)
-            }
-
-            _ => false,
-        }
-    }
-
-    /// Object to object assignability
-    ///
-    /// This does a search up the superclasses and superinterfaces looking for the super type.
-    fn is_object_type_assignable(sub_type: ClassId<'g>, super_type: ClassId<'g>) -> bool {
-        let mut supertypes_to_visit: Vec<ClassId<'g>> = vec![super_type];
-        let mut dont_revisit: HashSet<ClassId<'g>> = HashSet::new();
-        dont_revisit.insert(sub_type);
-
-        // Optimization: if the super type is a class, then skip visiting interfaces
-        let super_is_class: bool = !super_type.is_interface();
-
-        while let Some(class_data) = supertypes_to_visit.pop() {
-            if class_data == super_type {
-                return true;
-            }
-            let class_data = class_data.0;
-
-            // Enqueue next types to visit
-            if let Some(superclass) = class_data.superclass {
-                if dont_revisit.insert(superclass) {
-                    supertypes_to_visit.push(superclass);
-                }
-            }
-            if !super_is_class {
-                for interface in &class_data.interfaces {
-                    let interface = RefId(interface);
-                    if dont_revisit.insert(interface) {
-                        supertypes_to_visit.push(interface);
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Check if arrays can be assigned to a super type
-    ///
-    /// This bakes in knowledge of the small, finite set of super types arrays have.
-    fn is_array_type_assignable(super_type: &BinaryName) -> bool {
-        super_type == &BinaryName::OBJECT
-            || super_type == &BinaryName::CLONEABLE
-            || super_type == &BinaryName::SERIALIZABLE
-    }
-
-    /// Is this object type throwable?
-    pub fn is_throwable(class: ClassId<'g>) -> bool {
-        let mut next_class = Some(class);
-        while let Some(class) = next_class {
-            if class.name == BinaryName::THROWABLE {
-                return true;
-            }
-            next_class = class.superclass;
-        }
-
-        false
     }
 
     /// Lookup a class by its binary name

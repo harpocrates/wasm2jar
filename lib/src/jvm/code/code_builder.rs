@@ -228,7 +228,11 @@ impl<'g> CodeBuilder<'g> {
         if let Some(mut current_block) = self.current_block.take() {
             current_block
                 .latest_frame
-                .verify_branch_instruction(&insn, &self.method.descriptor.return_type)
+                .verify_branch_instruction(
+                    &insn,
+                    &self.method.descriptor.return_type,
+                    &self.java.classes,
+                )
                 .map_err(|kind| Error::VerifierBranchingError {
                     instruction: insn.clone(),
                     kind,
@@ -273,7 +277,11 @@ impl<'g> CodeBuilder<'g> {
             let fall_through_insn = BranchInstruction::FallThrough(label);
             current_block
                 .latest_frame
-                .verify_branch_instruction(&fall_through_insn, &self.method.descriptor.return_type)
+                .verify_branch_instruction(
+                    &fall_through_insn,
+                    &self.method.descriptor.return_type,
+                    &self.java.classes,
+                )
                 .map_err(|kind| Error::VerifierBranchingError {
                     instruction: fall_through_insn.map_labels(|lbl| *lbl, |lbl| *lbl, |_| ()),
                     kind,

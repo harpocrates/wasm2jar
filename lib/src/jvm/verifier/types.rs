@@ -2,7 +2,7 @@ use crate::jvm::class_file::{
     BytecodeIndex, ClassConstantIndex, ConstantPoolOverflow, ConstantsPool, ConstantsWriter,
     Serialize,
 };
-use crate::jvm::class_graph::{ClassGraph, ClassId};
+use crate::jvm::class_graph::{Assignable, ClassId};
 use crate::jvm::code::SynLabel;
 use crate::jvm::{BaseType, FieldType, RefType};
 use crate::util::{Offset, Width};
@@ -116,23 +116,20 @@ impl<Cls, A> Width for VerificationType<Cls, A> {
     }
 }
 
-impl<'g, U> VerificationType<RefType<ClassId<'g>>, U> {
+impl<'g, U> Assignable for VerificationType<RefType<ClassId<'g>>, U> {
     /// Check if one verification type is assignable to another
     ///
     /// TODO: there is no handling of uninitialized yet. This just means that we might get false
     /// verification failures.
-    pub fn is_assignable<'a>(sub_type: &'a Self, super_type: &'a Self) -> bool
-    where
-        'g: 'a,
-    {
-        match (sub_type, super_type) {
+    fn is_assignable(&self, super_type: &Self) -> bool {
+        match (self, super_type) {
             (Self::Integer, Self::Integer) => true,
             (Self::Float, Self::Float) => true,
             (Self::Long, Self::Long) => true,
             (Self::Double, Self::Double) => true,
             (Self::Null, Self::Null) => true,
             (Self::Null, Self::Object(_)) => true,
-            (Self::Object(t1), Self::Object(t2)) => ClassGraph::is_java_assignable(t1, t2),
+            (Self::Object(t1), Self::Object(t2)) => t1.is_assignable(t2),
             _ => false,
         }
     }

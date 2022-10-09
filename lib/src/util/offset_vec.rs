@@ -273,6 +273,12 @@ impl<T: Debug> Debug for OffsetVec<T> {
     }
 }
 
+impl<T: Width, const N: usize> From<[T; N]> for OffsetVec<T> {
+    fn from(arr: [T; N]) -> OffsetVec<T> {
+        OffsetVec::from_iter(arr)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

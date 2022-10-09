@@ -1,6 +1,7 @@
 use stable_deref_trait::StableDeref;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
@@ -40,6 +41,12 @@ impl<'a, 'b, T> PartialOrd<RefId<'b, T>> for RefId<'a, T> {
 impl<'a, T> Ord for RefId<'a, T> {
     fn cmp(&self, other: &RefId<'a, T>) -> Ordering {
         (self.0 as *const T).cmp(&(other.0 as *const T))
+    }
+}
+
+impl<'a, T: Display> Display for RefId<'a, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(self.0, f)
     }
 }
 

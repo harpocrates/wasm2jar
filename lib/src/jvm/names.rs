@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::fmt::{Debug, Error as FmtError, Formatter};
+use std::fmt::{Debug, Display, Error as FmtError, Formatter};
 
 /// Names of methods, fields
 ///
@@ -12,6 +12,18 @@ pub struct UnqualifiedName(Cow<'static, str>);
 /// See <https://docs.oracle.com/javase/specs/jvms/se16/html/jvms-4.html#jvms-4.2.1>
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub struct BinaryName(Cow<'static, str>);
+
+impl Display for BinaryName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "L{};", self.as_str())
+    }
+}
+
+impl Display for UnqualifiedName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Extracts the raw underlying string name
 impl AsRef<str> for UnqualifiedName {
@@ -55,7 +67,7 @@ pub trait Name: Sized {
 impl Name for UnqualifiedName {
     fn check_valid(name: impl AsRef<str>) -> Result<(), String> {
         let name = name.as_ref();
-        if name.contains(&['.', ';', '[', '/'][..]) {
+        if name.contains(['.', ';', '[', '/']) {
             Err(format!(
                 "Unqualified name '{}' contains an illegal character",
                 name
@@ -349,4 +361,74 @@ impl BinaryName {
     pub const SYSTEM: Self = Self::name("java/lang/System");
     pub const THROWABLE: Self = Self::name("java/lang/Throwable");
     pub const VOID: Self = Self::name("java/lang/Void");
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn valid_unqualified_names() {
+        assert!(UnqualifiedName::check_valid("Thread").is_ok());
+        assert!(UnqualifiedName::check_valid("LinkedList").is_ok());
+        assert!(UnqualifiedName::check_valid("$__1").is_ok());
+        assert!(UnqualifiedName::check_valid("Noël").is_ok());
+    }
+
+    #[test]
+    fn invalid_unqualified_names() {
+        assert_eq!(
+            UnqualifiedName::check_valid(""),
+            Err("Unqualified name '' is empty".to_string()),
+        );
+        assert_eq!(
+            UnqualifiedName::check_valid("java/lang/Thread"),
+            Err("Unqualified name 'java/lang/Thread' contains an illegal character".to_string()),
+        );
+        assert_eq!(
+            UnqualifiedName::check_valid("Node.Entry"),
+            Err("Unqualified name 'Node.Entry' contains an illegal character".to_string()),
+        );
+        assert_eq!(
+            UnqualifiedName::check_valid("v[]"),
+            Err("Unqualified name 'v[]' contains an illegal character".to_string()),
+        );
+        assert_eq!(
+            UnqualifiedName::check_valid("*;*"),
+            Err("Unqualified name '*;*' contains an illegal character".to_string()),
+        );
+    }
+
+    #[test]
+    fn valid_binary_names() {
+        assert!(BinaryName::check_valid("Thread").is_ok());
+        assert!(BinaryName::check_valid("java/lang/Thread").is_ok());
+        assert!(BinaryName::check_valid("java/util/LinkedList").is_ok());
+        assert!(BinaryName::check_valid("$$/$__1").is_ok());
+        assert!(BinaryName::check_valid("me/Noël").is_ok());
+    }
+
+    #[test]
+    fn invalid_binary_names() {
+        assert_eq!(
+            BinaryName::check_valid(""),
+            Err("Binary name '' is empty".to_string()),
+        );
+        assert_eq!(
+            BinaryName::check_valid("util/Node.Entry"),
+            Err("Unqualified name 'Node.Entry' contains an illegal character".to_string()),
+        );
+        assert_eq!(
+            BinaryName::check_valid("util/v[]"),
+            Err("Unqualified name 'v[]' contains an illegal character".to_string()),
+        );
+        assert_eq!(
+            BinaryName::check_valid("util/*;*"),
+            Err("Unqualified name '*;*' contains an illegal character".to_string()),
+        );
+        assert_eq!(
+            BinaryName::check_valid("util//List"),
+            Err("Unqualified name '' is empty".to_string()),
+        );
+    }
 }

@@ -725,17 +725,32 @@ mod test {
         assert_eq!(T::parse(rendered).unwrap(), parsed);
     }
 
-    type FT = FieldType<BinaryName>;
+    const INT: FieldType<BinaryName> = FieldType::Base(BaseType::Int);
+    const DOUBLE: FieldType<BinaryName> = FieldType::Base(BaseType::Double);
+    const BOOLEAN: FieldType<BinaryName> = FieldType::Base(BaseType::Boolean);
+    const OBJECT: FieldType<BinaryName> = FieldType::object(BinaryName::OBJECT);
+    const STRING: FieldType<BinaryName> = FieldType::object(BinaryName::STRING);
+    const INTEGER: FieldType<BinaryName> = FieldType::object(BinaryName::INTEGER);
 
-    const INT: FT = FieldType::Base(BaseType::Int);
-    const DOUBLE: FT = FieldType::Base(BaseType::Double);
-    const OBJECT: FT = FieldType::object(BinaryName::OBJECT);
-    const STRING: FT = FieldType::object(BinaryName::STRING);
-    const INTEGER: FT = FieldType::object(BinaryName::INTEGER);
+    const OBJECT_ARR: ArrayType<BinaryName> = ArrayType {
+        additional_dimensions: 0,
+        element_type: BinaryName::OBJECT,
+    };
+    const STRING_ARR: ArrayType<BinaryName> = ArrayType {
+        additional_dimensions: 3,
+        element_type: BinaryName::STRING,
+    };
+    const INT_ARR: ArrayType<BaseType> = ArrayType {
+        additional_dimensions: 0,
+        element_type: BaseType::Int,
+    };
+    const DOUBLE_ARR: ArrayType<BaseType> = ArrayType {
+        additional_dimensions: 3,
+        element_type: BaseType::Double,
+    };
 
     #[test]
     fn base_types() {
-        round_trip("B", BaseType::Byte);
         round_trip("B", BaseType::Byte);
         round_trip("C", BaseType::Char);
         round_trip("D", BaseType::Double);
@@ -747,8 +762,35 @@ mod test {
     }
 
     #[test]
+    fn binary_names() {
+        round_trip("Ljava/lang/Object;", BinaryName::OBJECT);
+        round_trip("Ljava/lang/String;", BinaryName::STRING);
+        round_trip("Ljava/lang/Integer;", BinaryName::INTEGER);
+    }
+
+    #[test]
+    fn array_types() {
+        round_trip("[Ljava/lang/Object;", OBJECT_ARR);
+        round_trip("[[[[Ljava/lang/String;", STRING_ARR);
+        round_trip("[I", INT_ARR);
+        round_trip("[[[[D", DOUBLE_ARR);
+    }
+
+    #[test]
+    fn ref_types() {
+        round_trip("Ljava/lang/Object;", RefType::Object(BinaryName::OBJECT));
+        round_trip("Ljava/lang/String;", RefType::Object(BinaryName::STRING));
+        round_trip("Ljava/lang/Integer;", RefType::Object(BinaryName::INTEGER));
+        round_trip("[Ljava/lang/Object;", RefType::ObjectArray(OBJECT_ARR));
+        round_trip("[[[[Ljava/lang/String;", RefType::ObjectArray(STRING_ARR));
+        round_trip("[I", RefType::<BinaryName>::PrimitiveArray(INT_ARR));
+        round_trip("[[[[D", RefType::<BinaryName>::PrimitiveArray(DOUBLE_ARR));
+    }
+
+    #[test]
     fn field_types() {
         round_trip("I", INT);
+        round_trip("Z", BOOLEAN);
         round_trip("Ljava/lang/Object;", OBJECT);
         round_trip(
             "[[[D",
@@ -769,8 +811,19 @@ mod test {
         round_trip(
             "()V",
             MethodDescriptor {
-                parameters: Vec::<FT>::new(),
+                parameters: Vec::<FieldType<BinaryName>>::new(),
                 return_type: None,
+            },
+        );
+        round_trip(
+            "([[[[DI[I)[[[[D",
+            MethodDescriptor {
+                parameters: vec![
+                    FieldType::Ref(RefType::PrimitiveArray(DOUBLE_ARR)),
+                    INT,
+                    FieldType::Ref(RefType::PrimitiveArray(INT_ARR)),
+                ],
+                return_type: Some(FieldType::Ref(RefType::PrimitiveArray(DOUBLE_ARR))),
             },
         );
     }

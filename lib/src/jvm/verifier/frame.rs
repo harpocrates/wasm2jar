@@ -1092,3 +1092,114 @@ fn pop_offset_vec_expecting_type<'g>(
         Err(VerifierErrorKind::InvalidType)
     }
 }
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use crate::jvm::class_graph::{ClassData, ClassGraph, ClassGraphArenas};
+    use crate::jvm::code::Instruction::*;
+    use crate::jvm::{BinaryName, ClassAccessFlags, Name};
+    use VerificationType::*;
+
+    fn new_frame<'g, const N: usize, const M: usize>(
+        locals: [VerificationType<RefType<ClassId<'g>>, UninitializedRefType<'g>>; N],
+        stack: [VerificationType<RefType<ClassId<'g>>, UninitializedRefType<'g>>; M],
+    ) -> VerifierFrame<'g> {
+        Frame {
+            locals: OffsetVec::from(locals),
+            stack: OffsetVec::from(stack),
+        }
+    }
+
+    /* To test:
+     *
+     *   - subtyping in function calls
+     *   - invalid widths (eg. `pop`)
+     *   - uninitialized handling (esp. replacing the _right_ unitialized with `<init>`)
+     */
+
+    #[test]
+    fn arithmetic() {
+        let class_graph_arenas = ClassGraphArenas::new();
+        let class_graph = ClassGraph::new(&class_graph_arenas);
+        let java = class_graph.insert_java_library_types();
+        let java_classes = &java.classes;
+        let my_class = class_graph.add_class(ClassData::new(
+            BinaryName::from_str("MyClass").unwrap(),
+            java.classes.lang.object,
+            ClassAccessFlags::PUBLIC,
+            None,
+        ));
+        let my_class_typ = &RefType::Object(my_class);
+
+        let binops = [
+            (Integer, vec![IAdd, ISub, IDiv, IMul, IRem, IAnd, IOr, IXor]),
+            (Long, vec![LAdd, LSub, LDiv, LMul, LRem, LAnd, LOr, LXor]),
+            (Float, vec![FAdd, FSub, FDiv, FMul, FRem]),
+            (Double, vec![DAdd, DSub, DDiv, DMul, DRem]),
+        ];
+
+        for (good_typ, instructions) in binops {
+            for instruction in instructions {
+                // Try a bunch of different types
+                for typ in [Integer, Long, Float, Double, Null, UninitializedThis] {
+                    let mut frame_in = new_frame([], [typ, typ]);
+                    let frame_out = new_frame([], [typ]);
+                    if typ == good_typ {
+                        assert!(
+                            frame_in
+                                .verify_instruction(
+                                    &instruction,
+                                    &Offset(0),
+                                    &SynLabel::START,
+                                    java_classes,
+                                    my_class_typ
+                                )
+                                .is_ok(),
+                            "Verification of {:?}",
+                            instruction
+                        );
+                        assert_eq!(
+                            frame_in, frame_out,
+                            "Verification output frame of {:?}",
+                            instruction
+                        );
+                    } else {
+                        assert!(
+                            matches!(
+                                frame_in.verify_instruction(
+                                    &instruction,
+                                    &Offset(0),
+                                    &SynLabel::START,
+                                    java_classes,
+                                    my_class_typ
+                                ),
+                                Err(VerifierErrorKind::InvalidType),
+                            ),
+                            "Verification of {:?}",
+                            instruction
+                        );
+                    }
+                }
+
+                // Try with a stack that is too small
+                let mut frame_in = new_frame([], [good_typ]);
+                assert!(
+                    matches!(
+                        frame_in.verify_instruction(
+                            &instruction,
+                            &Offset(0),
+                            &SynLabel::START,
+                            java_classes,
+                            my_class_typ
+                        ),
+                        Err(VerifierErrorKind::EmptyStack),
+                    ),
+                    "Verification of {:?}",
+                    instruction
+                );
+            }
+        }
+    }
+}

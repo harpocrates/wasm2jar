@@ -124,3 +124,81 @@ impl<'g, Frame, Lbl> BasicBlock<Frame, VerifierInstruction<'g>, BranchInstructio
         })
     }
 }
+
+#[cfg(test)]
+mod serialize_test {
+
+    use super::*;
+    use crate::jvm::code::Instruction::*;
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct NoFrame;
+    type SimpleBasicBlock<'g> =
+        BasicBlock<NoFrame, VerifierInstruction<'g>, BranchInstruction<usize, usize, usize>>;
+
+    fn serialize_basic_block<'g>(
+        block: SimpleBasicBlock<'g>,
+    ) -> BasicBlock<NoFrame, SerializableInstruction, BranchInstruction<usize, usize, usize>> {
+        let mut constants = ConstantsPool::new();
+        let mut bootstrap_methods = HashMap::new();
+        block
+            .serialize_instructions(&mut constants, &mut bootstrap_methods, Offset(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn empty_block() {
+        let empty_block = BasicBlock {
+            frame: NoFrame,
+            instructions: OffsetVec::new(),
+            branch_end: BranchInstruction::FallThrough(0),
+        };
+        let serialized_empty_block = BasicBlock {
+            frame: NoFrame,
+            instructions: OffsetVec::new(),
+            branch_end: BranchInstruction::FallThrough(0),
+        };
+
+        assert_eq!(serialize_basic_block(empty_block), serialized_empty_block);
+    }
+
+    #[test]
+    fn padding_lookup_branch_end() {
+        fn make_block<const N: usize, Insn: Width>(
+            padding: u8,
+            instructions: [Insn; N],
+        ) -> BasicBlock<NoFrame, Insn, BranchInstruction<usize, usize, usize>> {
+            BasicBlock {
+                frame: NoFrame,
+                instructions: OffsetVec::from(instructions),
+                branch_end: BranchInstruction::TableSwitch {
+                    padding,
+                    default: 1,
+                    low: 0,
+                    targets: vec![2, 3, 4],
+                },
+            }
+        }
+
+        /* The expected padding for the following really is 2->1->0->3 and not 3->2->1->0. Why?
+         * Because recall the padding occurs _after_ the single byte that specifies a `TableSwitch`
+         * is coming (and its purpose is to align the offset of `default` to a 4-byte multiple)
+         */
+        assert_eq!(
+            serialize_basic_block(make_block(0, [IConst0])),
+            make_block(2, [IConst0]),
+        );
+        assert_eq!(
+            serialize_basic_block(make_block(0, [IConst0, IConst1])),
+            make_block(1, [IConst0, IConst1]),
+        );
+        assert_eq!(
+            serialize_basic_block(make_block(0, [IConst0, IConst1, IAdd])),
+            make_block(0, [IConst0, IConst1, IAdd]),
+        );
+        assert_eq!(
+            serialize_basic_block(make_block(0, [IConst0, IConst1, IConst2, IAdd])),
+            make_block(3, [IConst0, IConst1, IConst2, IAdd]),
+        );
+    }
+}

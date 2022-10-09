@@ -6,7 +6,6 @@ use crate::jvm::names::Name;
 use crate::jvm::{Error, RefType};
 use crate::util::{Offset, OffsetVec, Width};
 use byteorder::WriteBytesExt;
-use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
 use std::result::Result;
 
@@ -90,34 +89,17 @@ impl<'g> ConstantsPool<'g> {
     }
 
     /// Get or insert a utf8 constant from the constant pool
-    pub fn get_utf8<'a, S: Into<Cow<'a, str>>>(
+    pub fn get_utf8(
         &mut self,
-        utf8: S,
+        utf8: impl AsRef<str>,
     ) -> Result<Utf8ConstantIndex, ConstantPoolOverflow> {
-        let cow = utf8.into();
-
-        if let Some(idx) = self.utf8s.get::<str>(cow.borrow()) {
+        if let Some(idx) = self.utf8s.get(utf8.as_ref()) {
             Ok(*idx)
         } else {
-            let owned = cow.into_owned();
+            let owned = utf8.as_ref().to_string();
             let constant = Constant::Utf8(owned.clone());
             let idx = self.push_constant(constant)?;
             self.utf8s.insert(owned, idx);
-            Ok(idx)
-        }
-    }
-
-    /// Get or insert a string constant from the constant pool
-    pub fn get_string(
-        &mut self,
-        utf8: Utf8ConstantIndex,
-    ) -> Result<StringConstantIndex, ConstantPoolOverflow> {
-        if let Some(idx) = self.strings.get(&utf8) {
-            Ok(*idx)
-        } else {
-            let constant = Constant::String(utf8);
-            let idx = self.push_constant(constant)?;
-            self.strings.insert(utf8, idx);
             Ok(idx)
         }
     }
@@ -283,7 +265,7 @@ impl Serialize for Constant {
             }
             Constant::Integer(integer) => {
                 3u8.serialize(writer)?;
-                integer.serialize(writer)?; // TODO: confirm big endian is right
+                integer.serialize(writer)?;
             }
             Constant::Float(float) => {
                 4u8.serialize(writer)?;
@@ -634,9 +616,15 @@ impl<'g> ConstantsWriter<'g, ConstantIndex> for ConstantData<'g> {
     ) -> Result<ConstantIndex, ConstantPoolOverflow> {
         match self {
             ConstantData::String(string) => {
-                let str_utf8 = constants.get_utf8(&**string)?;
-                let str_idx = constants.get_string(str_utf8)?;
-                Ok(str_idx)
+                let utf8 = constants.get_utf8(&**string)?;
+                if let Some(idx) = constants.strings.get(&utf8) {
+                    Ok(*idx)
+                } else {
+                    let constant = Constant::String(utf8);
+                    let idx = constants.push_constant(constant)?;
+                    constants.strings.insert(utf8, idx);
+                    Ok(idx)
+                }
             }
             ConstantData::Class(class) => Ok(class.constant_index(constants)?),
             ConstantData::Integer(integer) => {
@@ -709,5 +697,458 @@ impl<'g> ConstantsWriter<'g, ConstantIndex> for ConstantData<'g> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jvm::class_graph::{ClassData, ClassGraph, ClassGraphArenas, FieldData};
+    use crate::jvm::{
+        ArrayType, BinaryName, ClassAccessFlags, FieldAccessFlags, FieldType, UnqualifiedName,
+    };
+
+    fn off(constant_idx: ConstantIndex) -> Offset {
+        Offset(constant_idx.0 as usize)
+    }
+
+    fn assert_constant_eq(found: &Constant, expected: &Constant) {
+        match (found, expected) {
+            (Constant::Class(utf81), Constant::Class(utf82)) => {
+                assert_eq!(utf81, utf82, "class name");
+            }
+            (Constant::FieldRef(cls1, typ1), Constant::FieldRef(cls2, typ2)) => {
+                assert_eq!(cls1, cls2, "field class");
+                assert_eq!(typ1, typ2, "field name and type");
+            }
+            (
+                Constant::MethodRef {
+                    class: cls1,
+                    name_and_type: typ1,
+                    is_interface: i1,
+                },
+                Constant::MethodRef {
+                    class: cls2,
+                    name_and_type: typ2,
+                    is_interface: i2,
+                },
+            ) => {
+                assert_eq!(cls1, cls2, "method class");
+                assert_eq!(typ1, typ2, "method name and type");
+                assert_eq!(i1, i2, "method interface status");
+            }
+            (Constant::String(utf81), Constant::String(utf82)) => {
+                assert_eq!(utf81, utf82, "string contents");
+            }
+            (Constant::Integer(i1), Constant::Integer(i2)) => assert_eq!(i1, i2),
+            (Constant::Float(f1), Constant::Float(f2)) => assert_eq!(f1, f2),
+            (Constant::Long(l1), Constant::Long(l2)) => assert_eq!(l1, l2),
+            (Constant::Double(d1), Constant::Double(d2)) => assert_eq!(d1, d2),
+            (
+                Constant::NameAndType {
+                    name: name1,
+                    descriptor: typ1,
+                },
+                Constant::NameAndType {
+                    name: name2,
+                    descriptor: typ2,
+                },
+            ) => {
+                assert_eq!(name1, name2, "name");
+                assert_eq!(typ1, typ2, "type");
+            }
+            (
+                Constant::MethodHandle {
+                    handle_kind: kind1,
+                    member: member1,
+                },
+                Constant::MethodHandle {
+                    handle_kind: kind2,
+                    member: member2,
+                },
+            ) => {
+                assert_eq!(kind1, kind2, "method handle kind");
+                assert_eq!(member1, member2, "method handle member");
+            }
+            (
+                Constant::MethodType { descriptor: typ1 },
+                Constant::MethodType { descriptor: typ2 },
+            ) => {
+                assert_eq!(typ1, typ2, "method type");
+            }
+            (
+                Constant::InvokeDynamic {
+                    bootstrap_method: bootstrap1,
+                    method_descriptor: typ1,
+                },
+                Constant::InvokeDynamic {
+                    bootstrap_method: bootstrap2,
+                    method_descriptor: typ2,
+                },
+            ) => {
+                assert_eq!(bootstrap1, bootstrap2, "invoke dynamic bootstrap method");
+                assert_eq!(typ1, typ2, "invoke dynamic descriptor");
+            }
+            (Constant::Utf8(s1), Constant::Utf8(s2)) => assert_eq!(s1, s2),
+            _ => panic!("Found {:?} but expected {:?}", found, expected),
+        }
+    }
+
+    // Assert the found constants match the expected constants
+    fn assert_constants_eq(
+        found: impl IntoIterator<Item = Constant>,
+        expected: impl IntoIterator<Item = Constant>,
+    ) {
+        let mut found_iter = found.into_iter();
+        let mut expected_iter = expected.into_iter();
+        loop {
+            match (found_iter.next(), expected_iter.next()) {
+                (None, None) => return,
+                (Some(left), None) => panic!("Expected {:?} but found no more elements", left),
+                (None, Some(right)) => panic!("Expected no more elements but found {:?}", right),
+                (Some(left), Some(right)) => {
+                    assert_constant_eq(&left, &right);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[allow(illegal_floating_point_literal_pattern)]
+    fn numeric_constants() {
+        let mut pool = ConstantsPool::new();
+        let integer_idx = ConstantData::Integer(123)
+            .constant_index(&mut pool)
+            .unwrap();
+        let long_idx = ConstantData::Long(123).constant_index(&mut pool).unwrap();
+        let float_idx = ConstantData::float(123.0)
+            .constant_index(&mut pool)
+            .unwrap();
+        let double_idx = ConstantData::double(123.0)
+            .constant_index(&mut pool)
+            .unwrap();
+        let constants = pool.into_offset_vec();
+
+        assert_eq!(constants.len(), 4);
+        assert_eq!(integer_idx, ConstantIndex(1));
+        assert_eq!(long_idx, ConstantIndex(2));
+        assert_eq!(float_idx, ConstantIndex(4));
+        assert_eq!(double_idx, ConstantIndex(5));
+        assert_eq!(constants.offset_len(), Offset(7));
+
+        assert!(matches!(
+            constants.get_offset(off(integer_idx)).ok(),
+            Some(&Constant::Integer(123))
+        ));
+        assert!(matches!(
+            constants.get_offset(off(long_idx)).ok(),
+            Some(&Constant::Long(123))
+        ));
+        assert!(matches!(
+            constants.get_offset(off(float_idx)).ok(),
+            Some(&Constant::Float(123.0))
+        ));
+        assert!(matches!(
+            constants.get_offset(off(double_idx)).ok(),
+            Some(&Constant::Double(123.0))
+        ));
+    }
+
+    #[test]
+    fn string_constants() {
+        let mut pool = ConstantsPool::new();
+        let utf8_idx = pool.get_utf8("foo bar").unwrap();
+        let string_idx = ConstantData::String("hello world".into())
+            .constant_index(&mut pool)
+            .unwrap();
+        let constants = pool.into_offset_vec();
+
+        assert_eq!(constants.len(), 3);
+        assert_eq!(utf8_idx, ConstantIndex(1));
+        assert_eq!(string_idx, ConstantIndex(3));
+        assert_eq!(constants.offset_len(), Offset(4));
+
+        assert_constants_eq(
+            constants.into_iter().map(|(_, _, c)| c),
+            [
+                Constant::Utf8("foo bar".to_string()),
+                Constant::Utf8("hello world".to_string()),
+                Constant::String(ConstantIndex(2)),
+            ],
+        );
+    }
+
+    #[test]
+    fn classgraph_id_constants() {
+        let class_graph_arenas = ClassGraphArenas::new();
+        let class_graph = ClassGraph::new(&class_graph_arenas);
+        let java = class_graph.insert_java_library_types();
+
+        let mut pool = ConstantsPool::new();
+        let integer_cls_idx = java.classes.lang.integer.constant_index(&mut pool).unwrap();
+        let maxvalue_fld_idx = java
+            .members
+            .lang
+            .long
+            .max_value
+            .constant_index(&mut pool)
+            .unwrap();
+        let sqrt_mthd_idx = java
+            .members
+            .lang
+            .math
+            .sqrt
+            .constant_index(&mut pool)
+            .unwrap();
+        let constants = pool.into_offset_vec();
+
+        assert_eq!(integer_cls_idx, ConstantIndex(2));
+        assert_eq!(maxvalue_fld_idx, ConstantIndex(8));
+        assert_eq!(sqrt_mthd_idx, ConstantIndex(14));
+
+        assert_constants_eq(
+            constants.into_iter().map(|(_, _, c)| c),
+            [
+                Constant::Utf8("java/lang/Integer".to_string()),
+                Constant::Class(ConstantIndex(1)),
+                Constant::Utf8("java/lang/Long".to_string()),
+                Constant::Class(ConstantIndex(3)),
+                Constant::Utf8("MAX_VALUE".to_string()),
+                Constant::Utf8("J".to_string()),
+                Constant::NameAndType {
+                    name: ConstantIndex(5),
+                    descriptor: ConstantIndex(6),
+                },
+                Constant::FieldRef(ConstantIndex(4), ConstantIndex(7)),
+                Constant::Utf8("java/lang/Math".to_string()),
+                Constant::Class(ConstantIndex(9)),
+                Constant::Utf8("sqrt".to_string()),
+                Constant::Utf8("(D)D".to_string()),
+                Constant::NameAndType {
+                    name: ConstantIndex(11),
+                    descriptor: ConstantIndex(12),
+                },
+                Constant::MethodRef {
+                    class: ConstantIndex(10),
+                    name_and_type: ConstantIndex(13),
+                    is_interface: false,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn method_handle_constants() {
+        let class_graph_arenas = ClassGraphArenas::new();
+        let class_graph = ClassGraph::new(&class_graph_arenas);
+        let java = class_graph.insert_java_library_types();
+
+        let my_class = class_graph.add_class(ClassData::new(
+            BinaryName::from_str("me/MyClass").unwrap(),
+            java.classes.lang.object,
+            ClassAccessFlags::PUBLIC,
+            None,
+        ));
+        let my_field = class_graph.add_field(FieldData {
+            class: my_class,
+            name: UnqualifiedName::from_str("myField").unwrap(),
+            access_flags: FieldAccessFlags::PUBLIC,
+            descriptor: FieldType::long(),
+        });
+        let my_field2 = class_graph.add_field(FieldData {
+            class: my_class,
+            name: UnqualifiedName::from_str("myField2").unwrap(),
+            access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
+            descriptor: FieldType::long(),
+        });
+
+        let mut pool = ConstantsPool::new();
+        let get_field_idx = ConstantData::FieldHandle(AccessMode::Read, my_field)
+            .constant_index(&mut pool)
+            .unwrap();
+        let put_field_idx = ConstantData::FieldHandle(AccessMode::Write, my_field)
+            .constant_index(&mut pool)
+            .unwrap();
+        let get_static_idx = ConstantData::FieldHandle(AccessMode::Read, my_field2)
+            .constant_index(&mut pool)
+            .unwrap();
+        let put_static_idx = ConstantData::FieldHandle(AccessMode::Write, my_field2)
+            .constant_index(&mut pool)
+            .unwrap();
+        let interface_idx = ConstantData::MethodHandle(java.members.lang.char_sequence.length)
+            .constant_index(&mut pool)
+            .unwrap();
+        let virtual_idx = ConstantData::MethodHandle(java.members.lang.string.get_bytes)
+            .constant_index(&mut pool)
+            .unwrap();
+        let static_idx = ConstantData::MethodHandle(java.members.lang.integer.bit_count)
+            .constant_index(&mut pool)
+            .unwrap();
+        let special_idx = ConstantData::MethodHandle(java.members.lang.object.init)
+            .constant_index(&mut pool)
+            .unwrap();
+        let constants = pool.into_offset_vec();
+
+        assert_eq!(get_field_idx, ConstantIndex(7));
+        assert_eq!(put_field_idx, ConstantIndex(8));
+        assert_eq!(get_static_idx, ConstantIndex(12));
+        assert_eq!(put_static_idx, ConstantIndex(13));
+        assert_eq!(interface_idx, ConstantIndex(20));
+        assert_eq!(virtual_idx, ConstantIndex(27));
+        assert_eq!(static_idx, ConstantIndex(34));
+        assert_eq!(special_idx, ConstantIndex(41));
+
+        use HandleKind::*;
+
+        assert_constants_eq(
+            constants.into_iter().map(|(_, _, c)| c),
+            [
+                Constant::Utf8("me/MyClass".to_string()),
+                Constant::Class(ConstantIndex(1)),
+                Constant::Utf8("myField".to_string()),
+                Constant::Utf8("J".to_string()),
+                Constant::NameAndType {
+                    name: ConstantIndex(3),
+                    descriptor: ConstantIndex(4),
+                },
+                Constant::FieldRef(ConstantIndex(2), ConstantIndex(5)),
+                Constant::MethodHandle {
+                    handle_kind: GetField,
+                    member: ConstantIndex(6),
+                },
+                Constant::MethodHandle {
+                    handle_kind: PutField,
+                    member: ConstantIndex(6),
+                },
+                Constant::Utf8("myField2".to_string()),
+                Constant::NameAndType {
+                    name: ConstantIndex(9),
+                    descriptor: ConstantIndex(4),
+                },
+                Constant::FieldRef(ConstantIndex(2), ConstantIndex(10)),
+                Constant::MethodHandle {
+                    handle_kind: GetStatic,
+                    member: ConstantIndex(11),
+                },
+                Constant::MethodHandle {
+                    handle_kind: PutStatic,
+                    member: ConstantIndex(11),
+                },
+                Constant::Utf8("java/lang/CharSequence".to_string()),
+                Constant::Class(ConstantIndex(14)),
+                Constant::Utf8("length".to_string()),
+                Constant::Utf8("()I".to_string()),
+                Constant::NameAndType {
+                    name: ConstantIndex(16),
+                    descriptor: ConstantIndex(17),
+                },
+                Constant::MethodRef {
+                    class: ConstantIndex(15),
+                    name_and_type: ConstantIndex(18),
+                    is_interface: true,
+                },
+                Constant::MethodHandle {
+                    handle_kind: InvokeInterface,
+                    member: ConstantIndex(19),
+                },
+                Constant::Utf8("java/lang/String".to_string()),
+                Constant::Class(ConstantIndex(21)),
+                Constant::Utf8("getBytes".to_string()),
+                Constant::Utf8("(Ljava/lang/String;)[B".to_string()),
+                Constant::NameAndType {
+                    name: ConstantIndex(23),
+                    descriptor: ConstantIndex(24),
+                },
+                Constant::MethodRef {
+                    class: ConstantIndex(22),
+                    name_and_type: ConstantIndex(25),
+                    is_interface: false,
+                },
+                Constant::MethodHandle {
+                    handle_kind: InvokeVirtual,
+                    member: ConstantIndex(26),
+                },
+                Constant::Utf8("java/lang/Integer".to_string()),
+                Constant::Class(ConstantIndex(28)),
+                Constant::Utf8("bitCount".to_string()),
+                Constant::Utf8("(I)I".to_string()),
+                Constant::NameAndType {
+                    name: ConstantIndex(30),
+                    descriptor: ConstantIndex(31),
+                },
+                Constant::MethodRef {
+                    class: ConstantIndex(29),
+                    name_and_type: ConstantIndex(32),
+                    is_interface: false,
+                },
+                Constant::MethodHandle {
+                    handle_kind: InvokeStatic,
+                    member: ConstantIndex(33),
+                },
+                Constant::Utf8("java/lang/Object".to_string()),
+                Constant::Class(ConstantIndex(35)),
+                Constant::Utf8("<init>".to_string()),
+                Constant::Utf8("()V".to_string()),
+                Constant::NameAndType {
+                    name: ConstantIndex(37),
+                    descriptor: ConstantIndex(38),
+                },
+                Constant::MethodRef {
+                    class: ConstantIndex(36),
+                    name_and_type: ConstantIndex(39),
+                    is_interface: false,
+                },
+                Constant::MethodHandle {
+                    handle_kind: NewInvokeSpecial,
+                    member: ConstantIndex(40),
+                },
+            ],
+        );
+    }
+
+    // See the comment on the `RefType` impl of `ConstantsWriter`
+    #[test]
+    fn array_type_constants() {
+        let class_graph_arenas = ClassGraphArenas::new();
+        let class_graph = ClassGraph::new(&class_graph_arenas);
+        let java = class_graph.insert_java_library_types();
+
+        let mut pool = ConstantsPool::new();
+        let integer1 = RefType::Object(java.classes.lang.integer)
+            .constant_index(&mut pool)
+            .unwrap();
+        let integer2 = java.classes.lang.integer.constant_index(&mut pool).unwrap();
+        let integer_arr = RefType::ObjectArray(ArrayType {
+            additional_dimensions: 0,
+            element_type: java.classes.lang.integer,
+        })
+        .constant_index(&mut pool)
+        .unwrap();
+        let int_arr = RefType::ObjectArray(ArrayType {
+            additional_dimensions: 2,
+            element_type: java.classes.lang.integer,
+        })
+        .constant_index(&mut pool)
+        .unwrap();
+        let constants = pool.into_offset_vec();
+
+        assert_eq!(constants.len(), 6);
+        assert_eq!(integer1, ConstantIndex(2));
+        assert_eq!(integer2, integer1);
+        assert_eq!(integer_arr, ConstantIndex(4));
+        assert_eq!(int_arr, ConstantIndex(6));
+        assert_eq!(constants.offset_len(), Offset(7));
+
+        assert_constants_eq(
+            constants.into_iter().map(|(_, _, c)| c),
+            [
+                Constant::Utf8("java/lang/Integer".to_string()),
+                Constant::Class(ConstantIndex(1)),
+                Constant::Utf8("[Ljava/lang/Integer;".to_string()),
+                Constant::Class(ConstantIndex(3)),
+                Constant::Utf8("[[[Ljava/lang/Integer;".to_string()),
+                Constant::Class(ConstantIndex(5)),
+            ],
+        );
     }
 }

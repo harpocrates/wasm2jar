@@ -134,6 +134,7 @@ impl<'g> ClassGraph<'g> {
     /// Add a field to the class graph and to its class
     ///
     /// TODO: validate that the class doesn't have any conflicting fields
+    /// TODO: validate that the class isn't an interface
     pub fn add_field(&self, field: FieldData<'g>) -> FieldId<'g> {
         let data = RefId(&*self.arenas.field_arena.alloc(field));
         data.class.fields.push(data);
@@ -143,6 +144,7 @@ impl<'g> ClassGraph<'g> {
     /// Add a method to the class graph and to its class
     ///
     /// TODO: validate that the class doesn't have any conflicting methods
+    /// TODO: validate that the virtual/interface methods aren't added to interface/regular classes
     pub fn add_method(&self, method: MethodData<'g>) -> MethodId<'g> {
         if let Some(m) = method.class.0.methods.iter().find(|m| {
             m.name == method.name
@@ -284,6 +286,8 @@ impl<'g> MethodData<'g> {
     /// There is one situation where this is not unambiguous: virtual methods may be called with
     /// either of `invokespecial` or `invokevirtual` (to represent static dispatch vs dynamic
     /// dispatch). This function chooses `invokevirtual`.
+    ///
+    /// TODO: consider inferring `InvokeSpecial` for private virtual methods (like `scalac`)
     pub fn infer_invoke_type(&self) -> InvokeType {
         if self.is_static() {
             InvokeType::Static
@@ -329,12 +333,13 @@ impl<'g> FieldData<'g> {
 
 impl<'g> Debug for FieldData<'g> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!(
+        write!(
+            f,
             "{}.{}:{}",
             self.class.name.as_str(),
             self.name.as_str(),
             self.descriptor.render(),
-        ))
+        )
     }
 }
 
@@ -396,12 +401,13 @@ pub struct InvokeDynamicData<'g> {
 // TODO: show bootstrap
 impl<'g> Debug for InvokeDynamicData<'g> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!(
+        write!(
+            f,
             "[{:?}]{}:{}",
             self.bootstrap,
             self.name.as_str(),
             self.descriptor.render(),
-        ))
+        )
     }
 }
 
@@ -474,19 +480,37 @@ impl<'g> ConstantData<'g> {
     }
 }
 
-// TODO: revisit this?
 impl<'g> Debug for ConstantData<'g> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConstantData::String(string) => string.fmt(f),
-            ConstantData::Class(ref_type) => ref_type.fmt(f),
-            ConstantData::Integer(integer) => integer.fmt(f),
-            ConstantData::Long(long) => long.fmt(f),
-            ConstantData::Float(float) => f32::from_le_bytes(*float).fmt(f),
-            ConstantData::Double(double) => f64::from_le_bytes(*double).fmt(f),
-            ConstantData::FieldHandle(_access_mode, field) => field.fmt(f),
-            ConstantData::MethodHandle(method) => method.fmt(f),
-            ConstantData::MethodType(method_type) => method_type.fmt(f),
+            ConstantData::String(string) => write!(f, "{:?}", string),
+            ConstantData::Class(ref_type) => write!(f, "{}", ref_type.render()),
+            ConstantData::Integer(integer) => write!(f, "{}", integer),
+            ConstantData::Long(long) => write!(f, "{}L", long),
+            ConstantData::Float(float) => write!(f, "{:?}f", f32::from_le_bytes(*float)),
+            ConstantData::Double(double) => write!(f, "{:?}d", f64::from_le_bytes(*double)),
+            ConstantData::FieldHandle(access_mode, field) => write!(
+                f,
+                "REF_{mode}{sort} {field:?}",
+                mode = match access_mode {
+                    AccessMode::Read => "get",
+                    AccessMode::Write => "put",
+                },
+                sort = if field.is_static() { "Static" } else { "Field" },
+                field = **field
+            ),
+            ConstantData::MethodHandle(method) => write!(
+                f,
+                "REF_{sort} {method:?}",
+                sort = match method.infer_invoke_type() {
+                    InvokeType::Static => "invokeStatic",
+                    InvokeType::Special => "newInvokeSpecial",
+                    InvokeType::Interface(_) => "invokeInterface",
+                    InvokeType::Virtual => "invokeVirtual",
+                },
+                method = **method
+            ),
+            ConstantData::MethodType(method_type) => write!(f, "{}", method_type.render()),
         }
     }
 }
@@ -495,4 +519,174 @@ impl<'g> Debug for ConstantData<'g> {
 pub enum AccessMode {
     Read,
     Write,
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use crate::jvm::{ArrayType, BaseType};
+
+    #[test]
+    fn debug_data() {
+        let class_graph_arenas = ClassGraphArenas::new();
+        let class_graph = ClassGraph::new(&class_graph_arenas);
+        let java = class_graph.insert_java_library_types();
+
+        assert_eq!(
+            format!("{:?}", *java.classes.lang.string),
+            "java/lang/String"
+        );
+        assert_eq!(
+            format!("{:?}", *java.members.nio.byte_order.big_endian),
+            "java/nio/ByteOrder.BIG_ENDIAN:Ljava/nio/ByteOrder;"
+        );
+        assert_eq!(
+            format!("{:?}", *java.members.lang.char_sequence.length),
+            "java/lang/CharSequence.length:()I"
+        );
+    }
+
+    #[test]
+    fn debug_scalar_constants() {
+        assert_eq!(
+            format!("{:?}", ConstantData::String("hello wörld".into())),
+            "\"hello wörld\""
+        );
+        assert_eq!(format!("{:?}", ConstantData::Integer(123)), "123");
+        assert_eq!(format!("{:?}", ConstantData::Long(123)), "123L");
+        assert_eq!(format!("{:?}", ConstantData::float(123.0)), "123.0f");
+        assert_eq!(format!("{:?}", ConstantData::double(123.0)), "123.0d");
+    }
+
+    #[test]
+    fn debug_other_constants() {
+        let class_graph_arenas = ClassGraphArenas::new();
+        let class_graph = ClassGraph::new(&class_graph_arenas);
+        let java = class_graph.insert_java_library_types();
+
+        let my_class = class_graph.add_class(ClassData::new(
+            BinaryName::from_str("me/MyClass").unwrap(),
+            java.classes.lang.object,
+            ClassAccessFlags::PUBLIC,
+            None,
+        ));
+        let my_field = class_graph.add_field(FieldData {
+            class: my_class,
+            name: UnqualifiedName::from_str("myField").unwrap(),
+            access_flags: FieldAccessFlags::PUBLIC,
+            descriptor: FieldType::long(),
+        });
+        let my_field2 = class_graph.add_field(FieldData {
+            class: my_class,
+            name: UnqualifiedName::from_str("myField2").unwrap(),
+            access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
+            descriptor: FieldType::long(),
+        });
+
+        // Class constants
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::Class(RefType::Object(java.classes.lang.integer))
+            ),
+            "Ljava/lang/Integer;"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::Class(RefType::PrimitiveArray(ArrayType {
+                    additional_dimensions: 2,
+                    element_type: BaseType::Double
+                }))
+            ),
+            "[[[D"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::Class(RefType::ObjectArray(ArrayType {
+                    additional_dimensions: 0,
+                    element_type: java.classes.lang.throwable
+                }))
+            ),
+            "[Ljava/lang/Throwable;"
+        );
+
+        // Field method handles
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::FieldHandle(AccessMode::Read, my_field)
+            ),
+            "REF_getField me/MyClass.myField:J"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::FieldHandle(AccessMode::Write, my_field)
+            ),
+            "REF_putField me/MyClass.myField:J"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::FieldHandle(AccessMode::Read, my_field2)
+            ),
+            "REF_getStatic me/MyClass.myField2:J"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::FieldHandle(AccessMode::Write, my_field2)
+            ),
+            "REF_putStatic me/MyClass.myField2:J"
+        );
+
+        // Method method handles
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::MethodHandle(java.members.lang.char_sequence.length)
+            ),
+            "REF_invokeInterface java/lang/CharSequence.length:()I"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::MethodHandle(java.members.lang.string.get_bytes)
+            ),
+            "REF_invokeVirtual java/lang/String.getBytes:(Ljava/lang/String;)[B"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::MethodHandle(java.members.lang.integer.bit_count)
+            ),
+            "REF_invokeStatic java/lang/Integer.bitCount:(I)I"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::MethodHandle(java.members.lang.object.init)
+            ),
+            "REF_newInvokeSpecial java/lang/Object.<init>:()V"
+        );
+
+        // Method types
+        assert_eq!(
+            format!(
+                "{:?}",
+                ConstantData::MethodType(
+                    java.members
+                        .lang
+                        .class
+                        .is_assignable_from
+                        .descriptor
+                        .clone()
+                )
+            ),
+            "(Ljava/lang/Class;)Z"
+        );
+    }
 }

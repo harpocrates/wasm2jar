@@ -1,11 +1,15 @@
-mod error;
-mod harness;
-mod java_harness;
-mod java_writer;
+//! This module enables programmatically verifying compliance with WAST files by turning them into
+//! runnable Java classes.
 
-use clap::{Arg, Command};
+mod error;
+mod java_harness;
+mod java_string_literal;
+mod java_writer;
+mod wat_translator;
+
+use crate::error::TestError;
 use error::TestOutcome;
-use harness::*;
+use java_harness::JavaHarness;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,8 +17,10 @@ use std::process::exit;
 use std::{fs, io};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
+use wat_translator::Wasm2JarTranslator;
 
 fn main() -> io::Result<()> {
+    use clap::{Arg, Command};
     env_logger::init();
 
     let matches = Command::new("WAST tester for WASM to JAR converter")
@@ -48,13 +54,6 @@ fn main() -> io::Result<()> {
                 .help("Sets the `javac` executable to use"),
         )
         .arg(
-            Arg::new("incremental")
-                .long("incremental")
-                .required(false)
-                .takes_value(false)
-                .help("Specifies to run in a more incremental (slower) mode"),
-        )
-        .arg(
             Arg::new("INPUT")
                 .allow_invalid_utf8(true)
                 .help("Sets the input file or folder")
@@ -65,7 +64,6 @@ fn main() -> io::Result<()> {
 
     let input_path: PathBuf = PathBuf::from(matches.value_of_os("INPUT").unwrap());
     let output_path: PathBuf = PathBuf::from(matches.value_of_os("output").unwrap());
-    let incremental_mode: bool = matches.is_present("incremental");
 
     // Find all of the test cases
     let tests: Vec<PathBuf> = if input_path.is_file() {
@@ -119,7 +117,7 @@ fn main() -> io::Result<()> {
         fs::create_dir_all(output_subdirectory)?;
 
         // Run the test
-        let outcome: TestOutcome = TestHarness::run(&output_subdirectory, &test, incremental_mode)
+        let outcome: TestOutcome = run_test(&test, &output_subdirectory)
             .map_or_else(TestOutcome::from, |_| TestOutcome::Ok);
 
         let (color, summary, message) = match outcome {
@@ -185,4 +183,52 @@ fn main() -> io::Result<()> {
     } else {
         0
     })
+}
+
+/// Run a single WAST test case in the specified output directory
+fn run_test(
+    wast_file: impl AsRef<Path>,
+    output_directory: impl AsRef<Path>,
+) -> Result<(), TestError> {
+    use std::process::Command;
+
+    let wast_file = wast_file.as_ref();
+    let wast_source = &fs::read_to_string(wast_file)?;
+    let output_directory = output_directory.as_ref();
+    let java_harness_file = output_directory.join("JavaHarness.java");
+
+    // Construct the Java harness, translate dependent WAT snippets
+    log::debug!("Starting fresh Java harness {:?}", &java_harness_file);
+    let directives_count = JavaHarness::from_wast(
+        wast_file.display(),
+        wast_source,
+        fs::File::create(&java_harness_file)?,
+        Wasm2JarTranslator { output_directory },
+    )?;
+
+    // Compile and run the harness (calls out to `javac` and `java`)
+    if directives_count > 0 {
+        log::debug!("Compiling Java harness");
+        let compile_output = Command::new("javac")
+            .current_dir(output_directory)
+            .arg("JavaHarness.java")
+            .output()?;
+        if !compile_output.status.success() {
+            return Err(TestError::JavacFailed(compile_output));
+        };
+
+        log::debug!("Running Java harness");
+        let run_output = Command::new("java")
+            .current_dir(output_directory)
+            .arg("-ea") // enable assertions
+            .arg("JavaHarness")
+            .output()?;
+        if !run_output.status.success() {
+            return Err(TestError::JavaFailed(run_output));
+        }
+    } else {
+        log::debug!("Skipping compilation and run since there are no runtime tests");
+    }
+
+    Ok(())
 }

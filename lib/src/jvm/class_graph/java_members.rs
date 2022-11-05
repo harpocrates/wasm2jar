@@ -188,6 +188,7 @@ pub struct MethodTypeMembers<'g> {
 pub struct MethodHandleMembers<'g> {
     pub r#type: MethodId<'g>,
     pub as_type: MethodId<'g>,
+    pub bind_to: MethodId<'g>,
     pub change_return_type: MethodId<'g>,
 }
 
@@ -205,6 +206,7 @@ pub struct MethodHandlesMembers<'g> {
     pub array_element_setter: MethodId<'g>,
     pub array_length: MethodId<'g>,
     pub empty: MethodId<'g>,
+    pub identity: MethodId<'g>,
     pub constant: MethodId<'g>,
 }
 
@@ -1173,6 +1175,15 @@ impl<'g> MethodHandleMembers<'g> {
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
         });
+        let bind_to = class_graph.add_method(MethodData {
+            class,
+            name: UnqualifiedName::BINDTO,
+            access_flags: MethodAccessFlags::PUBLIC,
+            descriptor: MethodDescriptor {
+                parameters: vec![FieldType::object(classes.lang.object)],
+                return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
+            },
+        });
         let change_return_type = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::CHANGERETURNTYPE,
@@ -1185,6 +1196,7 @@ impl<'g> MethodHandleMembers<'g> {
         MethodHandleMembers {
             r#type,
             as_type,
+            bind_to,
             change_return_type,
         }
     }
@@ -1327,6 +1339,15 @@ impl<'g> MethodHandlesMembers<'g> {
                 return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
             },
         });
+        let identity = class_graph.add_method(MethodData {
+            class,
+            name: UnqualifiedName::IDENTITY,
+            access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+            descriptor: MethodDescriptor {
+                parameters: vec![FieldType::object(classes.lang.class)],
+                return_type: Some(FieldType::object(classes.lang.invoke.method_handle)),
+            },
+        });
         let constant = class_graph.add_method(MethodData {
             class,
             name: UnqualifiedName::CONSTANT,
@@ -1353,6 +1374,7 @@ impl<'g> MethodHandlesMembers<'g> {
             array_element_setter,
             array_length,
             empty,
+            identity,
             constant,
         }
     }

@@ -853,7 +853,28 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             }
             Operator::RefFunc { function_index } => {
                 let function = &self.wasm_functions[function_index as usize];
+                let this_off = self.jvm_locals.lookup_this()?.0;
+
                 self.jvm_code.const_methodhandle(function.method)?;
+                self.jvm_code
+                    .const_int(function.func_type.inputs.len() as i32)?;
+                self.jvm_code.const_int(1)?;
+                self.jvm_code
+                    .new_ref_array(RefType::Object(self.jvm_code.java.classes.lang.object))?;
+                self.jvm_code.dup()?;
+                self.jvm_code.const_int(0)?;
+                self.jvm_code
+                    .push_instruction(Instruction::ALoad(this_off))?;
+                self.jvm_code.push_instruction(Instruction::AAStore)?;
+                self.jvm_code.invoke(
+                    self.jvm_code
+                        .java
+                        .members
+                        .lang
+                        .invoke
+                        .method_handles
+                        .insert_arguments,
+                )?;
             }
 
             _ => todo!(),
@@ -1307,6 +1328,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             self.jvm_code.class_graph,
             self.utilities,
             self.jvm_code.java,
+            self.runtime,
         )?;
 
         self.jvm_code
@@ -1722,6 +1744,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             self.jvm_code.class_graph,
             self.utilities,
             self.jvm_code.java,
+            self.runtime,
         )?;
 
         self.jvm_code
@@ -1908,6 +1931,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             self.jvm_code.class_graph,
             self.utilities,
             self.jvm_code.java,
+            self.runtime,
         )?;
 
         self.jvm_code

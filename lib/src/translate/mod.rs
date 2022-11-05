@@ -22,8 +22,9 @@ pub use settings::*;
 pub use table::*;
 pub use utility::*;
 
-use crate::jvm::class_graph::{ConstantData, FieldId, MethodId};
+use crate::jvm::class_graph::{FieldId, MethodId};
 use crate::jvm::code::{CodeBuilder, CodeBuilderExts, Instruction};
+use crate::jvm::RefType;
 use crate::runtime::WasmRuntime;
 use crate::wasm::{ref_type_from_general, FunctionType};
 use wasmparser::{ConstExpr, Operator};
@@ -93,9 +94,23 @@ fn translate_const_expr<'a, 'g>(
                 code.const_null(ref_type)?;
             }
             Operator::RefFunc { function_index } => {
-                let method = functions[function_index as usize].method;
-                let method_handle = ConstantData::MethodHandle(method);
-                code.push_instruction(Instruction::Ldc(method_handle))?;
+                let function = &functions[function_index as usize];
+                code.const_methodhandle(function.method)?;
+                code.const_int(function.func_type.inputs.len() as i32)?;
+                code.const_int(1)?;
+                code.new_ref_array(RefType::Object(code.java.classes.lang.object))?;
+                code.dup()?;
+                code.const_int(0)?;
+                code.push_instruction(Instruction::ALoad(wasm_module_variable_off))?;
+                code.push_instruction(Instruction::AAStore)?;
+                code.invoke(
+                    code.java
+                        .members
+                        .lang
+                        .invoke
+                        .method_handles
+                        .insert_arguments,
+                )?;
             }
             Operator::End => (),
             Operator::GlobalGet { global_index } => {

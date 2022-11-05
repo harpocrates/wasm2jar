@@ -1008,6 +1008,31 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                 jvm_code.push_branch_instruction(BranchInstruction::AThrow)?;
                 jvm_code.place_label(right_type)?;
 
+                // Check that it has the right mutability
+                let right_mut = jvm_code.fresh_label();
+                jvm_code.dup()?;
+                jvm_code.access_field(self.runtime.members.global.mutable, AccessMode::Read)?;
+                jvm_code.push_branch_instruction(BranchInstruction::If(
+                    if global.mutable {
+                        OrdComparison::NE
+                    } else {
+                        OrdComparison::EQ
+                    },
+                    right_mut,
+                    (),
+                ))?;
+                jvm_code.new(self.java.classes.lang.illegal_argument_exception)?;
+                jvm_code.push_instruction(Instruction::Dup)?;
+                jvm_code.const_string(format!(
+                    "Invalid mutability for global import {}.{} (expected a {} global)",
+                    import_loc.module,
+                    import_loc.name,
+                    if global.mutable { "mutable" } else { "const" },
+                ))?;
+                jvm_code.invoke(self.java.members.lang.illegal_argument_exception.init)?;
+                jvm_code.push_branch_instruction(BranchInstruction::AThrow)?;
+                jvm_code.place_label(right_mut)?;
+
                 // Assign it to the right field
                 jvm_code.access_field(global.field.unwrap(), AccessMode::Write)?;
             } else {
@@ -1132,6 +1157,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
                             }
                             StackType::FuncRef | StackType::ExternRef => (),
                         }
+                        jvm_code.const_int(global.mutable as i32)?;
                         jvm_code.invoke(self.runtime.members.global.init)?;
                     }
                     GlobalRepr::UnboxedInternal => {

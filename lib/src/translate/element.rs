@@ -3,9 +3,9 @@ use crate::jvm::code::{
     BranchInstruction, CodeBuilder, CodeBuilderExts, EqComparison, Instruction,
 };
 use crate::jvm::model::Method;
-use crate::jvm::FieldType;
+use crate::jvm::{FieldType, RefType};
 use crate::runtime::WasmRuntime;
-use crate::translate::{ConstantData, Error, Function, Global};
+use crate::translate::{Error, Function, Global};
 use crate::wasm::TableType;
 use wasmparser::{ElementItem, ElementKind};
 
@@ -70,9 +70,23 @@ impl<'a, 'g> Element<'a, 'g> {
             code.push_instruction(Instruction::ILoad(offset_var))?;
             match item {
                 ElementItem::Func(func_idx) => {
-                    let method = functions[*func_idx as usize].method;
-                    let method_handle = ConstantData::MethodHandle(method);
-                    code.push_instruction(Instruction::Ldc(method_handle))?;
+                    let function = &functions[*func_idx as usize];
+                    code.const_methodhandle(function.method)?;
+                    code.const_int(function.func_type.inputs.len() as i32)?;
+                    code.const_int(1)?;
+                    code.new_ref_array(RefType::Object(code.java.classes.lang.object))?;
+                    code.dup()?;
+                    code.const_int(0)?;
+                    code.push_instruction(Instruction::ALoad(this_off))?;
+                    code.push_instruction(Instruction::AAStore)?;
+                    code.invoke(
+                        code.java
+                            .members
+                            .lang
+                            .invoke
+                            .method_handles
+                            .insert_arguments,
+                    )?;
                 }
                 ElementItem::Expr(elem_expr) => {
                     super::translate_const_expr(

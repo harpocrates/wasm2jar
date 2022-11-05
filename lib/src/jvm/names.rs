@@ -167,6 +167,7 @@ impl UnqualifiedName {
     pub const ASREADONLYBUFFER: Self = Self::name("asReadOnlyBuffer");
     pub const ASTYPE: Self = Self::name("asType");
     pub const BIGENDIAN: Self = Self::name("BIG_ENDIAN");
+    pub const BINDTO: Self = Self::name("bindTo");
     pub const BITCOUNT: Self = Self::name("bitCount");
     pub const BYTEVALUE: Self = Self::name("byteValue");
     pub const CAPACITY: Self = Self::name("capacity");
@@ -204,6 +205,7 @@ impl UnqualifiedName {
     pub const GETTARGET: Self = Self::name("getTarget");
     pub const GUARDWITHTEST: Self = Self::name("guardWithTest");
     pub const HASHCODE: Self = Self::name("hashCode");
+    pub const IDENTITY: Self = Self::name("identity");
     pub const INSERTARGUMENTS: Self = Self::name("insertArguments");
     pub const INTBITSTOFLOAT: Self = Self::name("intBitsToFloat");
     pub const INTVALUE: Self = Self::name("intValue");
@@ -257,6 +259,8 @@ impl UnqualifiedName {
 
     // Names we generate
     pub const BOOTSTRAPMEMORY: Self = Self::name("bootstrapMemory");
+    pub const BOOTSTRAPEXTERNALMEMORY: Self = Self::name("bootstrapExternalMemory");
+    pub const BOOTSTRAPEXTERNALTABLE: Self = Self::name("bootstrapExternalTable");
     pub const BOOTSTRAPTABLE: Self = Self::name("bootstrapTable");
     pub const BYTESTOPAGES: Self = Self::name("bytesToPages");
     pub const CALLINDIRECT: Self = Self::name("call_indirect");

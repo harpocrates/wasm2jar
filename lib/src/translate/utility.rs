@@ -1,4 +1,4 @@
-use super::{Error, Memory, Settings, Table, UtilitiesStrategy};
+use super::{Error, Memory, MemoryRepr, Settings, Table, TableRepr, UtilitiesStrategy};
 use crate::jvm::class_graph::{
     AccessMode, BootstrapMethodData, BootstrapMethodId, ClassData, ClassGraph, ClassId,
     ConstantData, JavaClasses, JavaLibrary, MethodData, MethodId, NestedClassData,
@@ -12,6 +12,7 @@ use crate::jvm::{
     BaseType, BinaryName, ClassAccessFlags, FieldType, InnerClassAccessFlags, MethodAccessFlags,
     MethodDescriptor, RefType, UnqualifiedName,
 };
+use crate::runtime::WasmRuntime;
 use std::collections::HashMap;
 
 /// Potential utility methods.
@@ -132,8 +133,14 @@ pub enum UtilityMethod {
     /// Convert a number of memory pages into bytes
     MemoryPagesToBytes,
 
+    /// Bootstrap method for internal table utilities
+    BootstrapExternalTable,
+
     /// Bootstrap method for table utilities
     BootstrapTable,
+
+    /// Bootstrap method for internal memory utilities
+    BootstrapExternalMemory,
 
     /// Bootstrap method for memory utilities
     BootstrapMemory,
@@ -175,7 +182,9 @@ impl UtilityMethod {
             UtilityMethod::BytesToMemoryPages => UnqualifiedName::BYTESTOPAGES,
             UtilityMethod::MemoryPagesToBytes => UnqualifiedName::PAGESTOBYTES,
             UtilityMethod::BootstrapTable => UnqualifiedName::BOOTSTRAPTABLE,
+            UtilityMethod::BootstrapExternalTable => UnqualifiedName::BOOTSTRAPEXTERNALTABLE,
             UtilityMethod::BootstrapMemory => UnqualifiedName::BOOTSTRAPMEMORY,
+            UtilityMethod::BootstrapExternalMemory => UnqualifiedName::BOOTSTRAPEXTERNALMEMORY,
         }
     }
 
@@ -332,8 +341,20 @@ impl UtilityMethod {
                     FieldType::object(java.lang.invoke.method_handles_lookup),
                     FieldType::object(java.lang.string),
                     FieldType::object(java.lang.invoke.method_type),
-                    FieldType::object(java.lang.invoke.method_handle), // getter
-                    FieldType::object(java.lang.invoke.method_handle), // setter
+                    FieldType::object(java.lang.invoke.method_handle), // getter on object
+                    FieldType::object(java.lang.invoke.method_handle), // setter on object
+                    FieldType::long(),                                 // maximum table size
+                ],
+                return_type: Some(FieldType::object(java.lang.invoke.constant_call_site)),
+            },
+            UtilityMethod::BootstrapExternalTable => MethodDescriptor {
+                parameters: vec![
+                    FieldType::object(java.lang.invoke.method_handles_lookup),
+                    FieldType::object(java.lang.string),
+                    FieldType::object(java.lang.invoke.method_type),
+                    FieldType::object(java.lang.invoke.method_handle), // get object
+                    FieldType::object(java.lang.invoke.method_handle), // getter on object
+                    FieldType::object(java.lang.invoke.method_handle), // setter on object
                     FieldType::long(),                                 // maximum table size
                 ],
                 return_type: Some(FieldType::object(java.lang.invoke.constant_call_site)),
@@ -345,6 +366,19 @@ impl UtilityMethod {
                     FieldType::object(java.lang.invoke.method_type),
                     FieldType::object(java.lang.invoke.method_handle), // getter
                     FieldType::object(java.lang.invoke.method_handle), // setter
+                    FieldType::long(),                                 // maximum memory size
+                                                                       // FieldType::boolean(),                    // is shared
+                ],
+                return_type: Some(FieldType::object(java.lang.invoke.constant_call_site)),
+            },
+            UtilityMethod::BootstrapExternalMemory => MethodDescriptor {
+                parameters: vec![
+                    FieldType::object(java.lang.invoke.method_handles_lookup),
+                    FieldType::object(java.lang.string),
+                    FieldType::object(java.lang.invoke.method_type),
+                    FieldType::object(java.lang.invoke.method_handle), // get object
+                    FieldType::object(java.lang.invoke.method_handle), // getter on object
+                    FieldType::object(java.lang.invoke.method_handle), // setter on object
                     FieldType::long(),                                 // maximum memory size
                                                                        // FieldType::boolean(),                    // is shared
                 ],
@@ -466,6 +500,9 @@ impl<'g> UtilityClass<'g> {
                 self.get_utility_method(UtilityMethod::IntIsNegativeOne, java, class_graph)?;
                 self.get_utility_method(UtilityMethod::FillArrayRange, java, class_graph)?;
             }
+            UtilityMethod::BootstrapExternalTable => {
+                self.get_utility_method(UtilityMethod::BootstrapTable, java, class_graph)?;
+            }
             UtilityMethod::BootstrapMemory => {
                 self.get_utility_method(UtilityMethod::NextSize, java, class_graph)?;
                 self.get_utility_method(UtilityMethod::CopyResizedByteBuffer, java, class_graph)?;
@@ -473,6 +510,9 @@ impl<'g> UtilityClass<'g> {
                 self.get_utility_method(UtilityMethod::FillByteBufferRange, java, class_graph)?;
                 self.get_utility_method(UtilityMethod::BytesToMemoryPages, java, class_graph)?;
                 self.get_utility_method(UtilityMethod::MemoryPagesToBytes, java, class_graph)?;
+            }
+            UtilityMethod::BootstrapExternalMemory => {
+                self.get_utility_method(UtilityMethod::BootstrapMemory, java, class_graph)?;
             }
             _ => (),
         }
@@ -533,6 +573,10 @@ impl<'g> UtilityClass<'g> {
                 methods[&UtilityMethod::IntIsNegativeOne],
                 methods[&UtilityMethod::FillArrayRange],
             )?,
+            UtilityMethod::BootstrapExternalTable => Self::generate_external_bootstrap_table(
+                &mut code,
+                methods[&UtilityMethod::BootstrapTable],
+            )?,
             UtilityMethod::BootstrapMemory => Self::generate_bootstrap_memory(
                 &mut code,
                 methods[&UtilityMethod::CopyResizedByteBuffer],
@@ -541,6 +585,10 @@ impl<'g> UtilityClass<'g> {
                 methods[&UtilityMethod::IntIsNegativeOne],
                 methods[&UtilityMethod::NextSize],
                 methods[&UtilityMethod::FillByteBufferRange],
+            )?,
+            UtilityMethod::BootstrapExternalMemory => Self::generate_external_bootstrap_memory(
+                &mut code,
+                methods[&UtilityMethod::BootstrapMemory],
             )?,
         }
         class.add_method(Method {
@@ -1688,6 +1736,56 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
+    fn generate_external_bootstrap_table(
+        code: &mut CodeBuilder<'g>,
+        bootstrap_table: MethodId<'g>,
+    ) -> Result<(), Error> {
+        let lookup_argument = 0;
+        let name_argument = 1;
+        let type_argument = 2;
+        let getobject_argument = 3;
+        let getter_argument = 4;
+        let setter_argument = 5;
+        let maxsize_argument = 6;
+
+        code.push_instruction(Instruction::ALoad(lookup_argument))?;
+        code.push_instruction(Instruction::ALoad(name_argument))?;
+        code.push_instruction(Instruction::ALoad(type_argument))?;
+
+        // MethodHandles.collectArguments(getter, 0, get_object)
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.const_int(0)?;
+        code.push_instruction(Instruction::ALoad(getobject_argument))?;
+        code.invoke(
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
+        )?;
+
+        // MethodHandles.collectArguments(setter, 0, get_object)
+        code.push_instruction(Instruction::ALoad(setter_argument))?;
+        code.const_int(0)?;
+        code.push_instruction(Instruction::ALoad(getobject_argument))?;
+        code.invoke(
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
+        )?;
+
+        code.push_instruction(Instruction::LLoad(maxsize_argument))?;
+
+        code.invoke(bootstrap_table)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
+        Ok(())
+    }
+
     /// For `call_indirect`, we need to take an index as input to choose which method in an array
     /// to call. We could do this by doing an array lookup into the `table` field and then calling
     /// `invokeExact` on the `MethodHandle` we extract from there however:
@@ -1711,22 +1809,21 @@ impl<'g> UtilityClass<'g> {
     /// ) throws Exception {
     ///
     ///   int paramCount = type.parameterCount();
-    ///   MethodType targetType =                         // (A₀A₁..LMyWasmModule;)R
-    ///     type.dropParameterTypes(paramCount - 2, paramCount - 1);
+    ///   MethodType targetType =                         // (A₀A₁..)R
+    ///     type.dropParameterTypes(paramCount - 2, paramCount);
     ///
-    ///   int[] permutation = new int[paramCount + 1];
+    ///   int[] permutation = new int[paramCount];
     ///   permutation[0] = paramCount - 1;
     ///   permutation[1] = paramCount - 2;
     ///   for (int i = 2; i < paramCount; i++) {
     ///     permutation[i] = i - 2;
     ///   }
-    ///   permutation[paramCount] = paramCount - 1;
     ///
     ///   MethodHandle handle =
     ///     MethodHandles.permuteArguments(               // (A₀A₁..ILMyWasmModule;)R
-    ///       MethodHandles.collectArguments(             // (LMyWasmModule;IA₀A₁..LMyWasmModule;)R
-    ///         MethodHandles.collectArguments(           // ([LMethodHandle;IA₀A₁..LMyWasmModule;)R
-    ///           MethodHandles.exactInvoker(targetType), // (LMethodHandle;A₀A₁..LMyWasmModule;)R
+    ///       MethodHandles.collectArguments(             // (LMyWasmModule;IA₀A₁..)R
+    ///         MethodHandles.collectArguments(           // ([LMethodHandle;IA₀A₁..)R
+    ///           MethodHandles.exactInvoker(targetType), // (LMethodHandle;A₀A₁..)R
     ///           0,
     ///           MethodHandles.arrayElementGetter(MethodHandle[].class)
     ///         ),
@@ -1747,13 +1844,11 @@ impl<'g> UtilityClass<'g> {
         let permutation_local = 8;
 
         // int paramCount = type.parameterCount();
-        // int[] permutation = new int[paramCount + 1];
+        // int[] permutation = new int[paramCount];
         code.push_instruction(Instruction::ALoad(type_argument))?;
         code.invoke(code.java.members.lang.invoke.method_type.parameter_count)?;
         code.push_instruction(Instruction::Dup)?;
         code.push_instruction(Instruction::IStore(param_count_local))?;
-        code.push_instruction(Instruction::IConst1)?;
-        code.push_instruction(Instruction::IAdd)?;
         code.push_instruction(Instruction::NewArray(BaseType::Int))?;
         code.push_instruction(Instruction::AStore(permutation_local))?;
 
@@ -1793,23 +1888,13 @@ impl<'g> UtilityClass<'g> {
         code.place_label(loop_end)?;
         code.push_instruction(Instruction::Pop2)?;
 
-        // initialize `permutation[paramCount] = paramCount - 1`
-        code.push_instruction(Instruction::ALoad(permutation_local))?;
-        code.push_instruction(Instruction::ILoad(param_count_local))?;
-        code.push_instruction(Instruction::Dup)?;
-        code.push_instruction(Instruction::IConst1)?;
-        code.push_instruction(Instruction::ISub)?;
-        code.push_instruction(Instruction::IAStore)?;
-
-        // MethodType targetType = type.dropParameterTypes(paramCount - 2, paramCount - 1);
+        // MethodType targetType = type.dropParameterTypes(paramCount - 2, paramCount);
         // Stack after: [ .., targetType ]
         code.push_instruction(Instruction::ALoad(type_argument))?;
         code.push_instruction(Instruction::ILoad(param_count_local))?;
         code.push_instruction(Instruction::IConst2)?;
         code.push_instruction(Instruction::ISub)?;
         code.push_instruction(Instruction::ILoad(param_count_local))?;
-        code.push_instruction(Instruction::IConst1)?;
-        code.push_instruction(Instruction::ISub)?;
         code.invoke(
             code.java
                 .members
@@ -2540,6 +2625,56 @@ impl<'g> UtilityClass<'g> {
         Ok(())
     }
 
+    fn generate_external_bootstrap_memory(
+        code: &mut CodeBuilder<'g>,
+        bootstrap_memory: MethodId<'g>,
+    ) -> Result<(), Error> {
+        let lookup_argument = 0;
+        let name_argument = 1;
+        let type_argument = 2;
+        let getobject_argument = 3;
+        let getter_argument = 4;
+        let setter_argument = 5;
+        let maxsize_argument = 6;
+
+        code.push_instruction(Instruction::ALoad(lookup_argument))?;
+        code.push_instruction(Instruction::ALoad(name_argument))?;
+        code.push_instruction(Instruction::ALoad(type_argument))?;
+
+        // MethodHandles.collectArguments(getter, 0, get_object)
+        code.push_instruction(Instruction::ALoad(getter_argument))?;
+        code.const_int(0)?;
+        code.push_instruction(Instruction::ALoad(getobject_argument))?;
+        code.invoke(
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
+        )?;
+
+        // MethodHandles.collectArguments(setter, 0, get_object)
+        code.push_instruction(Instruction::ALoad(setter_argument))?;
+        code.const_int(0)?;
+        code.push_instruction(Instruction::ALoad(getobject_argument))?;
+        code.invoke(
+            code.java
+                .members
+                .lang
+                .invoke
+                .method_handles
+                .collect_arguments,
+        )?;
+
+        code.push_instruction(Instruction::LLoad(maxsize_argument))?;
+
+        code.invoke(bootstrap_memory)?;
+        code.push_branch_instruction(BranchInstruction::AReturn)?;
+
+        Ok(())
+    }
+
     fn generate_size_memory_case(
         code: &mut CodeBuilder<'g>,
         bytes_to_pages: MethodId<'g>,
@@ -2981,34 +3116,59 @@ impl<'g> BootstrapUtilities<'g> {
         class_graph: &'g ClassGraph<'g>,
         utilities: &mut UtilityClass<'g>,
         java: &'g JavaLibrary<'g>,
+        runtime: &WasmRuntime<'g>,
     ) -> Result<BootstrapMethodId<'g>, Error> {
         if let Some(bootstrap) = self.table_bootstrap_methods.get(&table_index) {
             return Ok(*bootstrap);
         }
 
-        // Get bootstrapping method is defined
-        let table_bootstrap =
-            utilities.get_utility_method(UtilityMethod::BootstrapTable, java, class_graph)?;
+        let mut bootstrap_arguments = vec![];
+        let table_field = table.field.unwrap(); // Should be populated by the time this is called
 
-        // Compute the getter and setter constant arguments for the bootstrap method
-        let table_field = table.field.unwrap();
-        let table_get = ConstantData::FieldHandle(AccessMode::Read, table_field);
-        let table_set = ConstantData::FieldHandle(AccessMode::Write, table_field);
+        // Get bootstrapping method
+        let bootstrap_utility = match table.repr {
+            TableRepr::Internal => {
+                let table_get = ConstantData::FieldHandle(AccessMode::Read, table_field);
+                let table_set = ConstantData::FieldHandle(AccessMode::Write, table_field);
+
+                bootstrap_arguments.extend([table_get, table_set]);
+                UtilityMethod::BootstrapTable
+            }
+            TableRepr::External => {
+                let external_table_field = match table.table_type.element_type {
+                    wasmparser::ValType::FuncRef => runtime.members.function_table.table,
+                    wasmparser::ValType::ExternRef => runtime.members.reference_table.table,
+                    _ => panic!(),
+                };
+
+                let object_get = ConstantData::FieldHandle(AccessMode::Read, table_field);
+                let table_get = ConstantData::FieldHandle(AccessMode::Read, external_table_field);
+                let table_set = ConstantData::FieldHandle(AccessMode::Write, external_table_field);
+
+                bootstrap_arguments.extend([object_get, table_get, table_set]);
+                UtilityMethod::BootstrapExternalTable
+            }
+        };
+        let table_bootstrap = utilities.get_utility_method(bootstrap_utility, java, class_graph)?;
 
         /* Compute the maximum table size based on two constraints:
          *
          *   - the JVM's inherent limit of using signed 32-bit integers for array indices
          *   - a declared constraint in the WASM module
          */
-        let max_table_size = ConstantData::Long(i64::min(
+        let max_table_size = i64::min(
             i32::MAX as i64,
             table.table_type.maximum.unwrap_or(u32::MAX) as i64,
-        ));
+        );
+        bootstrap_arguments.push(ConstantData::Long(max_table_size));
 
-        Ok(class_graph.add_bootstrap_method(BootstrapMethodData {
+        let bootstrap_method = class_graph.add_bootstrap_method(BootstrapMethodData {
             method: table_bootstrap,
-            arguments: vec![table_get, table_set, max_table_size],
-        }))
+            arguments: bootstrap_arguments,
+        });
+        self.table_bootstrap_methods
+            .insert(table_index, bootstrap_method);
+        Ok(bootstrap_method)
     }
 
     /// Get (and create if missing) a bootstrap method for a given memory
@@ -3019,34 +3179,56 @@ impl<'g> BootstrapUtilities<'g> {
         class_graph: &'g ClassGraph<'g>,
         utilities: &mut UtilityClass<'g>,
         java: &'g JavaLibrary<'g>,
+        runtime: &WasmRuntime<'g>,
     ) -> Result<BootstrapMethodId<'g>, Error> {
         if let Some(bootstrap) = self.memory_bootstrap_methods.get(&memory_index) {
             return Ok(*bootstrap);
         }
 
-        // Get the bootstrap method
+        let mut bootstrap_arguments = vec![];
+        let memory_field = memory.field.unwrap(); // Should be populated by the time this is called
+
+        // Get bootstrapping method
+        let bootstrap_utility = match memory.repr {
+            MemoryRepr::Internal => {
+                let memory_get = ConstantData::FieldHandle(AccessMode::Read, memory_field);
+                let memory_set = ConstantData::FieldHandle(AccessMode::Write, memory_field);
+
+                bootstrap_arguments.extend([memory_get, memory_set]);
+                UtilityMethod::BootstrapMemory
+            }
+            MemoryRepr::External => {
+                let external_memory_field = runtime.members.memory.bytes;
+
+                let object_get = ConstantData::FieldHandle(AccessMode::Read, memory_field);
+                let memory_get = ConstantData::FieldHandle(AccessMode::Read, external_memory_field);
+                let memory_set =
+                    ConstantData::FieldHandle(AccessMode::Write, external_memory_field);
+
+                bootstrap_arguments.extend([object_get, memory_get, memory_set]);
+                UtilityMethod::BootstrapExternalMemory
+            }
+        };
         let memory_bootstrap =
-            utilities.get_utility_method(UtilityMethod::BootstrapMemory, java, class_graph)?;
-
-        let field = memory.field.unwrap(); // Should be populated by the time this is called
-        let memory_get = ConstantData::FieldHandle(AccessMode::Read, field);
-        let memory_set = ConstantData::FieldHandle(AccessMode::Write, field);
-
-        let memory_maximum = memory.memory_type.maximum;
+            utilities.get_utility_method(bootstrap_utility, java, class_graph)?;
 
         /* Compute the maximum memory size based on two constraints:
          *
          *   - the JVM's inherent limit of using signed 32-bit integers for bytebuffer indices
          *   - a declared constraint in the WASM module
          */
-        let max_memory_size = ConstantData::Long(i64::min(
+        let max_memory_size = i64::min(
             (i32::MAX as i64) / (u16::MAX as i64),
-            memory_maximum.unwrap_or(u32::MAX as u64) as i64,
-        ));
+            memory.memory_type.maximum.unwrap_or(u32::MAX as u64) as i64,
+        );
+        bootstrap_arguments.push(ConstantData::Long(max_memory_size));
 
-        Ok(class_graph.add_bootstrap_method(BootstrapMethodData {
+        let bootstrap_method = class_graph.add_bootstrap_method(BootstrapMethodData {
             method: memory_bootstrap,
-            arguments: vec![memory_get, memory_set, max_memory_size],
-        }))
+            arguments: bootstrap_arguments,
+        });
+        self.memory_bootstrap_methods
+            .insert(memory_index, bootstrap_method);
+        Ok(bootstrap_method)
     }
 }

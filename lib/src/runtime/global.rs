@@ -12,6 +12,7 @@ use crate::jvm::{
 pub struct GlobalMembers<'g> {
     pub init: MethodId<'g>,
     pub value: FieldId<'g>,
+    pub mutable: FieldId<'g>,
 }
 
 impl<'g> GlobalMembers<'g> {
@@ -26,7 +27,10 @@ impl<'g> GlobalMembers<'g> {
             name: UnqualifiedName::INIT,
             access_flags: MethodAccessFlags::PUBLIC,
             descriptor: MethodDescriptor {
-                parameters: vec![FieldType::object(java_classes.lang.object)],
+                parameters: vec![
+                    FieldType::object(java_classes.lang.object),
+                    FieldType::boolean(),
+                ],
                 return_type: None,
             },
         });
@@ -36,8 +40,18 @@ impl<'g> GlobalMembers<'g> {
             access_flags: FieldAccessFlags::PUBLIC,
             descriptor: FieldType::object(java_classes.lang.object),
         });
+        let mutable = class_graph.add_field(FieldData {
+            class,
+            name: UnqualifiedName::from_str_unsafe("mutable"),
+            access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::FINAL,
+            descriptor: FieldType::boolean(),
+        });
 
-        GlobalMembers { init, value }
+        GlobalMembers {
+            init,
+            value,
+            mutable,
+        }
     }
 }
 
@@ -50,6 +64,7 @@ pub fn make_global_class<'g>(
 
     let mut class = Class::new(runtime.classes.global);
     class.add_field(Field::new(runtime.members.global.value));
+    class.add_field(Field::new(runtime.members.global.mutable));
 
     // Constructor
     let mut code = CodeBuilder::new(class_graph, java, runtime.members.global.init);
@@ -58,6 +73,9 @@ pub fn make_global_class<'g>(
     code.push_instruction(ALoad(0))?;
     code.push_instruction(ALoad(1))?;
     code.push_instruction(PutField(runtime.members.global.value))?;
+    code.push_instruction(ALoad(0))?;
+    code.push_instruction(ILoad(2))?;
+    code.push_instruction(PutField(runtime.members.global.mutable))?;
     code.push_branch_instruction(Return)?;
 
     let mut constructor = Method::new(runtime.members.global.init);

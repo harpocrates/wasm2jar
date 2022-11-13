@@ -11,6 +11,7 @@ use crate::error::TestError;
 use error::TestOutcome;
 use java_harness::JavaHarness;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -20,54 +21,60 @@ use walkdir::WalkDir;
 use wat_translator::Wasm2JarTranslator;
 
 fn main() -> io::Result<()> {
-    use clap::{Arg, Command};
+    use clap::{Arg, ArgAction, Command};
     env_logger::init();
 
-    let matches = Command::new("WAST tester for WASM to JAR converter")
-        .version("0.1.0")
-        .author("Alec Theriault <alec.theriault@gmail.com>")
-        .about("Run WAST tests on the JVM against converted JARs")
+    let matches = Command::new(clap::crate_name!())
+        .version(clap::crate_version!())
+        .author(clap::crate_authors!())
+        .about(clap::crate_description!())
         .arg(
             Arg::new("output")
-                .allow_invalid_utf8(true)
+                .value_parser(clap::value_parser!(PathBuf))
                 .long("output-directory")
                 .value_name("DIRECTORY")
                 .required(false)
-                .takes_value(true)
+                .action(ArgAction::Set)
                 .help("Sets the output directory")
                 .default_value("out"),
         )
         .arg(
             Arg::new("java")
+                .value_parser(clap::value_parser!(PathBuf))
                 .long("java")
                 .value_name("JAVA")
+                .default_value("java")
                 .required(false)
-                .takes_value(true)
+                .action(ArgAction::Set)
                 .help("Sets the `java` executable to use"),
         )
         .arg(
             Arg::new("javac")
+                .value_parser(clap::value_parser!(PathBuf))
                 .long("javac")
+                .default_value("javac")
                 .value_name("JAVA_COMPILER")
                 .required(false)
-                .takes_value(true)
+                .action(ArgAction::Set)
                 .help("Sets the `javac` executable to use"),
         )
         .arg(
             Arg::new("INPUT")
-                .allow_invalid_utf8(true)
+                .value_parser(clap::value_parser!(PathBuf))
                 .help("Sets the input file or folder")
                 .required(true)
                 .index(1),
         )
         .get_matches();
 
-    let input_path: PathBuf = PathBuf::from(matches.value_of_os("INPUT").unwrap());
-    let output_path: PathBuf = PathBuf::from(matches.value_of_os("output").unwrap());
+    let input_path: &PathBuf = matches.get_one("INPUT").unwrap();
+    let output_path: &PathBuf = matches.get_one("output").unwrap();
+    let java: &PathBuf = matches.get_one("java").unwrap();
+    let javac: &PathBuf = matches.get_one("javac").unwrap();
 
     // Find all of the test cases
     let tests: Vec<PathBuf> = if input_path.is_file() {
-        vec![input_path]
+        vec![input_path.clone()]
     } else {
         WalkDir::new(input_path)
             .follow_links(true)
@@ -117,7 +124,7 @@ fn main() -> io::Result<()> {
         fs::create_dir_all(output_subdirectory)?;
 
         // Run the test
-        let outcome: TestOutcome = run_test(&test, &output_subdirectory)
+        let outcome: TestOutcome = run_test(java, javac, &test, output_subdirectory)
             .map_or_else(TestOutcome::from, |_| TestOutcome::Ok);
 
         let (color, summary, message) = match outcome {
@@ -178,15 +185,13 @@ fn main() -> io::Result<()> {
     }
 
     // Exit code
-    exit(if count_fail > 0 || count_error > 0 {
-        1
-    } else {
-        0
-    })
+    exit((count_fail > 0 || count_error > 0) as i32)
 }
 
 /// Run a single WAST test case in the specified output directory
 fn run_test(
+    java: impl AsRef<OsStr>,
+    javac: impl AsRef<OsStr>,
     wast_file: impl AsRef<Path>,
     output_directory: impl AsRef<Path>,
 ) -> Result<(), TestError> {
@@ -209,7 +214,7 @@ fn run_test(
     // Compile and run the harness (calls out to `javac` and `java`)
     if directives_count > 0 {
         log::debug!("Compiling Java harness");
-        let compile_output = Command::new("javac")
+        let compile_output = Command::new(javac)
             .current_dir(output_directory)
             .arg("JavaHarness.java")
             .output()?;
@@ -218,7 +223,7 @@ fn run_test(
         };
 
         log::debug!("Running Java harness");
-        let run_output = Command::new("java")
+        let run_output = Command::new(java)
             .current_dir(output_directory)
             .arg("-ea") // enable assertions
             .arg("JavaHarness")

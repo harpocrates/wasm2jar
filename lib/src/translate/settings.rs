@@ -99,7 +99,7 @@ pub enum UtilitiesStrategy {
     ReferenceExisting(BinaryName),
 }
 
-// TODO: add a method to validadte that the settings are all possible (eg. the names are valid in
+// TODO: add a method to validate that the settings are all possible (eg. the names are valid in
 // the JVM)
 impl Settings {
     /// Supported WASM features

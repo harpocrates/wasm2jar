@@ -26,15 +26,16 @@ use std::iter;
 use wasmparser::types::Types;
 use wasmparser::{
     ConstExpr, DataKind, DataSectionReader, ElementKind, ElementSectionReader, ExportSectionReader,
-    ExternalKind, FunctionBody, FunctionSectionReader, GlobalSectionReader, Import,
-    ImportSectionReader, MemorySectionReader, Parser, Payload, TableSectionReader, Type, TypeRef,
-    TypeSectionReader, Validator,
+    ExternalKind, FuncValidatorAllocations, FunctionBody, FunctionSectionReader,
+    GlobalSectionReader, Import, ImportSectionReader, MemorySectionReader, Parser, Payload,
+    TableSectionReader, Type, TypeRef, TypeSectionReader, Validator,
 };
 
 /// Main entry point for translating a WASM module
 pub struct ModuleTranslator<'a, 'g> {
     settings: Settings,
     validator: Validator,
+    func_validator_allocations: Option<FuncValidatorAllocations>,
     class: Class<'g>,
     previous_parts: Vec<Class<'g>>,
     fields_generated: bool,
@@ -106,6 +107,7 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
         Ok(ModuleTranslator {
             settings,
             validator,
+            func_validator_allocations: None,
             class: Class::new(class_id),
             previous_parts: vec![],
             fields_generated: false,
@@ -192,7 +194,6 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             } => self.validator.version(num, encoding, &range)?,
             Payload::TypeSection(section) => self.visit_types(section)?,
             Payload::ImportSection(section) => self.visit_imports(section)?,
-            Payload::AliasSection(section) => self.validator.alias_section(&section)?,
             Payload::InstanceSection(section) => self.validator.instance_section(&section)?,
             Payload::TableSection(section) => self.visit_tables(section)?,
             Payload::MemorySection(section) => self.visit_memories(section)?,
@@ -249,7 +250,9 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
 
     /// Visit a function body
     fn visit_function_body(&mut self, function_body: FunctionBody) -> Result<(), Error> {
-        let validator = self.validator.code_section_entry(&function_body)?;
+        let func_to_validate = self.validator.code_section_entry(&function_body)?;
+        let func_validator_allocs = self.func_validator_allocations.take().unwrap_or_default();
+        let mut validator = func_to_validate.into_validator(func_validator_allocs);
 
         // Look up the previously declared method and start implementing it
         let function = &self.functions[self.current_func_idx as usize];
@@ -276,9 +279,10 @@ impl<'a, 'g> ModuleTranslator<'a, 'g> {
             &self.datas,
             &self.elements,
             function_body,
-            validator,
+            &mut validator,
         )?;
         function_translator.translate()?;
+        self.func_validator_allocations = Some(validator.into_allocations());
 
         self.current_part.class.add_method(Method {
             id: function.method,

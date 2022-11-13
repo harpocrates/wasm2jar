@@ -6,11 +6,12 @@ edition = "2021"
 rust-version = "1.63"
 repository = "https://github.com/harpocrates/wasm2jar/tree/main/bin/wast2jar"
 categories = ["command-line-utilities", "wasm", "compilers"]
+description = "WAST tester for WASM to JAR converter"
 
 [dependencies]
 wasm2jar = { path = "../../lib" }
-wast = "46.0.0"
-clap = "3.2.17"
+wast = "49.0.0"
+clap = { version = "4.0", features = ["cargo"] }
 log = "0.4"
 env_logger = "0.9"
 termcolor = "1.1"

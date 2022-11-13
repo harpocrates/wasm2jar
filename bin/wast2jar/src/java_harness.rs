@@ -202,6 +202,7 @@ impl<'a, P: Display, W: Write, T: WatTranslator> JavaHarness<'a, P, W, T> {
         for (name, value) in [
             ("print", "new Function(lookup.findStatic(JavaHarness.class, \"print\", MethodType.methodType(void.class)))"),
             ("print_i32", "new Function(lookup.findStatic(JavaHarness.class, \"printI32\", MethodType.methodType(void.class, int.class)))"),
+            ("print_i64", "new Function(lookup.findStatic(JavaHarness.class, \"printI64\", MethodType.methodType(void.class, long.class)))"),
             ("print_f32", "new Function(lookup.findStatic(JavaHarness.class, \"printF32\", MethodType.methodType(void.class, float.class)))"),
             ("print_f64", "new Function(lookup.findStatic(JavaHarness.class, \"printF64\", MethodType.methodType(void.class, double.class)))"),
             ("print_i32_f32", "new Function(lookup.findStatic(JavaHarness.class, \"printI32F32\", MethodType.methodType(void.class, int.class, float.class)))"),
@@ -269,6 +270,13 @@ impl<'a, P: Display, W: Write, T: WatTranslator> JavaHarness<'a, P, W, T> {
         writeln!(self.writer, "public static void printI32(int i)")?;
         self.writer.open_curly_block()?;
         writeln!(self.writer, "spectestWriter.println(\"print_i32: \" + i);")?;
+        self.writer.close_curly_block()?;
+        self.writer.newline()?;
+
+        // Helper method: `printI64`
+        writeln!(self.writer, "public static void printI64(long l)")?;
+        self.writer.open_curly_block()?;
+        writeln!(self.writer, "spectestWriter.println(\"print_i64: \" + l);")?;
         self.writer.close_curly_block()?;
         self.writer.newline()?;
 
@@ -808,6 +816,9 @@ impl<'a, P: Display, W: Write, T: WatTranslator> JavaHarness<'a, P, W, T> {
             WastRet::Core(WastRetCore::V128(_)) => {
                 Err(TestError::IncompleteHarness("visit_wast_ret: V128"))
             }
+            WastRet::Core(WastRetCore::Either(_)) => {
+                Err(TestError::IncompleteHarness("visit_wast_ret: Either"))
+            }
             WastRet::Component(_) => Err(TestError::IncompleteHarness("visit_wast_ret: Component")),
         }
     }
@@ -834,6 +845,9 @@ impl<'a, P: Display, W: Write, T: WatTranslator> JavaHarness<'a, P, W, T> {
             }
             WastRet::Core(WastRetCore::V128(_)) => {
                 Err(TestError::IncompleteHarness("java_assert_type: V128"))
+            }
+            WastRet::Core(WastRetCore::Either(_)) => {
+                Err(TestError::IncompleteHarness("visit_wast_ret: Either"))
             }
             WastRet::Component(_) => {
                 Err(TestError::IncompleteHarness("java_assert_type: Component"))

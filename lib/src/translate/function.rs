@@ -65,7 +65,7 @@ pub struct FunctionTranslator<'a, 'b, 'g> {
     jvm_locals: LocalsLayout<'g>,
 
     /// Validator for the WASM function
-    wasm_validator: FuncValidator<ValidatorResources>,
+    pub wasm_validator: &'b mut FuncValidator<ValidatorResources>,
 
     /// Previous height of the WASM stack
     wasm_prev_operand_stack_height: u32,
@@ -96,7 +96,7 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         wasm_datas: &'b [Data<'a, 'g>],
         wasm_elements: &'b [Element<'a, 'g>],
         wasm_function: FunctionBody<'a>,
-        wasm_validator: FuncValidator<ValidatorResources>,
+        wasm_validator: &'b mut FuncValidator<ValidatorResources>,
     ) -> Result<Self, Error> {
         let jvm_locals = LocalsLayout::new(
             function_typ
@@ -250,23 +250,25 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
                     .push_branch_instruction(BranchInstruction::AThrow)?;
             }
             Operator::Nop => self.jvm_code.push_instruction(Instruction::Nop)?,
-            Operator::Block { ty } => self.visit_block(ty)?,
-            Operator::Loop { ty } => self.visit_loop(ty)?,
-            Operator::If { ty } => self.visit_if(ty, BranchCond::If(OrdComparison::NE))?,
+            Operator::Block { blockty } => self.visit_block(blockty)?,
+            Operator::Loop { blockty } => self.visit_loop(blockty)?,
+            Operator::If { blockty } => {
+                self.visit_if(blockty, BranchCond::If(OrdComparison::NE))?
+            }
             Operator::Else => self.visit_else()?,
             Operator::End => self.visit_end()?,
             Operator::Br { relative_depth } => self.visit_branch(relative_depth)?,
             Operator::BrIf { relative_depth } => {
                 self.visit_branch_if(relative_depth, BranchCond::If(OrdComparison::NE))?
             }
-            Operator::BrTable { table } => self.visit_branch_table(table)?,
+            Operator::BrTable { targets } => self.visit_branch_table(targets)?,
             Operator::Return => self.visit_return()?,
             Operator::Call { function_index } => self.visit_call(function_index)?,
             Operator::CallIndirect {
-                index,
+                type_index,
                 table_index,
                 table_byte: _,
-            } => self.visit_call_indirect(BlockType::FuncType(index), table_index)?,
+            } => self.visit_call_indirect(BlockType::FuncType(type_index), table_index)?,
 
             // Parametric Instructions
             Operator::Drop => self.jvm_code.pop()?,
@@ -295,7 +297,9 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             // Table instructions
             Operator::TableGet { table } => self.visit_table_get(table)?,
             Operator::TableSet { table } => self.visit_table_set(table)?,
-            Operator::TableInit { segment, table } => self.visit_table_init(segment, table)?,
+            Operator::TableInit { elem_index, table } => {
+                self.visit_table_init(elem_index, table)?
+            }
             Operator::TableCopy {
                 src_table,
                 dst_table,
@@ -379,11 +383,13 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
             }
             Operator::MemorySize { mem, .. } => self.visit_memory_size(mem)?, // TODO: what is `mem_byte` for?
             Operator::MemoryGrow { mem, .. } => self.visit_memory_grow(mem)?,
-            Operator::MemoryInit { segment, mem } => self.visit_memory_init(mem, segment)?,
-            Operator::MemoryCopy { dst, src } => self.visit_memory_copy(src, dst)?,
+            Operator::MemoryInit { data_index, mem } => self.visit_memory_init(mem, data_index)?,
+            Operator::MemoryCopy { dst_mem, src_mem } => {
+                self.visit_memory_copy(src_mem, dst_mem)?
+            }
             Operator::MemoryFill { mem } => self.visit_memory_fill(mem)?,
-            Operator::DataDrop { segment } => self.visit_data_drop(segment)?,
-            Operator::ElemDrop { segment } => self.visit_element_drop(segment)?,
+            Operator::DataDrop { data_index } => self.visit_data_drop(data_index)?,
+            Operator::ElemDrop { elem_index } => self.visit_element_drop(elem_index)?,
 
             // Numeric Instructions
             Operator::I32Const { value } => self.jvm_code.const_int(value)?,
@@ -893,9 +899,9 @@ impl<'a, 'b, 'g> FunctionTranslator<'a, 'b, 'g> {
         next_operator_offset: &mut Option<(Operator, usize)>,
     ) -> Result<(), Error> {
         match next_operator_offset.take() {
-            Some((Operator::If { ty }, offset)) => {
-                self.wasm_validator.op(offset, &Operator::If { ty })?;
-                self.visit_if(ty, condition)?;
+            Some((Operator::If { blockty }, offset)) => {
+                self.wasm_validator.op(offset, &Operator::If { blockty })?;
+                self.visit_if(blockty, condition)?;
             }
             Some((Operator::BrIf { relative_depth }, offset)) => {
                 self.wasm_prev_operand_stack_height = self.wasm_validator.operand_stack_height();

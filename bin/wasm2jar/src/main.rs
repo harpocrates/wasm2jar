@@ -1,60 +1,62 @@
 use wasm2jar::jvm::Name;
 use wasm2jar::*;
 
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use std::fs;
+use std::path::PathBuf;
 use std::process;
 
 fn main() -> Result<(), translate::Error> {
     env_logger::init();
 
-    let matches = Command::new("WASM to JAR converter")
-        .version("0.1.0")
-        .author("Alec Theriault <alec.theriault@gmail.com>")
-        .about("Convert WASM modules into classes that run on a JVM")
+    let matches = Command::new(clap::crate_name!())
+        .version(clap::crate_version!())
+        .author(clap::crate_authors!())
+        .about(clap::crate_description!())
         .arg(
             Arg::new("class")
                 .long("output-class")
                 .value_name("CLASS_NAME")
                 .required(true)
-                .takes_value(true)
+                .action(ArgAction::Set)
                 .help("Output class name (eg. `foo/bar/Baz`)"),
         )
         .arg(
             Arg::new("jar")
-                .allow_invalid_utf8(true)
+                .value_parser(clap::value_parser!(PathBuf))
                 .long("jar")
                 .required(false)
-                .takes_value(true)
+                .action(ArgAction::Set)
                 .help("Produce a `jar` output with this name (uses `jar` utility on PATH)"),
         )
         .arg(
             Arg::new("utils")
                 .long("utils")
                 .required(false)
-                .takes_value(true)
+                .action(ArgAction::Set)
                 .help("Specify an external utility class to use"),
         )
         .arg(
             Arg::new("INPUT")
+                .value_parser(clap::value_parser!(PathBuf))
                 .help("Sets the input WASM module file to use")
-                .required(true)
+                .action(ArgAction::Set)
                 .index(1),
         )
         .get_matches();
 
     let settings = translate::Settings::new(
-        matches.value_of("class").unwrap(),
-        matches.value_of("utils"),
+        matches.get_one::<String>("class").unwrap(),
+        matches.get_one::<String>("utils").map(|x| &**x),
     )?;
 
     let class_graph_arenas = jvm::class_graph::ClassGraphArenas::new();
     let class_graph = jvm::class_graph::ClassGraph::new(&class_graph_arenas);
     let java = class_graph.insert_java_library_types();
 
-    let wasm_file = matches.value_of("INPUT").unwrap();
-    log::info!("Reading and translating '{}'", &wasm_file);
-    let wasm_bytes = fs::read(&wasm_file).map_err(jvm::Error::IoError)?;
+    let wasm_file: &PathBuf = matches.get_one::<PathBuf>("INPUT").unwrap();
+    log::info!("Reading and translating '{}'", wasm_file.to_string_lossy());
+    let wasm_bytes = fs::read(wasm_file).map_err(jvm::Error::IoError)?;
     let mut translator = translate::ModuleTranslator::new(settings, &class_graph, &java)?;
     let _types = translator.parse_module(&wasm_bytes)?;
 
@@ -70,9 +72,9 @@ fn main() -> Result<(), translate::Error> {
     }
 
     // Package the results in a JAR
-    if let Some(jar_name) = matches.value_of_os("jar") {
+    if let Some(jar_name) = matches.get_one::<PathBuf>("jar") {
         let mut command = process::Command::new("jar");
-        command.arg("cf").arg(&jar_name);
+        command.arg("cf").arg(jar_name);
         for output_file in &output_files {
             command.arg(output_file);
         }
